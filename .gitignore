@@ -1,0 +1,12 @@
+# Windows Binaries
+Windows/
+
+# Build Directories
+build/
+
+# Temporary Directories
+tmp/
+
+# Python
+__pycache__/
+*.pyc
