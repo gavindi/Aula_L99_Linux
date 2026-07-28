@@ -137,21 +137,21 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 11 independent samples across 9 capture files:
+    byte. Confirmed against 12 independent samples across 10 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
     chunk (11 bytes -> cmd=0x12=CMD_FINAL), and wireshark_dumps/
-    save_to_gif_1/2/3/5/6/7/8/9.pcapng final chunks (1386 bytes -> 0x71,
+    save_to_gif_1/2/3/5/6/7/8/9/10.pcapng final chunks (1386 bytes -> 0x71,
     1582 bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes ->
-    0x23, 122 bytes -> 0x81, 2040 bytes -> 0xFF, 1492 bytes -> 0xDB -- every
-    one predicted exactly by this formula before being checked;
-    save_to_gif_4.pcapng repeats save_to_gif_3's 1450-byte/0xB1 case rather
-    than adding a new one).
+    0x23, 122 bytes -> 0x81, 2040 bytes -> 0xFF, 1492 bytes -> 0xDB, 312
+    bytes -> 0x3F -- every one predicted exactly by this formula before
+    being checked; save_to_gif_4.pcapng repeats save_to_gif_3's
+    1450-byte/0xB1 case rather than adding a new one).
 
     This only gives you the cmd byte. There is no known general formula for
     the matching CRC_INIT entry (two hypotheses -- init as a function of just
     this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 11 known (cmd, init) pairs and neither held), so calling this
+    against all 12 known (cmd, init) pairs and neither held), so calling this
     with a payload length outside CRC_INIT will raise in crc16_packet().
     """
     return (CMD_WRITE + payload_len) % 256
@@ -160,10 +160,10 @@ def final_chunk_cmd(payload_len: int) -> int:
 # Each command uses its own CRC init; see final_chunk_cmd() above for why
 # CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
 # opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81/0xFF/0xDB are solved for exactly
-# the lengths they were observed at (wireshark_dumps/save_to_gif_1/2/3/5/6/7
-# /8/9.pcapng's final chunks) -- not a general result, since no formula for
-# CRC_INIT vs. length was found (see final_chunk_cmd()).
+# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81/0xFF/0xDB/0x3F are solved for
+# exactly the lengths they were observed at (wireshark_dumps/save_to_gif_1/2
+# /3/5/6/7/8/9/10.pcapng's final chunks) -- not a general result, since no
+# formula for CRC_INIT vs. length was found (see final_chunk_cmd()).
 CRC_INIT = {
     CMD_WRITE: 0xF104,
     CMD_COMMIT: 0xEEC4,
@@ -175,6 +175,7 @@ CRC_INIT = {
     0x23: 0xA9BB,   # save_to_gif_6.pcapng final chunk (540-byte payload)
     0x81: 0x13B0,   # save_to_gif_7.pcapng final chunk (122-byte payload)
     0xDB: 0x1E90,   # save_to_gif_9.pcapng final chunk (1492-byte payload)
+    0x3F: 0x922E,   # save_to_gif_10.pcapng final chunk (312-byte payload)
     0xFF: 0xD9D1,   # save_to_gif_8.pcapng final chunk (2040-byte payload)
 }
 
@@ -643,14 +644,44 @@ GIF_FLASH_BASE = 0x04240000
 # (0.5.14/0.6.0), not as deltas against each other. 11th cmd/CRC_INIT data
 # point along the way (1492-byte final chunk, cmd 0xDB, solved as usual).
 #
+# save_to_gif_10.pcapng (8 distinct-colored vertical stripes: red, green,
+# blue, yellow, magenta, cyan, white, gray -- one more color than
+# save_to_gif_8) finds the palette's actual limit, and something unexpected
+# past it:
+#
+#   - Only 7 of the 8 colors get their own exact palette slot ([16:18]
+#     through [28:30]: red, green, blue, yellow, magenta, cyan, white --
+#     all byte-exact RGB565). Gray does NOT appear anywhere in the
+#     sub-header.
+#   - Instead, the content for gray's stripe is NOT a single (40,flag)
+#     token like the other seven -- it's 40 alternating 1-pixel tokens,
+#     (1,flag7)(1,flag8) repeated 20 times each, referencing TWO NEW
+#     palette slots at [30:32]=0x640C and [32:34]=0x9C13. Decoded to RGB:
+#     (96,128,96) and (152,128,152) -- their average is (124,128,124),
+#     matching the actual target gray, (128,128,128), almost exactly.
+#   - CONFIRMED VISUALLY, not just from the bytes: the user reported the
+#     gray stripe looked textured/dithered on the real panel, not a smooth
+#     solid gray. The encoder dithers colors it can't represent directly by
+#     alternating two nearby palette colors pixel-by-pixel rather than
+#     giving every distinct source color its own slot -- so the palette
+#     doesn't have a hard "8 colors and no more" cutoff so much as a
+#     deeper constraint on which individual colors qualify for their own
+#     slot (7 primaries/white were fine; a mid-tone gray wasn't).
+#   - The 528-byte prefix is still exactly 528 bytes with 9 total palette
+#     slots in use (7 real + 2 dither-pair) -- still no observed case where
+#     palette size affects it.
+#   - 12th cmd/CRC_INIT data point along the way (312-byte final chunk,
+#     cmd 0x3F, solved as usual).
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
-# (confirmed NOT a color table, and confirmed fixed-size even under this
-# much denser content), the unidentified sub-header byte [13], how many
-# palette slots the format actually supports (only tested up to 4), and
-# gif_2's solid frames being encoded far less efficiently (4151 varied
-# tokens for the same 153600-pixel solid red that save_to_gif_3/4/5 encode
-# in exactly 600 uniform tokens) -- possibly gif_2's source image wasn't
-# perfectly flat, not investigated. It is NOT
+# (confirmed NOT a color table, and confirmed fixed-size up to 9 palette
+# slots and far denser content), the unidentified sub-header byte [13],
+# exactly which colors qualify for a direct palette slot vs. triggering
+# dithering (untested beyond "7 saturated primaries fine, one mid-tone
+# gray triggered it"), and gif_2's solid frames being encoded far less
+# efficiently (4151 varied tokens for the same 153600-pixel solid red that
+# save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
+# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 

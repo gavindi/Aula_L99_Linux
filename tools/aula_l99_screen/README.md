@@ -50,7 +50,7 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from nine captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from ten captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
@@ -59,23 +59,25 @@ frame 1, but frame 2 is a clean 50/50 vertical split — left half red, right
 half blue), `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
 where the split frame repeats unchanged), `save_to_gif_7.pcapng` (a
 red/blue/red vertical triple stripe), `save_to_gif_8.pcapng` (four
-distinct-colored vertical stripes), and `save_to_gif_9.pcapng` (a black/white
-grid, shifted one pixel in frame 2). There is still no `--target gif`,
-because the pixel payload format isn't understood well enough to safely
-construct one, but the core row-grammar is now solved (see below). What's
-known:
+distinct-colored vertical stripes), `save_to_gif_9.pcapng` (a black/white
+grid, shifted one pixel in frame 2), and `save_to_gif_10.pcapng` (eight
+distinct-colored vertical stripes, including gray). There is still no
+`--target gif`, because the pixel payload format isn't understood well
+enough to safely construct one, but the core row-grammar is now solved
+(see below). What's known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed against 9 distinct
+  (payload_len % 256)`, not a fixed opcode — confirmed against 10 distinct
   GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`,
-  `0x81`, `0xFF`, `0xDB`) plus the three previously-known values. There's no
-  known general formula for the matching CRC init, though, so this doesn't
-  unlock arbitrary upload sizes — see `final_chunk_cmd()` in `protocol.py`.
+  `0x81`, `0xFF`, `0xDB`, `0x3F`) plus the three previously-known values.
+  There's no known general formula for the matching CRC init, though, so
+  this doesn't unlock arbitrary upload sizes — see `final_chunk_cmd()` in
+  `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame). Its
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
-  already used for the single-image header, confirmed byte-exact in eight of
-  the nine captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
+  already used for the single-image header, confirmed byte-exact in nine of
+  the ten captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
   is a constant format/version tag, byte 13 is the real frame count.
 - Each frame has its own ~24-byte sub-header, including the self-referential
   frame byte length and a pair of RGB565 color fields: one holds the color of
@@ -309,12 +311,29 @@ whatever color its own first pixel happens to be — one more confirmation
 that frames are encoded fully independently, not as deltas against each
 other.
 
-Still open: the 528-byte prefix's actual contents/purpose (now confirmed
-*not* a color table), one unidentified sub-header byte, how many palette
-slots the format actually supports (only tested up to 4), and why
-`save_to_gif_2`'s solid frames encode far less efficiently (4151 varied
-tokens vs. `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image
-wasn't perfectly flat).
+**`save_to_gif_10.pcapng`** (8 distinct-colored vertical stripes — one more
+than `save_to_gif_8`, adding gray) found the palette's actual limit, and
+something unexpected past it. Only 7 of the 8 colors got an exact palette
+slot (red, green, blue, yellow, magenta, cyan, white — all byte-exact).
+Gray never appears in the sub-header at all. Instead, gray's stripe is 40
+alternating 1-pixel tokens referencing two *new* palette slots that decode
+to RGB `(96,128,96)` and `(152,128,152)` — whose average, `(124,128,124)`,
+is almost exactly the target gray, `(128,128,128)`. **Confirmed visually**,
+not just from the bytes: the gray stripe looked textured/dithered on the
+real panel, not smooth. The encoder dithers colors it can't represent
+directly by alternating two nearby palette entries pixel-by-pixel, rather
+than giving every distinct color its own slot — so it's less "8 colors and
+no more" than a deeper constraint on which specific colors qualify for a
+direct slot (7 saturated primaries were fine; one mid-tone gray wasn't).
+The 528-byte prefix is still exactly 528 bytes with 9 total palette slots
+in play (7 real + 2 dither-pair).
+
+Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
+a color table, and fixed-size up to 9 palette slots and far denser
+content), one unidentified sub-header byte, exactly which colors trigger
+dithering vs. get a direct slot, and why `save_to_gif_2`'s solid frames
+encode far less efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s
+clean 600 — possibly that source image wasn't perfectly flat).
 
 ## Image format
 

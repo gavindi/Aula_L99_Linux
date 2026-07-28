@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-07-29
+
+**"Save to GIF": found the palette's real limit -- dithering, confirmed
+visually.** A tenth capture -- eight distinct-colored vertical stripes, one
+more than 0.6.1's four-color test, adding gray -- finds where the palette
+mechanism actually breaks down, and it's more interesting than a simple
+slot-count cutoff.
+
+### Verified
+- Only 7 of the 8 colors get an exact palette slot (red, green, blue,
+  yellow, magenta, cyan, white -- all byte-exact RGB565 at `[16:18]`
+  through `[28:30]`). Gray never appears in the sub-header.
+- Instead, gray's stripe is 40 alternating 1-pixel tokens referencing two
+  *new* palette slots (`[30:32]`, `[32:34]`) that decode to RGB
+  `(96,128,96)` and `(152,128,152)` -- averaging to `(124,128,124)`, almost
+  exactly the target gray, `(128,128,128)`.
+- **Confirmed visually, not just from the bytes**: the user reported the
+  gray stripe looked textured/dithered on the real panel, not smooth. The
+  encoder dithers colors it can't represent directly by alternating two
+  nearby palette entries pixel-by-pixel, rather than giving every distinct
+  source color its own slot.
+- The 528-byte prefix is still exactly 528 bytes with 9 total palette slots
+  in play (7 real + 2 dither-pair).
+- 12th `cmd`/`CRC_INIT` data point: a 312-byte final chunk predicted
+  `cmd=0x3F` before checking, confirmed exact; its CRC init (`0x922E`)
+  solved and added to `CRC_INIT`.
+
+### Changed
+- Reframes the "how many palette colors" question from 0.6.1: it's not
+  simply "8 colors and no more" -- it's a deeper constraint on which
+  *specific* colors qualify for a direct slot. Seven saturated primaries
+  (including white) were all fine; one mid-tone gray triggered dithering
+  instead of getting an 8th slot.
+
+### Known gaps
+- Exactly which colors trigger dithering vs. get a direct slot is
+  untested beyond this one data point.
+- The 528-byte prefix's actual contents/purpose are still unknown.
+- One sub-header byte ([13]) remains unidentified.
+- `save_to_gif_2`'s solid frames still encode far less efficiently than
+  `save_to_gif_3`/`4`/`5`'s, unexplained.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`.
+
 ## [0.6.2] - 2026-07-29
 
 **"Save to GIF": continuous-RLE model confirmed at high density.** A ninth
