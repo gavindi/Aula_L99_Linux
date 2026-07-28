@@ -509,12 +509,36 @@ GIF_FLASH_BASE = 0x04240000
 # red, all along -- easy to miss when frame 1's red and frame 2's red-left
 # half looked similar, obvious once frame 2 turned green/yellow.)
 #
+# An eighth experiment tested whether the row-grammar is tied to a
+# particular frame SLOT: frame 1's entire content (sub-header, 528-byte
+# prefix, and all) was replaced with a byte-for-byte copy of frame 2's
+# already-proven-working red/blue split, with the TOC's frame-2 offset,
+# both entries' total-size field, and the checksum all updated to match the
+# now-larger frame 1. Result: the fallback animation -- the same failure
+# signature as every invalid mutation, despite every byte in the new frame
+# 1 being bytes that render correctly when they're in frame 2's slot.
+#
+# This suggests frame index, not frame content, selects which decode
+# routine applies -- frame 0 requires the continuous-run encoding solid
+# frames use; frame 1+ can use the row-grammar decoded above. One
+# speculative explanation: frame 0 may serve as a full/reference frame that
+# later frames are decoded relative to (a delta scheme), which frame 0
+# itself can't participate in for lack of a prior frame to reference. That
+# would also fit save_to_gif_3/4's persistent, never-resetting flip
+# differently than previously framed: not a per-row flag that should
+# realistically reset, but a one-time mode switch -- "same as reference,
+# skip N pixels" until the first real difference, then permanently switched
+# to explicit/absolute data for the rest of the frame. Consistent with the
+# evidence gathered so far, but unconfirmed, and this experiment alone
+# can't rule out some other unidentified field or an error in reconstructing
+# the modified frame rather than a genuine per-slot/delta constraint.
+#
 # Everything else in the sub-header, and the bulk of every frame's own
-# payload, is still undecoded -- in particular, still no confirmed model
-# reconciling any of this with save_to_gif_3/4's persistent, never-
-# resetting flip, or explaining why solid-color frames look completely
-# different at the byte level (b'\xff\x00' repeated ~600 times, no per-row
-# pairing at all) rather than using this same row-token grammar. It is NOT
+# payload, is still undecoded -- in particular, the delta/reference-frame
+# hypothesis above is not verified, and solid-color frames' completely
+# different byte-level structure (b'\xff\x00' repeated ~600 times, no
+# per-row pairing at all) compared to this row-token grammar is still only
+# partially explained by it. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 

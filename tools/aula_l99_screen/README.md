@@ -203,10 +203,25 @@ alternating with frame 1 — unmodified solid red — the whole time; easy to
 miss when frame 1's red and frame 2's red-left half looked similar, obvious
 once frame 2 turned green/yellow.)
 
-Still open: reconciling any of this with `save_to_gif_3`/`4`'s persistent,
-never-resetting flip, and why solid-color frames look completely different
-at the byte level (`FF 00` repeated ~600 times, no per-row pairing at all)
-rather than using this same row-token grammar.
+An eighth experiment tested whether the row-grammar is tied to a
+particular frame *slot*: frame 1's entire content was replaced with a
+byte-for-byte copy of frame 2's already-proven-working red/blue split (TOC
+offsets, sizes, and checksum all updated to match). Result: the fallback
+animation — despite every byte being ones that render correctly when
+they're in frame 2's slot.
+
+This points at frame *index*, not content, selecting the decode routine:
+frame 0 requires the continuous-run encoding solid frames use; frame 1+ can
+use the row-grammar. One speculative explanation: frame 0 may serve as a
+full/reference frame that later frames are decoded *relative to* (a delta
+scheme) — which frame 0 can't participate in, having no prior frame to
+reference. That would also reframe `save_to_gif_3`/`4`'s persistent,
+never-resetting flip: not a per-row flag that should reset, but a one-time
+mode switch — "same as reference, skip N pixels" until the first real
+difference, then permanently switched to explicit data for the rest of the
+frame. Consistent with the evidence so far, but unconfirmed — this one
+experiment can't rule out some other unidentified field, or an error in
+reconstructing the modified frame, as the real cause.
 
 ## Image format
 

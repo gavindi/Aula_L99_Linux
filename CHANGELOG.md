@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.12] - 2026-07-29
+
+**"Save to GIF" research, hardware round seven: the row-grammar may be
+tied to frame index, not content -- possible delta/reference-frame
+scheme.** One more experiment against `save_to_gif_5`: swapping which
+frame slot holds the row-grammar content, to test whether the encoding
+choice depends on frame position rather than what's actually in the frame.
+
+### Verified
+- Frame 1's entire content (sub-header, 528-byte prefix, row data) was
+  replaced with a byte-for-byte copy of frame 2's already-proven-working
+  red/blue split. TOC's frame-2 offset, both entries' total-size field, and
+  the `crc16_modbus` checksum were all updated to match the now-larger
+  frame 1; wire transfer padded to avoid needing an unverified CRC_INIT.
+- Result: the fallback animation -- the same failure signature as every
+  invalid mutation tried so far, despite every byte in the new frame 1
+  being bytes that render correctly when they're in frame 2's slot.
+- Reverted afterward; confirmed restored.
+
+### Changed
+- **New leading hypothesis**: frame *index*, not frame *content*, selects
+  which decode routine applies. Frame 0 requires the continuous-run
+  encoding solid frames use; frame 1+ can use the row-grammar decoded in
+  0.5.8-0.5.11.
+- Speculative but consistent with the evidence gathered across this whole
+  hardware investigation: frame 0 may serve as a full/reference frame that
+  later frames are decoded *relative to* (a delta scheme), which frame 0
+  itself can't participate in for lack of a prior frame to reference. This
+  reframes `save_to_gif_3`/`4`'s persistent, never-resetting flip (from
+  0.5.3/0.5.4): not a per-row flag that should realistically reset, but a
+  one-time mode switch -- "same as reference, skip N pixels" until the
+  first real difference, then permanently switched to explicit/absolute
+  data for the rest of the frame.
+
+### Known gaps
+- The delta/reference-frame hypothesis is unconfirmed. This one experiment
+  can't rule out some other unidentified field, or an error in
+  reconstructing the modified frame, as the real cause of the failure.
+- Solid-color frames' byte-level structure (`FF 00` repeated ~600 times, no
+  per-row pairing) is only partially explained by this hypothesis.
+- The bulk of the entropy coding is otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.11] - 2026-07-29
 
 **"Save to GIF" research, hardware round six: palette confirmed
