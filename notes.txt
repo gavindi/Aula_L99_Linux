@@ -1,0 +1,8 @@
+Written to tools/aula_l99_hacky/:
+
+device.py — /dev/hidraw* discovery (matches 0C45:800A cable or 05AC:024F dongle on interface 3) and a HidrawTransport with raw read/write plus HIDIOCSFEATURE/HIDIOCGFEATURE ioctls for the cable's feature-report path.
+protocol.py — the confirmed session handshake (SESSION_INIT/SESSION_QUERY for the dongle, CABLE_SESSION_INIT/PREPARE for the cable), the checksum rule (sum(bytes[0:31]) & 0xFF), and the RTC-set packet builder — all verified byte-for-byte against F75_Initializer's captures for this exact VID/PID. parse_hex_packet() is the intake for whatever you paste from Wireshark.
+cli.py — --list, --handshake, --rtc (a real, testable command against your hardware once you have it), and --send-hex, which is the slot you asked about: paste one raw HID report captured from DeviceDriver.exe doing something (change color, brightness, etc.) and it'll send it and print the reply, so you can confirm a candidate packet works before wiring it into protocol.py properly.
+All three modules compile and the CLI's --help renders correctly; I obviously can't exercise the actual HID I/O without the keyboard attached. The README documents the capture workflow for the still-missing piece (RGB/lighting commands — nobody has published those for 0C45:800A yet, only the RTC/session framing).
+
+Next real step is on you: get Wireshark+USBPcap running against the vendor driver, capture one isolated lighting change, and run it through --send-hex here.

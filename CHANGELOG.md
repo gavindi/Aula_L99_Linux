@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-29
+
+**"Save to BKG" (background image) support.** The vendor app's `--upload`
+path was only ever exercised for one of its three upload destinations; this
+release adds a second, confirmed from newly captured traffic.
+
+### Added
+- `--target {photo-frame,background}` for `--upload` (default `photo-frame`,
+  unchanged from before). `--address` still exists and overrides `--target`.
+- `protocol.PHOTO_FRAME_FLASH_BASE` (`0x041E0000`, renamed from `FLASH_BASE`)
+  and `protocol.BACKGROUND_FLASH_BASE` (`0x04180000`).
+
+### Verified
+- The vendor app's own string table (`Windows/AULA L99/language/1033.lan`
+  #866-868) names three distinct upload actions: "Save to GIF", "Save to
+  BKG" and "Save to photo frame" — confirming these are separate
+  destinations, not the same feature under different names.
+- Two new captures of "Save to BKG" (`wireshark_dumps/save_to_bkg_1.pcapng`,
+  `save_to_bkg_2.pcapng`) need **no protocol changes at all**: every one of
+  the 154 bulk-OUT packets in each capture is reproduced byte-for-byte by the
+  existing `protocol.build_packet()` — same magic, command bytes, and
+  per-command CRC inits as the already-verified photo-frame path.
+  Reconstructing each capture's chunks yields a 307200-byte RGB565 320x480
+  payload whose header CRC checks out via `protocol.describe()`.
+- The only difference is the flash base address: both captures write to
+  `0x04180000` (commits at `0x04180000`, `0x041a0000`, `0x041c0000`), not
+  `0x041E0000`. No extra "activate" command exists beyond the standard
+  write/commit sequence and normal CDC-ACM serial-port open/close.
+
+### Fixed
+- `protocol.FLASH_BASE`'s comment claimed it was "where the vendor writes the
+  wallpaper." That address is the photo-frame slot, not the background one;
+  the comment was corrected as part of the rename.
+
+### Known gaps
+- `--target background` has not been tried against real hardware — only
+  matched against captured traffic. Confirm it actually changes the panel's
+  background (and whether it needs a restart, like the photo-frame path) on
+  real hardware before relying on it.
+- "Save to GIF" (animated frames) is a third, uncaptured destination/protocol
+  and remains unimplemented.
+- The `0x4200000`/`0x4240000` slots referenced in the vendor binary are still
+  unaccounted for.
+
 ## [0.4.1] - 2026-07-29
 
 **Image upload works.** Confirmed on hardware: 154 packets sent, all 154 acked

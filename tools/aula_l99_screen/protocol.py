@@ -134,7 +134,18 @@ CRC_INIT = {CMD_WRITE: 0xF104, CMD_COMMIT: 0xEEC4, CMD_FINAL: 0xD141}
 
 CHUNK_SIZE = 2048
 REGION_SIZE = 0x20000          # 128 KiB; a commit follows each filled region
-FLASH_BASE = 0x041E0000        # where the vendor writes the wallpaper
+
+# The vendor app has (at least) three distinct upload destinations, per its
+# own string table (Windows/AULA L99/language/1033.lan #866-868): "Save to
+# GIF", "Save to BKG" and "Save to photo frame". Only these two have been
+# captured; both use the exact same wire protocol and image format as each
+# other, differing only in flash base address.
+PHOTO_FRAME_FLASH_BASE = 0x041E0000    # "Save to photo frame"
+BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
+                                        # wireshark_dumps/save_to_bkg_1/2.pcapng:
+                                        # both captures' 154 write/commit
+                                        # packets are reproduced byte-for-byte
+                                        # by build_packet() at this address.
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region
 # just written -- so it is image-dependent and must not be compared literally.
@@ -175,7 +186,7 @@ def build_packet(cmd: int, const: int, address: int, payload: bytes) -> bytes:
     return bytes(body) + struct.pack("<H", crc16_packet(cmd, bytes(body)))
 
 
-def build_upload(blob: bytes, base: int = FLASH_BASE) -> list[bytes]:
+def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]:
     """The full packet sequence for one image, in the vendor's own order.
 
     Full 2048-byte chunks are written until a 128 KiB region is filled, then a

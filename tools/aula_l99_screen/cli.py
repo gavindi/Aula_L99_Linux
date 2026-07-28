@@ -5,12 +5,15 @@ Usage:
     python3 -m aula_l99_screen.cli --convert picture.png -o picture.bin
     python3 -m aula_l99_screen.cli --describe picture.bin
     python3 -m aula_l99_screen.cli --upload picture.png
+    python3 -m aula_l99_screen.cli --upload picture.png --target background
 
 This is the touchscreen, not the keyboard: a USB-serial device, unrelated to
 the vendor HID protocol in aula_l99_hacky.
 
-`--upload` writes an image to the panel's flash and is confirmed working on
-real hardware. The panel may need a restart before it redraws from flash.
+`--upload` writes an image to the panel's flash. `--target photo-frame`
+(default) is confirmed working on real hardware; `--target background` uses
+an address verified only against captured traffic, not yet against hardware.
+The panel may need a restart before it redraws from flash.
 """
 from __future__ import annotations
 
@@ -63,13 +66,20 @@ def cmd_describe(args: argparse.Namespace) -> int:
     return 0
 
 
+TARGET_ADDRESSES = {
+    "photo-frame": protocol.PHOTO_FRAME_FLASH_BASE,
+    "background": protocol.BACKGROUND_FLASH_BASE,
+}
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     import time
 
+    address = args.address if args.address is not None else TARGET_ADDRESSES[args.target]
     blob = _encode(args.upload, args.width, args.height)
-    packets = protocol.build_upload(blob, args.address)
+    packets = protocol.build_upload(blob, address)
     print(f"payload: {protocol.describe(blob)}  ({len(blob)} bytes)")
-    print(f"{len(packets)} packets to flash {args.address:#x}")
+    print(f"{len(packets)} packets to flash {address:#x}")
 
     device = find_screen()
     print(f"uploading to {device.path}\n")
@@ -105,8 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--describe", metavar="FILE", help="decode a .bin header and check its CRC")
     parser.add_argument("--upload", metavar="IMAGE",
                         help="convert and upload to the panel's flash (the real path)")
-    parser.add_argument("--address", type=lambda v: int(v, 0), default=protocol.FLASH_BASE,
-                        help="flash address (default %(default)#x)")
+    parser.add_argument("--target", choices=sorted(TARGET_ADDRESSES), default="photo-frame",
+                        help="upload destination for --upload (default %(default)s)")
+    parser.add_argument("--address", type=lambda v: int(v, 0), default=None,
+                        help="flash address for --upload; overrides --target")
     parser.add_argument("--gap", type=float, default=0.005,
                         help="seconds between packets (default %(default)s)")
     parser.add_argument("--ignore-nak", action="store_true",

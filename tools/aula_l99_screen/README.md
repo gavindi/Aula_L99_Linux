@@ -7,11 +7,13 @@ here, and the two share no code.
 
 ## Status
 
-Image upload works, confirmed on real hardware: 154 packets, every one acked by
-the panel, image visible afterwards. The panel may need a restart before it
-redraws from flash.
+Image upload works, confirmed on real hardware for `--target photo-frame`
+(the default): 154 packets, every one acked by the panel, image visible
+afterwards. `--target background` uses a flash address confirmed only against
+captured traffic (see "Upload destinations" below) — not yet tried against
+real hardware. The panel may need a restart before it redraws from flash.
 
-Not implemented: touch input, brightness, screen power.
+Not implemented: touch input, brightness, screen power, `--target gif`.
 
 ## Usage
 
@@ -23,11 +25,29 @@ python3 -m aula_l99_screen.cli --list
 
 # upload an image (any format Pillow reads; resized to 320x480 automatically)
 python3 -m aula_l99_screen.cli --upload picture.png
+python3 -m aula_l99_screen.cli --upload picture.png --target background
 
 # just build the .bin the panel expects, without touching hardware
 python3 -m aula_l99_screen.cli --convert picture.png -o picture.bin
 python3 -m aula_l99_screen.cli --describe picture.bin
 ```
+
+## Upload destinations
+
+The vendor app's own string table (`Windows/AULA L99/language/1033.lan`
+#866-868) names three upload actions: "Save to GIF", "Save to BKG" and "Save
+to photo frame". Two are supported here, both using the identical wire
+protocol and image format below — only the flash base address differs:
+
+| `--target`    | flash base   | status                                            |
+|---------------|--------------|----------------------------------------------------|
+| `photo-frame` | `0x041E0000` | confirmed on hardware                               |
+| `background`  | `0x04180000` | confirmed against captures only, see below          |
+
+`--address` overrides `--target` if you want to experiment with other
+locations (e.g. the still-undocumented `0x4200000`/`0x4240000` slots the
+vendor binary references). "Save to GIF" (animated frames) is a separate,
+uncaptured protocol and is not implemented.
 
 ## Image format
 
