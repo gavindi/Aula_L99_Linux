@@ -5,6 +5,83 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-07-29
+
+**"Save to GIF": continuous-RLE model confirmed at high density.** A ninth
+capture -- a black background with a white 1px grid every 32px, frame 2
+the same grid shifted 1px left and down -- stress-tests the model from
+0.6.0/0.6.1 against much denser, higher-token-count content than any prior
+capture, and it holds up completely. Mostly a strong confirmation round;
+no new structural surprises.
+
+### Verified
+- 9315 tokens per frame (vs. hundreds in every prior capture), mostly tiny
+  1px and 31px runs from the grid lines and cells. Pixels sum to exactly
+  153600 in both frames.
+- The 528-byte prefix is still exactly 528 bytes even at this density,
+  reinforcing 0.6.1's finding that its size doesn't depend on content
+  complexity.
+- The two frames' token streams are structurally identical (same 9315-token
+  shape, same length histogram) but start from opposite flag/color
+  assignments -- each frame independently derives flag 0 from whatever
+  color its own first pixel happens to be ((0,0) is white in frame 1, on
+  both a horizontal and vertical line; black in frame 2, since the 1px
+  shift moves both lines off that pixel). One more confirmation that
+  frames are encoded fully independently, not as deltas against each other
+  (0.5.14/0.6.0).
+- 11th `cmd`/`CRC_INIT` data point: a 1492-byte final chunk predicted
+  `cmd=0xDB` before checking, confirmed exact; its CRC init (`0x1E90`)
+  solved and added to `CRC_INIT`.
+
+### Known gaps
+- The 528-byte prefix's actual contents/purpose are still unknown.
+- One sub-header byte ([13]) remains unidentified.
+- How many palette slots the format actually supports is untested beyond 4.
+- `save_to_gif_2`'s solid frames still encode far less efficiently than
+  `save_to_gif_3`/`4`/`5`'s, unexplained.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`.
+
+## [0.6.1] - 2026-07-29
+
+**"Save to GIF": palette confirmed beyond 2 colors, 528-byte prefix ruled
+out as a color table.** An eighth capture -- four distinct-colored vertical
+stripes (red, green, blue, yellow, 80px each) -- answers two open questions
+from 0.6.0 in a single test.
+
+### Verified
+- **The palette isn't fixed at 2 colors.** This frame's sub-header carries
+  four populated RGB565 slots -- `[16:18]`=red, `[18:20]`=green,
+  `[20:22]`=blue, `[22:24]`=yellow -- exactly the four stripe colors, in
+  order. `flag` is a genuine multi-value palette index (values 0-3
+  confirmed), not the binary 0/1 seen in every earlier 2-color capture.
+- `[20:22]` is palette slot 2, not the mysterious "color variant" field
+  guessed at in 0.5.5 -- that reading only looked plausible because every
+  capture before this one used at most 2 colors.
+- **The 528-byte prefix is still exactly 528 bytes with 4 colors in play**,
+  ruling out "a palette/quantization table that scales with color count"
+  as its purpose.
+- The frame's content is the clean "no merge" case of the continuous-RLE
+  model from 0.6.0: 1920 tokens, uniformly `(80,flag0)/(80,flag1)/
+  (80,flag2)/(80,flag3)` x 480, summing to 153600 pixels. Row boundaries
+  here always land on a color change (yellow -> red), so nothing merges
+  across them -- same grammar as 0.6.0, just not the boundary-merge case.
+- 10th `cmd`/`CRC_INIT` data point: a 2040-byte final chunk predicted
+  `cmd=0xFF` before checking, confirmed exact; its CRC init (`0xD9D1`)
+  solved and added to `CRC_INIT`.
+
+### Known gaps
+- The 528-byte prefix's actual contents/purpose are still unknown (now
+  confirmed *not* a color table).
+- One sub-header byte ([13]) remains unidentified.
+- How many palette slots the format actually supports is untested beyond 4.
+- `save_to_gif_2`'s solid frames still encode far less efficiently than
+  `save_to_gif_3`/`4`/`5`'s, unexplained.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`.
+
 ## [0.6.0] - 2026-07-29
 
 **"Save to GIF" row-grammar SOLVED: it's a continuous, row-boundary-

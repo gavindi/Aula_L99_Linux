@@ -137,20 +137,21 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 9 independent samples across 7 capture files:
+    byte. Confirmed against 11 independent samples across 9 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
     chunk (11 bytes -> cmd=0x12=CMD_FINAL), and wireshark_dumps/
-    save_to_gif_1/2/3/5/6/7.pcapng final chunks (1386 bytes -> 0x71, 1582
-    bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes -> 0x23,
-    122 bytes -> 0x81 -- every one predicted exactly by this formula before
-    being checked; save_to_gif_4.pcapng repeats save_to_gif_3's
-    1450-byte/0xB1 case rather than adding a new one).
+    save_to_gif_1/2/3/5/6/7/8/9.pcapng final chunks (1386 bytes -> 0x71,
+    1582 bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes ->
+    0x23, 122 bytes -> 0x81, 2040 bytes -> 0xFF, 1492 bytes -> 0xDB -- every
+    one predicted exactly by this formula before being checked;
+    save_to_gif_4.pcapng repeats save_to_gif_3's 1450-byte/0xB1 case rather
+    than adding a new one).
 
     This only gives you the cmd byte. There is no known general formula for
     the matching CRC_INIT entry (two hypotheses -- init as a function of just
     this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 9 known (cmd, init) pairs and neither held), so calling this
+    against all 11 known (cmd, init) pairs and neither held), so calling this
     with a payload length outside CRC_INIT will raise in crc16_packet().
     """
     return (CMD_WRITE + payload_len) % 256
@@ -159,10 +160,10 @@ def final_chunk_cmd(payload_len: int) -> int:
 # Each command uses its own CRC init; see final_chunk_cmd() above for why
 # CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
 # opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81 are solved for exactly the lengths
-# they were observed at (wireshark_dumps/save_to_gif_1/2/3/5/6/7.pcapng's
-# final chunks) -- not a general result, since no formula for CRC_INIT vs.
-# length was found (see final_chunk_cmd()).
+# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81/0xFF/0xDB are solved for exactly
+# the lengths they were observed at (wireshark_dumps/save_to_gif_1/2/3/5/6/7
+# /8/9.pcapng's final chunks) -- not a general result, since no formula for
+# CRC_INIT vs. length was found (see final_chunk_cmd()).
 CRC_INIT = {
     CMD_WRITE: 0xF104,
     CMD_COMMIT: 0xEEC4,
@@ -173,6 +174,8 @@ CRC_INIT = {
     0x7F: 0x6F7A,   # save_to_gif_5.pcapng final chunk (120-byte payload)
     0x23: 0xA9BB,   # save_to_gif_6.pcapng final chunk (540-byte payload)
     0x81: 0x13B0,   # save_to_gif_7.pcapng final chunk (122-byte payload)
+    0xDB: 0x1E90,   # save_to_gif_9.pcapng final chunk (1492-byte payload)
+    0xFF: 0xD9D1,   # save_to_gif_8.pcapng final chunk (2040-byte payload)
 }
 
 CHUNK_SIZE = 2048
@@ -269,21 +272,16 @@ GIF_FLASH_BASE = 0x04240000
 #                       (319,479) instead (save_to_gif_4, frame 2) this field
 #                       is red (0xF800), i.e. it tracks whichever color pixel
 #                       (0,0) actually is in each case.
-#     [18:20] u16      the "other" color present in the frame, if any RGB565.
-#                       0x0000 when the frame is a single flat color (both
-#                       captures' frame 1). When frame 2 has one differently-
-#                       colored pixel, this holds that color if it's NOT the
-#                       first pixel (0xFFFF white in save_to_gif_4, since the
-#                       diff is at the end) or the background color if the
-#                       diff IS the first pixel (0xF800 red in save_to_gif_3,
-#                       where [16:18] already claimed white for the diff
-#                       pixel). This pair is internally consistent across
-#                       save_to_gif_3 and 4, but does NOT explain
-#                       save_to_gif_2: its three frames are each a single flat
-#                       color with no second color, yet their color sits at
-#                       [18:20] with [16:18]=0 -- the reverse of what this
-#                       rule predicts. Unexplained; possibly tied to
-#                       save_to_gif_2's much larger content length (below).
+#     [18:20] u16      SOLVED (see save_to_gif_8 below): palette slot 1,
+#                       RGB565. Not just "the other color" -- this is slot 1
+#                       of an extensible palette that continues at [20:22]
+#                       (slot 2), [22:24] (slot 3), etc., one slot per
+#                       distinct color the frame's runs reference. 0x0000
+#                       when the frame only uses slot 0 (a single flat
+#                       color). Still doesn't explain save_to_gif_2's three
+#                       frames, whose sole color sits at [18:20] with
+#                       [16:18]=0 -- the reverse of what a "slot 0 is always
+#                       populated first" rule predicts. Unexplained.
 #
 # The "fixed prefix" hypothesis: every frame in save_to_gif_2/3/4 has exactly
 # 528 bytes of zero immediately after its sub-header, byte-identical
@@ -593,11 +591,10 @@ GIF_FLASH_BASE = 0x04240000
 #     against save_to_gif_3/4/5's clean solid-red frame: exactly 600 tokens,
 #     ALL (255, flag=0), sum 600*256=153600. These are chained pieces of one
 #     giant run, not 600 independent runs.
-#   - flag is a color index (0 or 1) into the sub-header's two RGB565 slots,
-#     as established in 0.5.10/0.5.11. It only changes when the actual pixel
-#     color changes to a genuinely new run; chained continuation pieces of
-#     the same run keep the same flag (hence "all (255,0)" for a solid
-#     frame, not alternating).
+#   - flag is a color index into the sub-header's palette, as established in
+#     0.5.10/0.5.11. It only changes when the actual pixel color changes to
+#     a genuinely new run; chained continuation pieces of the same run keep
+#     the same flag (hence "all (255,0)" for a solid frame, not alternating).
 #
 # This also finally reconciles save_to_gif_3/4's persistent, never-resetting
 # flip (0.5.3/0.5.4, unexplained again as of 0.5.14/0.5.15): a solid-red
@@ -607,12 +604,53 @@ GIF_FLASH_BASE = 0x04240000
 # case -- the flag "staying flipped" for hundreds of tokens is just many
 # chained pieces of that single giant run, not a special persistent mode.
 #
-# What's still open: the fixed 528-byte prefix's actual contents/purpose,
-# the unidentified sub-header bytes ([13], [20:22]), whether more than 2
-# palette colors is possible, and gif_2's solid frames being encoded far
-# less efficiently (4151 varied tokens for the same 153600-pixel solid red
-# that save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
-# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
+# save_to_gif_8.pcapng (4 distinct-colored vertical stripes -- red, green,
+# blue, yellow, 80px each) answers two more open questions from the list
+# above in one capture:
+#
+#   - The palette is NOT fixed at 2 colors: this frame's sub-header carries
+#     FOUR populated RGB565 slots -- [16:18]=0xF800 red, [18:20]=0x07E0
+#     green, [20:22]=0x001F blue, [22:24]=0xFFE0 yellow -- exactly the four
+#     stripe colors, in stripe order. flag is a genuine multi-value palette
+#     index (confirmed values 0-3 here, not just 0/1), and [20:22] is slot 2
+#     of that palette, not a mysterious "variant" of the [18:20] color as
+#     read in 0.5.5 -- that reading only looked plausible because every
+#     capture before this one used at most 2 colors.
+#   - The 528-byte prefix is STILL exactly 528 bytes with 4 colors in play,
+#     ruling out "a per-color palette/quantization table that scales with
+#     color count" as its purpose -- whatever it is, its size does not
+#     depend on how many distinct colors the frame uses.
+#   - The frame's content (1920 tokens, 4-way uniform: exactly 480 each of
+#     (80,flag0)/(80,flag1)/(80,flag2)/(80,flag3), summing to 153600 pixels)
+#     is the clean "no merge" case of the same continuous-RLE model: row
+#     boundaries here always land on a color change (yellow -> red), so nothing
+#     merges across them, unlike save_to_gif_7's red/blue/red case where the
+#     boundary color repeated. Both are the same grammar; this just isn't the
+#     boundary-merging scenario.
+#
+# save_to_gif_9.pcapng (a black background with a white 1px grid every 32px,
+# frame 2 the same grid shifted 1px left and 1px down) is a stress test at
+# far higher density than anything before it -- 9315 tokens per frame,
+# mostly tiny (1px and 31px) runs from the grid lines and cells -- and holds
+# up completely: total pixels sum to exactly 153600 in both frames, and the
+# 528-byte prefix is STILL exactly 528 bytes even here. The two frames'
+# token streams are structurally identical (same 9315-token shape, same
+# length histogram) but start from opposite flag/color assignments, because
+# each frame independently derives flag 0 from whatever color its own first
+# pixel happens to be -- (0,0) is white in frame 1 (on both a horizontal and
+# vertical line) and black in frame 2 (the shift moves both lines off that
+# pixel) -- one more confirmation that frames are encoded fully independently
+# (0.5.14/0.6.0), not as deltas against each other. 11th cmd/CRC_INIT data
+# point along the way (1492-byte final chunk, cmd 0xDB, solved as usual).
+#
+# What's still open: the fixed 528-byte prefix's actual contents/purpose
+# (confirmed NOT a color table, and confirmed fixed-size even under this
+# much denser content), the unidentified sub-header byte [13], how many
+# palette slots the format actually supports (only tested up to 4), and
+# gif_2's solid frames being encoded far less efficiently (4151 varied
+# tokens for the same 153600-pixel solid red that save_to_gif_3/4/5 encode
+# in exactly 600 uniform tokens) -- possibly gif_2's source image wasn't
+# perfectly flat, not investigated. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 

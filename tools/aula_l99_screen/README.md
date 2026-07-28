@@ -50,30 +50,32 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from seven captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from nine captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
 to `(319,479)` — bottom-right), `save_to_gif_5.pcapng` (the same red
 frame 1, but frame 2 is a clean 50/50 vertical split — left half red, right
 half blue), `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
-where the split frame repeats unchanged), and `save_to_gif_7.pcapng` (a
-red/blue/red vertical triple stripe). There is still no `--target gif`,
+where the split frame repeats unchanged), `save_to_gif_7.pcapng` (a
+red/blue/red vertical triple stripe), `save_to_gif_8.pcapng` (four
+distinct-colored vertical stripes), and `save_to_gif_9.pcapng` (a black/white
+grid, shifted one pixel in frame 2). There is still no `--target gif`,
 because the pixel payload format isn't understood well enough to safely
 construct one, but the core row-grammar is now solved (see below). What's
 known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed against 7 distinct
+  (payload_len % 256)`, not a fixed opcode — confirmed against 9 distinct
   GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`,
-  `0x81`) plus the three previously-known values. There's no known general
-  formula for the matching CRC init, though, so this doesn't unlock arbitrary
-  upload sizes — see `final_chunk_cmd()` in `protocol.py`.
+  `0x81`, `0xFF`, `0xDB`) plus the three previously-known values. There's no
+  known general formula for the matching CRC init, though, so this doesn't
+  unlock arbitrary upload sizes — see `final_chunk_cmd()` in `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame). Its
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
-  already used for the single-image header, confirmed byte-exact in six of
-  the seven captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
+  already used for the single-image header, confirmed byte-exact in eight of
+  the nine captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
   is a constant format/version tag, byte 13 is the real frame count.
 - Each frame has its own ~24-byte sub-header, including the self-referential
   frame byte length and a pair of RGB565 color fields: one holds the color of
@@ -269,9 +271,9 @@ replaces every row-token theory above with one simple, complete model:
   tokens sharing the **same** flag — confirmed against the solid-red
   frame's clean 600× `(255, flag=0)` content: chained pieces of one giant
   run, not 600 independent runs.
-- `flag` is the color index established in earlier rounds. It only changes
-  when the actual color changes to a new run; chained continuation pieces
-  of the same run keep the same flag.
+- `flag` is a color index into the sub-header's palette, established in
+  earlier rounds. It only changes when the actual color changes to a new
+  run; chained continuation pieces of the same run keep the same flag.
 
 This also finally reconciles `save_to_gif_3`/`4`'s persistent, never-
 resetting flip: a solid-red image with one white pixel decodes as one tiny
@@ -280,11 +282,39 @@ image), chained into hundreds of same-flag pieces just like the fully-solid
 case. The flag "staying flipped" was never a special persistent mode — it's
 just many chained pieces of one giant run.
 
-Still open: the fixed 528-byte prefix's actual contents/purpose, a couple
-unidentified sub-header bytes, whether more than 2 palette colors is
-possible, and why `save_to_gif_2`'s solid frames encode far less
-efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s clean 600 —
-possibly that source image wasn't perfectly flat).
+**`save_to_gif_8.pcapng`** (four distinct-colored vertical stripes — red,
+green, blue, yellow, 80px each) answered two more open questions in one
+capture:
+
+- **The palette isn't fixed at 2 colors.** This frame's sub-header carries
+  four populated RGB565 slots — `[16:18]`=red, `[18:20]`=green,
+  `[20:22]`=blue, `[22:24]`=yellow — exactly the four stripe colors, in
+  order. `flag` is a genuine multi-value palette index (0–3 confirmed
+  here), and `[20:22]` is palette slot 2, not the mysterious "color
+  variant" field guessed at earlier — that reading only looked plausible
+  because every capture before this one used at most 2 colors.
+- **The 528-byte prefix is still exactly 528 bytes with 4 colors in play**,
+  ruling out "a palette/quantization table that scales with color count"
+  as its purpose. Whatever it is, its size doesn't depend on how many
+  distinct colors the frame uses.
+
+**`save_to_gif_9.pcapng`** (a black background with a white 1px grid every
+32px, frame 2 the same grid shifted 1px left and down) stress-tests the
+model at far higher density — 9315 tokens per frame, mostly tiny 1px and
+31px runs — and it holds up completely: pixels sum to exactly 153600 in
+both frames, and the 528-byte prefix is still exactly 528 bytes. The two
+frames' token streams are structurally identical but start from opposite
+flag assignments, since each frame independently derives flag 0 from
+whatever color its own first pixel happens to be — one more confirmation
+that frames are encoded fully independently, not as deltas against each
+other.
+
+Still open: the 528-byte prefix's actual contents/purpose (now confirmed
+*not* a color table), one unidentified sub-header byte, how many palette
+slots the format actually supports (only tested up to 4), and why
+`save_to_gif_2`'s solid frames encode far less efficiently (4151 varied
+tokens vs. `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image
+wasn't perfectly flat).
 
 ## Image format
 
