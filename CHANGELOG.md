@@ -5,35 +5,104 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-07-29
+## [0.4.1] - 2026-07-29
 
-Touchscreen image support. This is the `EEEF:268A` panel, a CDC-ACM USB-serial
-device — an entirely separate device from the keyboard's HID channel, so it
-lives in its own module and shares no code with `aula_l99_hacky`.
+**Image upload works.** Confirmed on hardware: 154 packets sent, all 154 acked
+by the panel, image visible on the screen. 0.4.0 had the payload format right
+but no way to deliver it; this release adds the wire protocol.
 
 ### Added
-- `tools/aula_l99_screen/`: convert images to the panel's native format.
+- `--upload IMAGE` converts an image and writes it to the panel's flash, with
+  `--address`, `--gap` and `--ignore-nak` for experimenting.
+- Wire protocol, on bulk endpoints `0x03` out / `0x82` in:
+
+        5a a5          magic
+        <len/256>      uint16 BE
+        <cmd>          0x07 write · 0x12 final partial · 0x0b commit
+        <const>        0x64 data · 0x66 commit
+        <address>      uint32 BE flash address
+        <payload>
+        <crc>          uint16 LE, poly 0xA001 reflected, init per command
+
+  The `.bin` is written from flash base `0x041E0000` in 2048-byte chunks. After
+  each filled 128 KiB region a commit carries that region's byte count; a final
+  short packet and a last commit end the transfer.
+- Per-command CRC inits: `0xF104` write, `0xEEC4` commit, `0xD141` final. No
+  single init fits all three.
+- `tools/aula_l99_screen/README.md` documenting both the image format and the
+  wire protocol.
+
+### Verified
+- The packet generator reproduces **both** upstream captures byte-for-byte, all
+  154 packets each.
+- The CRC inits validate against **308/308** packets across both captures. They
+  were solved algebraically over GF(2) after brute force failed — that search
+  had been seeded from commit packets, which use a different init to the data
+  chunks, so it could never have converged.
+- Reconstructing the `.bin` from the captured chunks yields exactly 307211
+  bytes whose embedded CRC validates, confirming the header/payload/trailer
+  split independently of the generator.
+
+### Fixed
+- Ack detection accepted only ASCII `OK`, which rejected valid commit replies:
+  a commit answers with a 21-byte reply carrying a 4-byte checksum of the region
+  just written, so it is image-dependent and must not be compared literally.
+  This aborted an otherwise correct upload at packet 64.
+
+### Removed
+- `--send`, which wrote the payload raw to the serial port. It was the delivery
+  attempt built on the mis-attributed JPEG protocol; the panel ignores such
+  writes entirely, so keeping it would only invite the same dead end.
+
+### Root cause of 0.4.0's "nothing appears"
+- The JPEG protocol (magic `12 34 56 78`) that 0.4.0 recorded as superseded
+  **belongs to a different device**. In the upstream project's own captures that
+  traffic goes to `87ad:70db`, another USB display on that machine, while the
+  AULA panel `eeef:268a` is a separate device speaking the `5a a5` protocol
+  above. Every dead end in 0.4.0 — no reply at any baud from 9600 to 2000000, no
+  visible change, a hunt for a nonexistent HID "refresh" command — traces back
+  to trusting that attribution without checking which device the captured
+  traffic actually addressed.
+
+### Known gaps
+- Touch input, brightness and screen power remain uncaptured.
+- Why each command needs a different CRC init is not understood; the values are
+  empirical.
+- Two further flash slots exist at `0x4200000` and `0x4240000` (the vendor
+  binary references all three); only `0x041E0000` has been used.
+- The panel may need a restart before it redraws from flash; no command to
+  force a refresh has been identified.
+
+## [0.4.0] - 2026-07-29
+
+Touchscreen image **format decoding**. Establishes the panel's native image
+format and ships a converter for it; delivery to the device came in 0.4.1. The
+`EEEF:268A` panel is a CDC-ACM USB-serial device, entirely separate from the
+keyboard's HID channel, so it lives in its own module and shares no code with
+`aula_l99_hacky`.
+
+### Added
+- `tools/aula_l99_screen/`:
   - `--convert IMAGE -o FILE` produces the `.bin` the panel expects.
-  - `--describe FILE` decodes a `.bin` header and verifies its CRC.
+  - `--describe FILE` decodes a `.bin` header and checks its CRC.
   - `--list` finds the panel by VID/PID rather than assuming `/dev/ttyACM0`.
-  - `--send IMAGE` writes the payload to the port (see Known gaps).
 - Panel image format, derived from the vendor's own `qt-tool/Image2Bin.exe` by
   feeding it known images and decoding the output:
 
         [0..3]   uint32 LE  payload size (width * height * 2)
-        [4..5]   uint16 LE  width
-        [6..7]   uint16 LE  height
+        [4..5]   uint16 LE  width   (320)
+        [6..7]   uint16 LE  height  (480)
         [8]      0x00       constant in every sample
         [9..10]  uint16 LE  CRC16/MODBUS over the pixel data
         [11..]   pixels     RGB565, little-endian, row-major
 
-- Binary-safe serial transport: the port is put in raw mode via a `cfmakeraw`
-  equivalent, since Python exposes none.
+- Binary-safe serial transport using a `cfmakeraw` equivalent, since Python
+  exposes none.
 
 ### Verified
 - The encoder reproduces `Image2Bin.exe` **byte-for-byte** for four images
   across two different sizes, header and pixels alike.
-- Pixel encoding was checked against a known input: the first pixel decodes to
+- Pixel encoding checked against a known image: the first pixel decodes to
   `0x05BF`, exactly RGB565 for the cyan `(0,180,255)` line at y=0, and the last
   to `0x0845` for the `(10,10,40)` background.
 - The dimension fields are real rather than constants: a 200x100 input yields a
@@ -42,33 +111,29 @@ lives in its own module and shares no code with `aula_l99_hacky`.
   and plain byte and word sums were all tested and none matched.
 
 ### Fixed
-- The serial port was being opened as a cooked tty, which corrupted binary
-  payloads: `ONLCR` expands every `0x0A` and `IXON` swallows `0x11`/`0x13` —
-  100 bytes of a 17 KB test payload. Raw mode is now mandatory in the
-  transport.
+- The serial port was opened as a cooked tty, corrupting binary payloads:
+  `ONLCR` expands every `0x0A` and `IXON` swallows `0x11`/`0x13` — 100 bytes of
+  a 17 KB payload. Raw mode is now mandatory in the transport.
+
+### Superseded
+- An earlier implementation of this module used a JPEG-based format taken from
+  third-party documentation of this panel (64-byte header, magic
+  `12 34 56 78`, command `0x02`). The vendor's own converter emits raw RGB565,
+  so that format is wrong for this hardware. See 0.4.1 for why it existed at
+  all.
 
 ### Known gaps
 - **Nothing has been shown on the panel yet.** The payload is right, but the
   framing the vendor uses to send it is not known, and writing the bytes raw to
   the port produces no visible change and no reply, at any baud from 9600 to
   2000000.
-- The vendor sends images via `qt-tool/SerialPortTool.exe`, which takes three
-  arguments and exits immediately without them. Driving it under an `ioctl`
-  shim is the most direct route to capturing the real framing.
+- Byte 8 of the header is `0x00` in every sample; its meaning is unknown.
 - Under Wine the vendor app cannot find the panel at all: it locates the port
   through SetupAPI, and Wine's `Enum\USB` tree contains the keyboard (which
   `winebus` registers) but not CDC-ACM serial devices. This is a limitation of
   Wine's device model, not a configuration error, and no COM-port symlink fixes
   it.
-- Byte 8 of the header is `0x00` in every sample; its meaning is unknown.
 - Touch input, brightness and screen power remain uncaptured.
-
-### Superseded
-- An earlier implementation of this module used a JPEG-based format taken from
-  third-party documentation of this panel (64-byte header, magic
-  `12 34 56 78`, command `0x02`). That format is wrong for this hardware — the
-  vendor's converter emits raw RGB565 — and it is why images sent with it never
-  appeared. It has been replaced, not kept as a fallback.
 
 ## [0.3.0] - 2026-07-28
 

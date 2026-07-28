@@ -4,15 +4,13 @@ Usage:
     python3 -m aula_l99_screen.cli --list
     python3 -m aula_l99_screen.cli --convert picture.png -o picture.bin
     python3 -m aula_l99_screen.cli --describe picture.bin
-    python3 -m aula_l99_screen.cli --send picture.png
+    python3 -m aula_l99_screen.cli --upload picture.png
 
 This is the touchscreen, not the keyboard: a USB-serial device, unrelated to
 the vendor HID protocol in aula_l99_hacky.
 
-`--convert` is the trustworthy part: its output is byte-for-byte identical to
-the vendor's own Image2Bin.exe for every image tested. `--send` writes those
-bytes to the serial port, but the on-the-wire framing the panel expects has NOT
-been established -- see the note it prints.
+`--upload` writes an image to the panel's flash and is confirmed working on
+real hardware. The panel may need a restart before it redraws from flash.
 """
 from __future__ import annotations
 
@@ -65,22 +63,36 @@ def cmd_describe(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_send(args: argparse.Namespace) -> int:
-    blob = _encode(args.send, args.width, args.height)
+def cmd_upload(args: argparse.Namespace) -> int:
+    import time
+
+    blob = _encode(args.upload, args.width, args.height)
+    packets = protocol.build_upload(blob, args.address)
     print(f"payload: {protocol.describe(blob)}  ({len(blob)} bytes)")
+    print(f"{len(packets)} packets to flash {args.address:#x}")
 
     device = find_screen()
-    print(f"writing to {device.path}")
-    with SerialTransport(device.path) as transport:
-        sent = transport.write(blob)
-        reply = transport.read_reply()
-    print(f"wrote {sent} bytes; panel replied: {reply.hex(' ') if reply else '(nothing)'}")
+    print(f"uploading to {device.path}\n")
 
-    print("\nnote: the framing the panel expects on the wire is not yet known.\n"
-          "      The payload above matches the vendor's converter exactly, but\n"
-          "      writing it raw has not been shown to update the display, so a\n"
-          "      blank screen here is expected rather than a sign of a bad image.")
-    return 0
+    sent = acked = 0
+    with SerialTransport(device.path) as transport:
+        for i, packet in enumerate(packets):
+            transport.write(packet)
+            sent += 1
+            reply = transport.read_reply()
+            if protocol.is_ack(packet[4], reply):
+                acked += 1
+            elif not args.ignore_nak:
+                print(f"\npacket {i} not acked (reply {reply.hex(' ') or 'none'}); stopping.\n"
+                      f"Leaving the transfer incomplete can freeze the panel — power-cycle it.",
+                      file=sys.stderr)
+                return 1
+            if i % 25 == 0:
+                print(f"  {i}/{len(packets)} sent, {acked} acked")
+            time.sleep(args.gap)
+
+    print(f"\ndone: {sent} packets sent, {acked} acked")
+    return 0 if acked == sent else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,7 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--convert", metavar="IMAGE", help="convert an image to the panel's .bin")
     parser.add_argument("-o", "--output", metavar="FILE", help="output path for --convert")
     parser.add_argument("--describe", metavar="FILE", help="decode a .bin header and check its CRC")
-    parser.add_argument("--send", metavar="IMAGE", help="convert and write to the panel")
+    parser.add_argument("--upload", metavar="IMAGE",
+                        help="convert and upload to the panel's flash (the real path)")
+    parser.add_argument("--address", type=lambda v: int(v, 0), default=protocol.FLASH_BASE,
+                        help="flash address (default %(default)#x)")
+    parser.add_argument("--gap", type=float, default=0.005,
+                        help="seconds between packets (default %(default)s)")
+    parser.add_argument("--ignore-nak", action="store_true",
+                        help="keep going when a packet is not acked")
     parser.add_argument("--width", type=int, default=protocol.PANEL_WIDTH,
                         help="panel width (default %(default)s)")
     parser.add_argument("--height", type=int, default=protocol.PANEL_HEIGHT,
@@ -111,8 +130,8 @@ def main() -> int:
             return cmd_convert(args)
         if args.describe:
             return cmd_describe(args)
-        if args.send:
-            return cmd_send(args)
+        if args.upload:
+            return cmd_upload(args)
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

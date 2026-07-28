@@ -26,14 +26,12 @@ Verified rather than assumed:
     were all tested and none matched.
 
 An earlier version of this module implemented a JPEG-based format taken from
-third-party documentation of this panel. That format is wrong for this
-hardware, which is why images sent with it never appeared.
+third-party documentation of this panel. That format belongs to a different
+device entirely (see the wire-protocol note below), which is why images sent
+with it never appeared.
 
-STILL UNKNOWN: how this payload is framed on the wire. Writing the bytes
-straight to the serial port has not been shown to display anything. The vendor
-sends it via `qt-tool/SerialPortTool.exe`, which takes three arguments and has
-not yet been driven successfully, so a capture of the real framing is the
-missing piece.
+The payload above is what gets written to flash; see build_upload() for how it
+is framed and chunked on the wire.
 """
 from __future__ import annotations
 
@@ -106,6 +104,107 @@ def build_image_file(rgb_rows: bytes, width: int = PANEL_WIDTH,
     """The complete .bin, byte-identical to what Image2Bin.exe produces."""
     pixels = encode_pixels(rgb_rows, width, height)
     return build_header(pixels, width, height) + pixels
+
+
+# --- wire protocol -----------------------------------------------------------
+# Decoded from the upstream project's USB captures. Note those captures are
+# mis-attributed upstream: their `12 34 56 78` JPEG traffic goes to a different
+# device (87ad:70db), while the AULA panel (eeef:268a) speaks this protocol on
+# bulk endpoints 0x03 out / 0x82 in.
+#
+#     5a a5              magic
+#     <len/256>          uint16 BE, payload bytes / 256 (8 for a 2048 chunk)
+#     <cmd>              0x07 write chunk, 0x12 final partial, 0x0b commit
+#     <const>            0x64 for data, 0x66 for commit
+#     <address>          uint32 BE, flash address
+#     <payload>
+#     <crc>              uint16 LE, poly 0xA001 reflected, init per command
+#
+# The device acks every packet with ASCII "OK".
+TRANSFER_MAGIC = bytes([0x5A, 0xA5])
+CMD_WRITE = 0x07
+CMD_FINAL = 0x12
+CMD_COMMIT = 0x0B
+CONST_DATA = 0x64
+CONST_COMMIT = 0x66
+
+# Each command uses its own CRC init. Verified against all 308 packets in both
+# upstream captures; a single init does not fit all three.
+CRC_INIT = {CMD_WRITE: 0xF104, CMD_COMMIT: 0xEEC4, CMD_FINAL: 0xD141}
+
+CHUNK_SIZE = 2048
+REGION_SIZE = 0x20000          # 128 KiB; a commit follows each filled region
+FLASH_BASE = 0x041E0000        # where the vendor writes the wallpaper
+# Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
+# Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region
+# just written -- so it is image-dependent and must not be compared literally.
+ACK = b"OK"
+REPLY_MIN = 19
+
+
+def is_ack(cmd: int, reply: bytes) -> bool:
+    """Did the panel accept this packet?"""
+    if len(reply) < REPLY_MIN or reply[:2] != TRANSFER_MAGIC:
+        return False
+    if cmd == CMD_COMMIT:
+        # the reply embeds a second message echoing the command byte
+        return reply.find(TRANSFER_MAGIC, 2) != -1 and CMD_COMMIT in reply[7:10]
+    return ACK in reply
+
+
+def crc16_packet(cmd: int, body: bytes) -> int:
+    """Packet checksum: reflected poly 0xA001 with a per-command init."""
+    if cmd not in CRC_INIT:
+        raise ValueError(f"unknown command 0x{cmd:02x}")
+    crc = CRC_INIT[cmd]
+    for byte in body:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def build_packet(cmd: int, const: int, address: int, payload: bytes) -> bytes:
+    body = bytearray()
+    body += TRANSFER_MAGIC
+    body += struct.pack(">H", len(payload) // 256)
+    body.append(cmd)
+    body.append(const)
+    body += struct.pack(">I", address)
+    body += payload
+    return bytes(body) + struct.pack("<H", crc16_packet(cmd, bytes(body)))
+
+
+def build_upload(blob: bytes, base: int = FLASH_BASE) -> list[bytes]:
+    """The full packet sequence for one image, in the vendor's own order.
+
+    Full 2048-byte chunks are written until a 128 KiB region is filled, then a
+    commit for that region carrying the byte count written to it. Any remainder
+    goes out as a final short packet before the last commit.
+    """
+    packets: list[bytes] = []
+    offset = 0
+    region_start = base
+    region_bytes = 0
+
+    while offset < len(blob):
+        take = min(CHUNK_SIZE, len(blob) - offset)
+        address = base + offset
+        chunk = blob[offset:offset + take]
+        if take == CHUNK_SIZE:
+            packets.append(build_packet(CMD_WRITE, CONST_DATA, address, chunk))
+        else:
+            packets.append(build_packet(CMD_FINAL, CONST_DATA, address, chunk))
+        offset += take
+        region_bytes += take
+
+        at_region_end = (base + offset) - region_start >= REGION_SIZE
+        if at_region_end or offset >= len(blob):
+            packets.append(build_packet(CMD_COMMIT, CONST_COMMIT, region_start,
+                                        struct.pack(">I", region_bytes)))
+            region_start = base + offset
+            region_bytes = 0
+    return packets
 
 
 def describe(blob: bytes) -> str:
