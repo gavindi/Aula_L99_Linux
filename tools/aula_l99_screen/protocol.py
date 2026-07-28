@@ -465,29 +465,46 @@ GIF_FLASH_BASE = 0x04240000
 # kind of trailing zero-padding (nothing else changed) rendered correctly,
 # ruling out the padding itself as the cause.
 #
-# Together, this points at rows in this "2-color-split" encoding being
-# hardcoded to exactly two fixed-size sub-tokens (4 bytes), not a flexible
-# run-list terminated by a flag: the successful experiment changed lengths
-# while keeping exactly 2 tokens; every failed one either changed a flag
-# without changing token count, or changed token count outright, and all
-# fail identically. Under this reading the flag bytes may not encode
-# per-row-chosen information at all -- possibly a fixed per-slot marker
-# (always 0 for the first run, 1 for the second) that the decoder validates
-# strictly as an alignment/integrity check, with color implied purely by
-# slot position (first run = the frame's first-pixel color, second run =
-# the "other" color) rather than by the flag's value. This would also
-# explain why solid-color frames look completely different at the byte
-# level (b'\xff\x00' repeated ~600 times with no row structure at all,
-# rather than paired (length,flag) tokens per row): a single-run image may
-# use a different, non-row-bounded "one continuous run" encoding entirely,
-# not the same per-row grammar. Not confirmed -- still doesn't reconcile
-# with save_to_gif_3/4's persistent, never-resetting flip within what
-# should, by this theory, be many independent solid rows.
+# A sixth experiment resolved this cleanly: row 240's two flag bytes were
+# SWAPPED rather than set to a new value -- (0x9F,0x00)(0x9F,0x01) ->
+# (0x9F,0x01)(0x9F,0x00), same lengths, same 160/160 split, just the two
+# flags exchanged. This rendered correctly -- not the fallback -- with the
+# boundary at exactly the same position as always, but the COLORS for that
+# one row visibly swapped (confirmed by photo: a thin horizontal line at
+# row 240 where left-of-boundary reads as the "other" color and
+# right-of-boundary reads as the frame's first-pixel color, i.e. inverted
+# relative to every row above and below it). This directly confirms the
+# flag byte IS a per-run color index after all (selecting between the two
+# RGB565 slots in the sub-header, [16:18] and [18:20]) -- contradicting the
+# "fixed positional marker" reading above.
+#
+# Four data points on this row now: (0,1) [original] renders normally;
+# (1,0) [swapped, this experiment] renders correctly with that row's colors
+# inverted; (0,0) and (1,1) [0.5.7's two same-value mutations] both fail to
+# the fallback animation. The pattern isn't "must equal a specific value in
+# a specific position" -- it's that a row's two runs must use two DIFFERENT
+# color indices, one 0 and one 1, in EITHER order; using the same index
+# twice fails. That also reframes the three-run failure above: with only
+# two possible flag values (0 and 1), a three-run row can never have each
+# run use a different index from the other two -- some pair is forced to
+# repeat, which this same rule would reject regardless of whether rows are
+# otherwise capable of holding 3+ runs. So the earlier "rows are hardcoded
+# to exactly two tokens" reading may not be the real constraint either; "a
+# row's runs must cover each of the frame's colors exactly once" fits all
+# six data points at once, including the failed three-run attempt, without
+# needing a separate hardcoded-token-count rule. Consistent with a real
+# encoder simply never emitting two consecutive same-colored runs in one
+# row (it would merge them, or use the continuous-run encoding solid frames
+# use instead) -- so the decoder may never have been built to tolerate it.
 #
 # Everything else in the sub-header, and the bulk of every frame's own
-# payload, is still undecoded. It is NOT raw RGB565 (frames are well under
-# width*height*2 bytes), not zlib, not raw-deflate. No JPEG SOI marker
-# (FFD8) appears anywhere in a frame.
+# payload, is still undecoded -- in particular, still no confirmed model
+# reconciling any of this with save_to_gif_3/4's persistent, never-
+# resetting flip, or explaining why solid-color frames look completely
+# different at the byte level (b'\xff\x00' repeated ~600 times, no per-row
+# pairing at all) rather than using this same row-token grammar. It is NOT
+# raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
+# raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region

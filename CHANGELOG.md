@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2026-07-29
+
+**"Save to GIF" research, hardware round five: flag byte confirmed as a
+color index.** One more experiment against `save_to_gif_5` -- swapping
+rather than replacing row 240's two flag values -- gives the cleanest
+result of the whole investigation and revises 0.5.9's "fixed positional
+marker" guess.
+
+### Verified
+- Row 240's flag bytes swapped (not set to a new value): `(0x9F,0x00)
+  (0x9F,0x01) → (0x9F,0x01)(0x9F,0x00)`, same lengths, same 160/160 split.
+  Rendered correctly -- not the fallback -- with the boundary in exactly
+  the same place as always, but that row's colors visibly swapped.
+  Confirmed by photo: a thin horizontal line at row 240 reading inverted
+  relative to every row above and below it.
+- This directly confirms the flag byte **is** a per-run color index,
+  selecting between the sub-header's two RGB565 color slots.
+
+### Changed
+- **Revises 0.5.9.** Four data points on this row: `(0,1)` original renders
+  normally; `(1,0)` swapped renders correctly with colors inverted; `(0,0)`
+  and `(1,1)` (0.5.7's mutations) both fail to the fallback. The real rule
+  isn't "must equal a specific value in a specific position" -- it's that a
+  row's two runs must use two *different* color indices, one 0 and one 1,
+  in either order; the same index twice fails.
+- This also reframes 0.5.9's three-run failure: with only two possible flag
+  values, three runs can never all differ pairwise from each other -- some
+  pair is forced to repeat, which this same rule rejects regardless of
+  whether rows can otherwise hold more than two runs. "A row's runs must
+  cover each of the frame's colors exactly once" fits all six results to
+  date (including the three-run failure) without a separate hardcoded-
+  token-count rule. Consistent with a real encoder never emitting two
+  consecutive same-colored runs in a row in the first place (it would just
+  merge them, or use the continuous-run encoding solid frames use instead).
+
+### Known gaps
+- Still open: reconciling any of this with `save_to_gif_3`/`4`'s
+  persistent, never-resetting flip, and why solid-color frames look
+  completely different at the byte level (`FF 00` repeated ~600 times, no
+  per-row pairing) rather than using this same row-token grammar.
+- The bulk of the entropy coding is otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.9] - 2026-07-29
 
 **"Save to GIF" research, hardware round four: rows are likely fixed at two

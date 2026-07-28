@@ -162,21 +162,39 @@ Result: the fallback animation again. A control upload — the *original*,
 unmodified blob with the same kind of zero-padding and nothing else changed
 — rendered correctly, ruling out the padding itself as the culprit.
 
-Together this points toward rows in this encoding being hardcoded to
-exactly two fixed-size sub-tokens, not a flexible run-list a flag
-terminates: the one successful experiment changed lengths while keeping
-exactly 2 tokens; every failed one either changed a flag without changing
-token count, or changed token count outright — and all fail identically.
-That reframes the flag bytes as possibly not carrying chosen information at
-all: maybe a fixed per-slot marker (always 0 for the first run, 1 for the
-second) that the decoder checks strictly, with color implied purely by slot
-position rather than by the flag's value. That would also explain why
-solid-color frames look completely different at the byte level (`FF 00`
-repeated ~600 times with no row structure at all) — possibly a separate,
-non-row-bounded "single continuous run" encoding for flat images, not the
-same per-row grammar. Unconfirmed, and still doesn't reconcile with
-`save_to_gif_3`/`4`'s persistent flip within what should, by this theory,
-be many independent solid rows.
+A sixth experiment resolved this cleanly, by **swapping** row 240's two
+flag bytes instead of setting them to a new value —
+`(0x9F,0x00)(0x9F,0x01)` → `(0x9F,0x01)(0x9F,0x00)`, same lengths, same
+160/160 split, just the two flags exchanged. This rendered correctly, not
+the fallback — with the boundary in exactly the same place as always, but
+that one row's **colors visibly swapped** (confirmed by photo: a thin
+horizontal line at row 240 reading inverted relative to every row above and
+below it). That directly confirms the flag byte **is** a per-run color
+index, selecting between the sub-header's two RGB565 color slots —
+contradicting the "fixed positional marker" guess above.
+
+Four data points on this one row: `(0,1)` (original) renders normally;
+`(1,0)` (swapped) renders correctly with that row's colors inverted; `(0,0)`
+and `(1,1)` (0.5.7's two mutations) both fail to the fallback. The pattern
+isn't "must equal a specific value in a specific position" — it's that a
+row's two runs must use two *different* color indices, one 0 and one 1, in
+either order; using the same index twice fails. That also reframes the
+three-run failure: with only two possible flag values, a three-run row can
+never give all three runs different indices from each other — some pair is
+forced to repeat, which this same rule would reject regardless of whether
+rows can otherwise hold more than two runs. So "rows are hardcoded to
+exactly two tokens" may not be the real constraint after all — "a row's
+runs must cover each of the frame's colors exactly once" fits all six
+results at once, including the failed three-run attempt, with no separate
+token-count rule needed. Consistent with a real encoder simply never
+emitting two consecutive same-colored runs in one row (it would merge them,
+or use the continuous-run encoding solid frames use instead) — so the
+decoder may never have been built to tolerate it.
+
+Still open: reconciling any of this with `save_to_gif_3`/`4`'s persistent,
+never-resetting flip, and why solid-color frames look completely different
+at the byte level (`FF 00` repeated ~600 times, no per-row pairing at all)
+rather than using this same row-token grammar.
 
 ## Image format
 
