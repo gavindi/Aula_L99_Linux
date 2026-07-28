@@ -126,15 +126,28 @@ which was correct each time and still acked normally) and falling back to a
 fixed, previously-cached animation on failure, rather than rendering bad
 data or erroring visibly.
 
-Practically, this means single-byte fuzzing of this stream is unlikely to
-reveal more on its own: the response is all-or-nothing — exactly right
-decodes correctly, anything else produces the identical fallback — with no
-gradient between "slightly wrong" and "very wrong" to follow. What
-"exactly right" actually requires (satisfying whatever that validation is)
-remains unknown, and reconciling it with `save_to_gif_5`'s clean per-row
-reading and `save_to_gif_3`/`4`'s persistent-flip behavior is still open.
-Progress from here probably needs a different angle than more ad hoc byte
-flips.
+A fourth experiment broke that "all-or-nothing" pattern, and produced the
+first real win: instead of touching a flag byte, row-token 240's two
+*length* bytes were changed from `(159, 159)` — a 160/160 pixel split — to
+`(99, 219)` — a 100/220 split, still summing to 320 (the panel width),
+flags left untouched. This time the panel did **not** fall back. It
+rendered the normal image with the red/blue boundary visibly notched inward
+for exactly one row — confirmed by photo to sit almost precisely at the
+panel's vertical midpoint, matching row 240 of 480 exactly. First
+controlled, predicted, position-correct change to rendered content in this
+whole investigation, and direct confirmation of the run-length-as-length-
+minus-one reading, rather than an inference from byte patterns alone.
+
+So the panel's validation looks narrower than "any change fails" — more
+like it cares that each row's lengths still sum correctly (320 either way,
+so this edit passed) rather than rejecting any deviation. What the flag
+bytes need to satisfy is still open, since every flag-only edit has failed
+regardless of position or direction. (One operational note: a restore
+attempt right after this experiment silently didn't take — the panel kept
+showing the fallback GIF despite a clean, acked re-upload of the known-good
+blob — and an identical second re-upload fixed it. Possibly a read/write
+race if the panel was still mid-loop reading the region being overwritten;
+worth a retry before concluding a change had no effect.)
 
 ## Image format
 

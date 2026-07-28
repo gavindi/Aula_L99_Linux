@@ -415,20 +415,47 @@ GIF_FLASH_BASE = 0x04240000
 # is not the TOC-level crc16_modbus (that one was recomputed correctly each
 # time and the transfer still acked normally), and on failure falls back to
 # a fixed, previously-cached animation rather than rendering the bad data or
-# erroring visibly. Practically, this means single-byte fuzzing of this
-# stream is unlikely to reveal further structure on its own: the response is
-# all-or-nothing (exactly right decodes correctly; anything else produces
-# the identical fallback), with no gradient to follow between "slightly
-# wrong" and "very wrong." What actually constitutes "exactly right" --
-# the validation being satisfied -- is not understood.
+# erroring visibly.
+#
+# A fourth experiment, changing a length instead of a flag, broke that
+# pattern -- and rendered real, position-correct new content. Row-token 240's
+# two length bytes were changed from (159, 159) -- a 160/160 pixel split --
+# to (99, 219) -- a 100/220 split, i.e. still summing to 320 (the panel
+# width), same flags (0x00, 0x01) untouched, same crc16_modbus recompute and
+# re-upload as every other experiment. This time the panel did NOT fall
+# back: it rendered the normal half-red/half-blue image with the red/blue
+# boundary visibly notched inward at exactly row 240 of 480 (confirmed:
+# photographed at almost exactly the panel's vertical midpoint, matching the
+# edited row precisely) -- a one-row-tall protrusion of blue into red
+# territory, consistent with a 100px-red/220px-blue split for that single
+# row and unchanged 160/160 everywhere else. This is the first controlled,
+# predicted, position-correct change to rendered content in the whole
+# investigation, and confirms the run-length-stored-as-length-minus-one
+# reading directly rather than by inference from byte patterns.
+#
+# Combined with the three failed flag mutations, the emerging picture is
+# that the panel's content validation cares about the length bytes summing
+# correctly per row (100 + 220 = 320, same as 160 + 160, so this edit passed)
+# rather than rejecting any deviation whatsoever -- narrower and more
+# specific than 0.5.7's "any change fails" reading. What exactly the flag
+# bytes need to satisfy remains open, since every flag-only edit tried so
+# far has failed regardless of position or direction.
+#
+# (Operationally: one restore attempt after this experiment silently didn't
+# take -- the panel kept showing the previous fallback GIF despite a clean
+# ack'd re-upload of the known-good blob -- and a second identical re-upload
+# fixed it. Possibly a read/write race if the panel was still mid-loop
+# reading the flash region it was simultaneously being written to. Not
+# investigated further; worth retrying a write before concluding a change
+# had no effect.)
 #
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded -- in particular, no confirmed model yet
 # reconciles the clean per-row run-length reading above with the persistent,
-# never-resetting flip seen in save_to_gif_3/4, or with the hardware result
-# just above. It is NOT raw RGB565 (frames are well under width*height*2
-# bytes), not zlib, not raw-deflate. No JPEG SOI marker (FFD8) appears
-# anywhere in a frame.
+# never-resetting flip seen in save_to_gif_3/4, or with the flag-mutation
+# results just above. It is NOT raw RGB565 (frames are well under
+# width*height*2 bytes), not zlib, not raw-deflate. No JPEG SOI marker
+# (FFD8) appears anywhere in a frame.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region

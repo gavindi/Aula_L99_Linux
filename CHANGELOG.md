@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-07-29
+
+**"Save to GIF" research, hardware round three: first controlled content
+change.** A fourth mutation experiment against the `save_to_gif_5` blob
+breaks the "all-or-nothing" pattern from 0.5.7 and, for the first time in
+this whole investigation, produces a predicted, position-correct change to
+what the panel actually renders.
+
+### Verified
+- Row-token 240's two length bytes changed from `(159, 159)` (a 160/160
+  pixel split) to `(99, 219)` (a 100/220 split) -- still summing to 320, the
+  panel width, with the flag bytes left untouched. Recomputed the TOC
+  `crc16_modbus` checksum and re-uploaded the same way as every prior
+  experiment.
+- The panel rendered the normal half-red/half-blue image, **not** the
+  fallback animation, with the boundary notched inward for exactly one row.
+  Confirmed by photo: the notch sits almost precisely at the panel's
+  vertical midpoint, matching row 240 of 480 exactly.
+- This directly confirms the run-length-stored-as-length-minus-one reading
+  from 0.5.5 (previously inferred from byte patterns in captures, now
+  demonstrated by controlling rendered output) and confirms the row-to-token
+  mapping is exactly 1:1 with physical panel rows.
+- Reverted afterward; confirmed restored (after one retry -- see Known gaps).
+
+### Changed
+- **Narrows 0.5.7's "any deviation fails identically" conclusion.** That
+  held for three flag-byte mutations, but this length-byte mutation passed
+  whatever validation the panel performs and rendered correctly. The
+  emerging picture: the validation cares that each row's lengths still sum
+  correctly (320 either way, here), not that the bytes are byte-for-byte
+  identical to the original upload.
+
+### Known gaps
+- What the flag bytes need to satisfy is still unknown -- every flag-only
+  edit tried so far has failed regardless of position or direction, now in
+  contrast to a succeeding length-only edit.
+- One restore attempt after this experiment silently didn't take (panel
+  kept showing the previous fallback GIF despite a clean, acked re-upload of
+  the known-good blob); an identical second re-upload fixed it. Possibly a
+  read/write race if the panel was still mid-loop reading the region being
+  overwritten. Not investigated further -- worth retrying a write before
+  concluding a change had no effect.
+- The bulk of the entropy coding is otherwise still undecoded, and this
+  round's result still isn't reconciled with `save_to_gif_3`/`4`'s
+  persistent-flip behavior.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.7] - 2026-07-29
 
 **"Save to GIF" research, hardware round two: revises 0.5.6's conclusion.**
