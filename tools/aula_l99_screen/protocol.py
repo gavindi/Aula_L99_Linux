@@ -497,6 +497,18 @@ GIF_FLASH_BASE = 0x04240000
 # row (it would merge them, or use the continuous-run encoding solid frames
 # use instead) -- so the decoder may never have been built to tolerate it.
 #
+# A seventh experiment confirmed the palette reading comprehensively: with
+# NO row data touched at all, the sub-header's two RGB565 color fields
+# ([16:18], [18:20]) were changed from red/blue (0xF800/0x001F) to
+# green/yellow (0x07E0/0xFFE0). The whole frame rendered in the new colors
+# -- not just row 240, every one of the 480 rows correctly resolved the new
+# palette -- confirming the color-index mechanism is a real, uniformly
+# applied per-frame palette, not something specific to one row or
+# hardcoded elsewhere. (Incidentally this also made obvious that the
+# 2-frame animation had been alternating with frame 1, unmodified solid
+# red, all along -- easy to miss when frame 1's red and frame 2's red-left
+# half looked similar, obvious once frame 2 turned green/yellow.)
+#
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded -- in particular, still no confirmed model
 # reconciling any of this with save_to_gif_3/4's persistent, never-

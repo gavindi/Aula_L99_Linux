@@ -191,6 +191,18 @@ emitting two consecutive same-colored runs in one row (it would merge them,
 or use the continuous-run encoding solid frames use instead) — so the
 decoder may never have been built to tolerate it.
 
+A seventh experiment confirmed the palette reading comprehensively: with
+**no row data touched at all**, the sub-header's two RGB565 color fields
+were changed from red/blue (`0xF800`/`0x001F`) to green/yellow
+(`0x07E0`/`0xFFE0`). The whole frame rendered in the new colors — not just
+row 240, every one of the 480 rows correctly resolved the new palette.
+Confirms the color-index mechanism is a real, uniformly applied per-frame
+palette, not something specific to one row or hardcoded elsewhere.
+(Incidentally, this also made obvious the 2-frame animation had been
+alternating with frame 1 — unmodified solid red — the whole time; easy to
+miss when frame 1's red and frame 2's red-left half looked similar, obvious
+once frame 2 turned green/yellow.)
+
 Still open: reconciling any of this with `save_to_gif_3`/`4`'s persistent,
 never-resetting flip, and why solid-color frames look completely different
 at the byte level (`FF 00` repeated ~600 times, no per-row pairing at all)

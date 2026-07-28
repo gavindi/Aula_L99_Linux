@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-07-29
+
+**"Save to GIF" research, hardware round six: palette confirmed
+frame-wide.** One more experiment against `save_to_gif_5`, recoloring the
+whole frame via its sub-header instead of touching any row data, confirms
+0.5.10's color-index finding applies uniformly, not just to the one row
+tested so far.
+
+### Verified
+- Sub-header's two RGB565 color fields changed from red/blue
+  (`0xF800`/`0x001F`) to green/yellow (`0x07E0`/`0xFFE0`), with **no row
+  data touched at all**. TOC `crc16_modbus` recomputed and re-uploaded the
+  same way as every prior experiment.
+- The entire frame rendered in the new colors -- not just row 240, all 480
+  rows correctly resolved the new palette. Confirms the color-index
+  mechanism from 0.5.10 is a real, uniformly applied per-frame palette
+  read by every row, not something specific to the one row tested so far
+  or hardcoded elsewhere.
+- Incidentally clarified an earlier observation: the 2-frame animation has
+  been alternating with frame 1 (unmodified solid red) throughout every
+  experiment in this round -- easy to miss when frame 1's red and frame
+  2's red-left half looked similar, obvious once frame 2 turned
+  green/yellow and produced a visible "flash" between frames.
+- Reverted afterward; confirmed restored.
+
+### Known gaps
+- Still open: reconciling the row-token/palette model with
+  `save_to_gif_3`/`4`'s persistent, never-resetting flip, and why
+  solid-color frames look completely different at the byte level (`FF 00`
+  repeated ~600 times, no per-row pairing at all) rather than using this
+  same row-token grammar.
+- The bulk of the entropy coding is otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.10] - 2026-07-29
 
 **"Save to GIF" research, hardware round five: flag byte confirmed as a
