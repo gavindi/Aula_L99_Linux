@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-28
+
+### Added
+- `--color RRGGBB` sets every key's colour (opcode `0x23`).
+- `--gap` to tune the inter-packet delay.
+- RTC-set on the wired path, which previously refused to run.
+- Confirmed key-id table: 84 keys, ids `0x00`–`0x7F`, row = high nibble and
+  column = low nibble.
+
+### Changed
+- `protocol.py` now describes the wired `0C45:800A` path from a capture of the
+  vendor app rather than from AULA F75 MAX prior art. Every builder was checked
+  to reproduce the vendor's own packets byte-for-byte.
+- Corrected: `0x28` is the RTC-set command, not session-prepare as previously
+  assumed, and `0x02` is a commit that returns a 16-bit value, not a session
+  finalizer. The cable path has no checksum byte; the 32-byte packet size and
+  trailing checksum apply only to the (still untested) dongle path.
+- The 64-byte RTC payload puts `AA 55` at bytes 62–63, not adjacent to the date
+  as in the 32-byte F75 format.
+- Dongle-path constants and builders are kept but marked as unverified guesses.
+
+### Fixed
+- Packets are no longer issued back-to-back: with no gap, the second data block
+  of a transfer fails with `ETIMEDOUT` and replies are read before the device
+  sets its ack bit.
+- hidraw transfers now carry the required leading `0x00` report-id byte on the
+  dongle path too; the device declares no Report ID item.
+- `--handshake` no longer commits an empty session, which the device rejects
+  with `0xFF` in the ack byte.
+- `--send-hex` rejects over-length packets instead of silently sending them.
+
+### Known gaps
+- Effect selection, brightness and macros are still unknown. Effects run on the
+  keyboard itself: the vendor app polls `0xF5` ~27x/s only to mirror the
+  keyboard's current LED state in its preview.
+- Opcodes `0x13` and `0x00`, and the meaning of the 16-bit value returned by
+  the commit, are unidentified.
+- Nothing on the dongle path has been tested against hardware.
+
 ## [0.1.0] - 2026-07-28
 
 ### Added
