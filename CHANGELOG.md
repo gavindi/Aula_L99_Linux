@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-29
+
+**"Save to GIF" research notes.** No new command — the payload format isn't
+understood well enough yet to safely construct one — but the flash address
+and container header layout are now documented from a new capture.
+
+### Verified
+- `wireshark_dumps/save_to_gif_1.pcapng` reuses the exact same `5a a5`
+  framing/CRC-init machinery as the photo-frame/background paths (157
+  write/commit packets), at flash base `0x04240000` — this resolves half of
+  0.5.0's "Known gaps" entry about the vendor binary's undocumented
+  `0x4200000`/`0x4240000` slots. `0x04200000` is still unidentified.
+- One difference from the other two paths: the final short data chunk uses
+  `cmd 0x71` where they use `0x12`. Meaning unconfirmed.
+- The blob written there is a small table-of-contents header — 20 bytes per
+  frame (3 frames captured, well under the vendor's own
+  `gif_maxframes="200"`/`gif_headlength="256"` in `layouts/rgb-keyboard.xml`)
+  — giving each frame's absolute byte offset, `320x480` dimensions, frame
+  count, a likely delay field, and a likely-but-unverified checksum. Full
+  field breakdown is in `protocol.py` above `GIF_FLASH_BASE`.
+- Each frame's own payload is **not raw RGB565**: roughly a third smaller
+  than a full `320x480` RGB565 frame, not zlib/deflate, with a byte
+  distribution that looks like a run-length or delta-coded scheme rather than
+  pixels.
+
+### Known gaps
+- The per-frame pixel encoding is undecoded. Unlike the photo-frame CRC
+  inits, which were solved from two independent captures, only one GIF
+  capture exists, so there's no second sample to check a hypothesis against.
+  Progress needs more targeted captures — e.g. a solid-color 1-frame GIF and
+  a 2-frame GIF differing by one pixel.
+- The `cmd 0x71` final-chunk opcode's meaning is unknown.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.0] - 2026-07-29
 
 **"Save to BKG" (background image) support.** The vendor app's `--upload`

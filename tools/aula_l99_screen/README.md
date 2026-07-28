@@ -44,9 +44,35 @@ protocol and image format below — only the flash base address differs:
 | `background`  | `0x04180000` | confirmed on hardware  |
 
 `--address` overrides `--target` if you want to experiment with other
-locations (e.g. the still-undocumented `0x4200000`/`0x4240000` slots the
-vendor binary references). "Save to GIF" (animated frames) is a separate,
-uncaptured protocol and is not implemented.
+locations. `0x04240000` is "Save to GIF"'s address (see below); one more slot
+the vendor binary references, `0x04200000`, is still unidentified.
+
+### Save to GIF (unimplemented)
+
+`0x04240000` is confirmed as the "Save to GIF" flash address, from
+`wireshark_dumps/save_to_gif_1.pcapng` — but there is no `--target gif`,
+because the payload format isn't understood well enough to safely construct
+one. What's known:
+
+- Same wire protocol/framing as the two targets above (same magic, write/
+  commit/CRC-init machinery), except the final short data chunk uses `cmd
+  0x71` instead of `0x12` — meaning unconfirmed.
+- The blob is a small table-of-contents header (20 bytes per frame: byte
+  offset, total payload size, `320x480` dimensions, frame count, a likely
+  delay field, and a likely-but-unverified checksum) followed by the frames'
+  data. See the comment block above `GIF_FLASH_BASE` in `protocol.py` for the
+  full field-by-field breakdown.
+- **Each frame's pixel data is not raw RGB565.** It's roughly a third smaller
+  than a full `320x480` RGB565 frame, isn't zlib/deflate, and its byte
+  distribution looks like a run-length or delta-coded scheme, not pixels.
+  Undecoded.
+
+Only one capture exists for this format, so — unlike the CRC inits below,
+which were solved from two independent samples — there's no second data
+point to cross-check a hypothesis against. Making progress here needs more
+targeted captures: e.g. a single solid-color 1-frame GIF (to see the
+degenerate case) and a 2-frame GIF differing by one pixel (to isolate how a
+run or diff is expressed).
 
 ## Image format
 

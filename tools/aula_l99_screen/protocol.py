@@ -132,20 +132,63 @@ CONST_COMMIT = 0x66
 # upstream captures; a single init does not fit all three.
 CRC_INIT = {CMD_WRITE: 0xF104, CMD_COMMIT: 0xEEC4, CMD_FINAL: 0xD141}
 
+# wireshark_dumps/save_to_gif_1.pcapng's final short data chunk uses cmd
+# 0x71, not CMD_FINAL (0x12), for otherwise identical const/framing. Meaning
+# unconfirmed (only one capture, no second sample to cross-check); not used
+# by build_upload(), which only ever emits CMD_FINAL.
+
 CHUNK_SIZE = 2048
 REGION_SIZE = 0x20000          # 128 KiB; a commit follows each filled region
 
-# The vendor app has (at least) three distinct upload destinations, per its
-# own string table (Windows/AULA L99/language/1033.lan #866-868): "Save to
-# GIF", "Save to BKG" and "Save to photo frame". Only these two have been
-# captured; both use the exact same wire protocol and image format as each
-# other, differing only in flash base address.
+# The vendor app has three distinct upload destinations, per its own string
+# table (Windows/AULA L99/language/1033.lan #866-868): "Save to GIF", "Save
+# to BKG" and "Save to photo frame". The first two reuse this exact wire
+# protocol and image format, differing only in flash base address.
 PHOTO_FRAME_FLASH_BASE = 0x041E0000    # "Save to photo frame"
 BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
                                         # wireshark_dumps/save_to_bkg_1/2.pcapng:
                                         # both captures' 154 write/commit
                                         # packets are reproduced byte-for-byte
                                         # by build_packet() at this address.
+
+# "Save to GIF", confirmed from wireshark_dumps/save_to_gif_1.pcapng: its 157
+# write/commit packets are also reproduced byte-for-byte by build_packet() at
+# this address (resolving one of the two undocumented slots the vendor binary
+# references -- 0x04200000 remains unidentified). Address only: there is no
+# builder for this format. The bytes written there are NOT build_image_file()
+# output -- see the GIF container notes below.
+GIF_FLASH_BASE = 0x04240000
+
+# GIF container format (from the single save_to_gif_1.pcapng capture --
+# NOT cross-checked against a second sample, unlike the CRC inits above).
+# The blob written to GIF_FLASH_BASE is a header of N * 20-byte entries (one
+# per frame; N=3 in the capture, comfortably under the vendor's own
+# gif_maxframes="200" and gif_headlength="256" in layouts/rgb-keyboard.xml),
+# followed by the frames' payload data. Per-entry layout, little-endian:
+#
+#     [0:4]   uint32   this frame's absolute byte offset into the blob
+#                       (confirmed against the actual write-chunk addresses)
+#     [4:8]   uint32   total payload size after the header (same value
+#                       repeated in every entry, not truly per-frame)
+#     [8:10]  uint16   width (320 in the capture)
+#     [10:12] uint16   height (480 in the capture)
+#     [12]    u8       frame count (3)
+#     [13]    u8       unidentified (also 3 -- coincidence or real field is
+#                       unclear from one sample)
+#     [14:16] u16      0x0000, unidentified/reserved
+#     [16:18] u16      50 -- plausibly a delay, unit unconfirmed (likely
+#                       centiseconds, matching GIF's own convention)
+#     [18:20] u16      0xdb63, identical in every entry -- plausibly a
+#                       checksum over the whole post-header payload
+#                       (parallel to crc16_modbus() below) but unverified
+#
+# Each frame's own payload is NOT raw RGB565: at 101548-106996 bytes it's
+# well under 320*480*2 = 307200, its byte histogram is heavily skewed toward
+# small values (0x00 dominates, then 1-4, 28, 30), and it is neither zlib nor
+# raw-deflate. Some custom compressed or delta-coded scheme -- not decoded.
+# Cracking it needs targeted follow-up captures (e.g. a solid-color 1-frame
+# GIF, then a 2-frame GIF differing by one pixel) that aren't available yet.
+
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region
 # just written -- so it is image-dependent and must not be compared literally.
