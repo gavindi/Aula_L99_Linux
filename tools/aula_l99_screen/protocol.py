@@ -137,17 +137,18 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 5 independent samples across 3 capture files:
+    byte. Confirmed against 6 independent samples across 4 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
-    chunk (11 bytes -> cmd=0x12=CMD_FINAL), and both wireshark_dumps/
-    save_to_gif_1/2.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes ->
-    0x35 -- both predicted exactly by this formula before being checked).
+    chunk (11 bytes -> cmd=0x12=CMD_FINAL), and all three wireshark_dumps/
+    save_to_gif_1/2/3.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes ->
+    0x35, 1450 bytes -> 0xB1 -- all three predicted exactly by this formula
+    before being checked).
 
     This only gives you the cmd byte. There is no known general formula for
     the matching CRC_INIT entry (two hypotheses -- init as a function of just
     this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 5 known (cmd, init) pairs and neither held), so calling this
+    against all 6 known (cmd, init) pairs and neither held), so calling this
     with a payload length outside CRC_INIT will raise in crc16_packet().
     """
     return (CMD_WRITE + payload_len) % 256
@@ -156,16 +157,17 @@ def final_chunk_cmd(payload_len: int) -> int:
 # Each command uses its own CRC init; see final_chunk_cmd() above for why
 # CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
 # opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35 are solved for exactly the two lengths they were
-# observed at (wireshark_dumps/save_to_gif_1.pcapng's 1386-byte final chunk,
-# save_to_gif_2.pcapng's 1582-byte one) -- not a general result, since no
-# formula for CRC_INIT vs. length was found (see final_chunk_cmd()).
+# captures. 0x71/0x35/0xB1 are solved for exactly the three lengths they were
+# observed at (wireshark_dumps/save_to_gif_1/2/3.pcapng's final chunks) -- not
+# a general result, since no formula for CRC_INIT vs. length was found (see
+# final_chunk_cmd()).
 CRC_INIT = {
     CMD_WRITE: 0xF104,
     CMD_COMMIT: 0xEEC4,
     CMD_FINAL: 0xD141,
     0x71: 0x1CB0,   # save_to_gif_1.pcapng final chunk (1386-byte payload)
     0x35: 0xD9F1,   # save_to_gif_2.pcapng final chunk (1582-byte payload)
+    0xB1: 0x9F4E,   # save_to_gif_3.pcapng final chunk (1450-byte payload)
 }
 
 CHUNK_SIZE = 2048
@@ -182,75 +184,115 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
                                         # packets are reproduced byte-for-byte
                                         # by build_packet() at this address.
 
-# "Save to GIF", confirmed from wireshark_dumps/save_to_gif_1.pcapng AND
-# save_to_gif_2.pcapng independently: both captures' write/commit packets are
-# reproduced byte-for-byte by build_packet() at this address (resolving one
-# of the two undocumented slots the vendor binary references --
-# 0x04200000 remains unidentified). Address only: there is no builder for
+# "Save to GIF", confirmed from three independent captures --
+# wireshark_dumps/save_to_gif_1/2/3.pcapng: every capture's write/commit
+# packets are reproduced byte-for-byte by build_packet() at this address
+# (resolving one of the two undocumented slots the vendor binary references
+# -- 0x04200000 remains unidentified). Address only: there is no builder for
 # this format. The bytes written there are NOT build_image_file() output --
 # see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
 
-# GIF container format, from two captures: save_to_gif_1.pcapng (a real
-# multi-frame photo GIF) and save_to_gif_2.pcapng (a deliberately simple
-# 3-frame solid red/green/blue test GIF, captured specifically to make
-# further progress here -- it did). The blob written to GIF_FLASH_BASE is a
-# header of N * 20-byte entries (one per frame; N=3 in both captures,
+# GIF container format, from three captures: save_to_gif_1.pcapng (a real
+# multi-frame photo GIF), save_to_gif_2.pcapng (a 3-frame solid
+# red/green/blue test GIF), and save_to_gif_3.pcapng (a 2-frame test GIF,
+# both frames solid red except one white pixel at (0,0) in frame 2) -- the
+# last two captured specifically to make further progress here, which they
+# did. The blob written to GIF_FLASH_BASE is a header of N * 20-byte entries
+# (one per frame; N=3, 3 and 2 respectively across the three captures,
 # comfortably under the vendor's own gif_maxframes="200" and
 # gif_headlength="256" in layouts/rgb-keyboard.xml), followed by the frames'
 # payload data. Per-entry layout, little-endian:
 #
 #     [0:4]   uint32   this frame's absolute byte offset into the blob
 #                       (confirmed against the actual write-chunk addresses,
-#                       in both captures)
+#                       in all three captures)
 #     [4:8]   uint32   total payload size after the header (same value
 #                       repeated in every entry, not truly per-frame;
-#                       confirmed in both captures)
-#     [8:10]  uint16   width (320 in both captures)
-#     [10:12] uint16   height (480 in both captures)
-#     [12]    u8       frame count (3 in both captures)
-#     [13]    u8       unidentified (also 3 in both captures -- coincidence
-#                       or real field is still unclear)
+#                       confirmed in all three captures)
+#     [8:10]  uint16   width (320 in all three captures)
+#     [10:12] uint16   height (480 in all three captures)
+#     [12]    u8       SOLVED: a constant format/version tag, not frame
+#                       count -- it's 3 in all three captures even though
+#                       save_to_gif_3.pcapng only has 2 frames, which is what
+#                       separated it from [13] below
+#     [13]    u8       SOLVED: actual frame count -- 3, 3 and 2, matching
+#                       each capture exactly (save_to_gif_3.pcapng is what
+#                       distinguished this from [12], which stayed 3)
 #     [14:16] u16      0x0000, unidentified/reserved
-#     [16:18] u16      50 in both captures -- plausibly a delay, unit
+#     [16:18] u16      50 in all three captures -- plausibly a delay, unit
 #                       unconfirmed (likely centiseconds, matching GIF's own
-#                       convention); both test animations may just share the
-#                       vendor UI's default
+#                       convention); all three test/photo animations may just
+#                       share the vendor UI's default
 #     [18:20] u16      SOLVED: crc16_modbus() -- the same CRC16/MODBUS
 #                       function already used for the single-image header
 #                       above -- computed over the payload following this
 #                       header. Verified byte-exact in save_to_gif_2.pcapng
-#                       (0x3c73 both ways). Identical in every entry within
-#                       one capture (it's a whole-payload field, not truly
-#                       per-frame) but differs between the two captures, as
+#                       and save_to_gif_3.pcapng. Identical in every entry
+#                       within one capture (it's a whole-payload field, not
+#                       truly per-frame) but differs between captures, as
 #                       expected for a real checksum.
 #
-# Each frame has its own 20-ish-byte sub-header (offsets relative to the
-# frame's own start, i.e. blob[frame_offset:]), decoded by diffing
-# save_to_gif_2's three solid-color frames -- two of which are byte-identical
-# for ~8800 bytes except one small window, which is what pinned these down:
+# Each frame has its own ~24-byte sub-header (offsets relative to the frame's
+# own start, i.e. blob[frame_offset:]), decoded by diffing frames that are
+# otherwise identical -- save_to_gif_2's three solid-color frames (identical
+# for ~8800 bytes except one small window), and save_to_gif_3's two
+# single-pixel-different frames (identical except ~605 bytes, almost all
+# following one clean pattern -- see below):
 #
 #     [8:12]  uint32   this frame's own byte length, self-referential --
-#                       confirmed exact for all 6 frames across both captures
-#     [18:20] uint16   the frame's dominant/fill color, RGB565: confirmed
-#                       exactly 0xF800 (pure red), 0x001F (pure blue), 0x07E0
-#                       (pure green) for save_to_gif_2's three test frames
-#     [20:22] uint16   a close-but-different variant of the same color
-#                       (0xC800, 0x0019, 0x07E6 respectively) -- purpose
-#                       unidentified
+#                       confirmed exact for all 8 frames across all three
+#                       captures
+#     [12:14] u16      the byte length of a variable-length section at the
+#                       end of the frame (see "fixed prefix" below):
+#                       size32 - this field is exactly 528 for all 5 frames
+#                       across save_to_gif_2/3 (the "simple" captures);
+#                       doesn't hold for save_to_gif_1's real-photo frames,
+#                       which also differ at [14:16] below -- so this looks
+#                       mode-dependent, not a universal constant
+#     [14:16] u16      0x0100 in save_to_gif_2/3, 0x0101 in save_to_gif_1 --
+#                       plausibly a mode/complexity flag distinguishing
+#                       "flat" test content from a real photo's, unconfirmed
+#     [16:20] --       a pair of RGB565-looking uint16 fields whose exact
+#                       byte offset isn't pinned down (16:18 in
+#                       save_to_gif_3, 18:20 in save_to_gif_2 -- see "Known
+#                       gaps" for why). Values line up with real colors: for
+#                       a single-color frame, one slot holds that color
+#                       (0xF800 red, 0x001F blue, 0x07E0 green in
+#                       save_to_gif_2); for save_to_gif_3's frame 2 (solid
+#                       red + one white pixel), the two slots hold 0xFFFF
+#                       (white, the differing pixel's color) and 0xF800 (red,
+#                       the background) respectively -- consistent with
+#                       "color of the first pixel" / "color of everything
+#                       else," but not confirmed as a general rule.
+#
+# The "fixed prefix" hypothesis: every frame in save_to_gif_2/3 has exactly
+# 528 bytes of zero immediately after its sub-header, byte-identical
+# regardless of the frame's color -- consistent with a fixed table (Huffman
+# or quantization-style, as in JPEG) that doesn't depend on image content,
+# followed by a variable-length entropy-coded section (the [12:14] bytes
+# above) that does. Not confirmed, but the exact-528 match across 5
+# differently-colored frames from 2 separate captures is a strong signal.
+#
+# The single-pixel diff in save_to_gif_3 (frame 2 has one white pixel at
+# (0,0), everything else red) shows up as a precise, repeatable pattern:
+# frame 1 and frame 2 diverge at byte 528 (the byte right after the fixed
+# prefix: 0xFF in frame 1, 0x00 in frame 2), and from there on every
+# following occurrence of a recurring "0xFF 0x00" 2-byte token in frame 1
+# becomes "0xFF 0x01" in frame 2 -- the second byte flips once, at the very
+# first token, and never flips back for the rest of the frame. That the
+# change starts in the very first token (immediately after the fixed prefix)
+# matches (0,0) being the first pixel in raster-scan order. Reads as some
+# kind of running state or context that a "differs from prediction" event
+# permanently perturbs -- consistent with the transform/DCT-style coding
+# hypothesis (a DC predictor context that never resets mid-frame) -- but the
+# actual bitstream algorithm is not decoded.
 #
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded. It is NOT raw RGB565 (frames are well under
 # width*height*2 bytes), not zlib, not raw-deflate, and its byte histogram is
-# heavily skewed toward small values (0x00 dominates, then 1-4, 28, 30) --
-# consistent with some compressed or delta-coded scheme, not raw pixels. No
-# JPEG SOI marker (FFD8) appears anywhere in a frame. The strongest clue so
-# far: two different solid-color frames in save_to_gif_2 are byte-identical
-# for thousands of bytes except that one 4-byte window carrying the color --
-# suggestive of a transform/DCT-style coding where a flat image produces a
-# near-constant coefficient stream that differs mainly in a DC/base-color
-# term, rather than of simple run-length encoding, but this is a hypothesis,
-# not a confirmed finding.
+# heavily skewed toward small values (0x00 dominates, then 1-4, 28, 30). No
+# JPEG SOI marker (FFD8) appears anywhere in a frame.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region

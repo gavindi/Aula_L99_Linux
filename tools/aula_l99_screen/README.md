@@ -50,41 +50,56 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from two captures, `wireshark_dumps/save_to_gif_1.pcapng` (a real photo GIF)
-and `save_to_gif_2.pcapng` (a 3-frame solid red/green/blue test GIF captured
-specifically to make further progress, which it did) — but there is still no
-`--target gif`, because the pixel payload format isn't understood well enough
-to safely construct one. What's known:
+from three captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames), and
+`save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
+`(0,0)` in frame 2) — the last two captured specifically to make further
+progress, which they did. There is still no `--target gif`, because the
+pixel payload format isn't understood well enough to safely construct one.
+What's known:
 
 - Same wire protocol/framing as the two targets above. The final short data
-  chunk's `cmd` byte, previously a mystery (`0x71` in the first capture), is
-  now solved: `cmd = CMD_WRITE + (payload_len % 256)`, not a fixed opcode —
-  confirmed exactly against both GIF captures' final chunks (`0x71` and
-  `0x35`) plus the three previously-known values. There's no known general
-  formula for the matching CRC init, though, so this doesn't unlock arbitrary
-  upload sizes — see `final_chunk_cmd()` in `protocol.py`.
+  chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
+  (payload_len % 256)`, not a fixed opcode — confirmed exactly against all
+  three GIF captures' final chunks (`0x71`, `0x35`, `0xB1`) plus the three
+  previously-known values. There's no known general formula for the matching
+  CRC init, though, so this doesn't unlock arbitrary upload sizes — see
+  `final_chunk_cmd()` in `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame: byte
-  offset, total payload size, `320x480` dimensions, frame count, a likely
-  delay field). Its per-entry checksum field is now **solved**: it's
-  `crc16_modbus()` — the same function already used for the single-image
-  header — over the payload following the header, confirmed byte-exact.
-- Each frame also has its own sub-header. Two fields are confirmed: the
-  frame's own byte length (self-referential, exact in all 6 frames across
-  both captures), and — from diffing the second capture's three solid-color
-  frames — the frame's dominant/fill color in RGB565 (exactly pure red/
-  blue/green for the three test frames). See the comment block above
-  `GIF_FLASH_BASE` in `protocol.py` for the full field-by-field breakdown.
-- **Each frame's pixel data is still not decoded.** It's not raw RGB565, not
-  zlib/deflate, and has no JPEG SOI marker. The strongest clue: two
-  differently-colored solid frames in the second capture are byte-identical
-  for thousands of bytes except one small window carrying the color —
-  suggestive of transform/DCT-style coding rather than simple run-length
-  encoding, but unconfirmed.
+  offset, total payload size, `320x480` dimensions, a format tag, frame
+  count, a likely delay field). Its per-entry checksum field is **solved**:
+  it's `crc16_modbus()` — the same function already used for the
+  single-image header — over the payload following the header, confirmed
+  byte-exact in two of the three captures. The third capture also resolved
+  an ambiguity from the first two: byte 12 is a constant format/version tag
+  (always 3), and byte 13 is the real frame count (3, 3, then 2) — the first
+  two captures happened to have the same value in both bytes.
+- Each frame also has its own ~24-byte sub-header. Confirmed: the frame's own
+  byte length (self-referential, exact in all 8 frames across all three
+  captures), and a pair of RGB565-looking color fields whose exact byte
+  offset isn't pinned down yet but whose values track real colors (a solid
+  frame's fill color; for the single-pixel-diff frame, one slot held the
+  diff pixel's white and the other the red background).
+- **The strongest new lead**: every frame in the second and third captures
+  has exactly **528 bytes of zero** right after its sub-header, regardless of
+  color — consistent with a fixed table (Huffman/quantization-style, as in
+  JPEG) that doesn't depend on content, followed by a variable-length
+  entropy-coded section. And the single-pixel diff between
+  `save_to_gif_3`'s two frames shows up as a precise, repeatable signature:
+  a recurring 2-byte token flips its second byte from `0x00` to `0x01`
+  starting at the very first token after that 528-byte prefix (consistent
+  with `(0,0)` being the first pixel in raster order) and never flips back.
+  Reads like a running prediction context that a "differs from expectation"
+  event permanently perturbs — support for the transform/DCT-style coding
+  hypothesis, but the actual bitstream algorithm is still not decoded. Full
+  detail in the comment block above `GIF_FLASH_BASE` in `protocol.py`.
 
-Making further progress needs more targeted captures — e.g. a 2-frame GIF
-differing by one pixel, to isolate how a delta or coefficient is expressed —
-the same way the solid-color capture above already resolved the checksum and
-color-field questions.
+Making further progress likely needs a capture that moves the differing
+pixel to a different position (to map how position affects where in the
+byte stream the change appears, and to test whether the fixed-528-byte
+boundary is really fixed or scales with something), the same way this round
+resolved the checksum, the format-tag/frame-count ambiguity, and roughly
+where the entropy-coded section begins.
 
 ## Image format
 

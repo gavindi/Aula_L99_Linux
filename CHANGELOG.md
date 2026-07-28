@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-07-29
+
+**"Save to GIF" research notes, round three.** A third capture
+(`wireshark_dumps/save_to_gif_3.pcapng`: two frames, both solid red except
+one white pixel at `(0,0)` in frame 2) resolves the TOC's frame-count
+ambiguity, adds a sixth confirmed `cmd`/CRC-init data point, and — the main
+result — locates a fixed ~528-byte per-frame prefix and pins down exactly
+how a single-pixel difference between two otherwise-identical frames shows
+up in the byte stream. Still no new command; the entropy-coded pixel data
+itself remains undecoded.
+
+### Verified
+- `0x04240000` re-confirmed a third, independent time.
+- Sixth `cmd`/`CRC_INIT` data point: a 1450-byte final chunk predicted
+  `cmd=0xB1` by `final_chunk_cmd()` before checking, confirmed exact; its
+  CRC init (`0x9F4E`) was solved and added to `CRC_INIT`. Still no general
+  formula relating `CRC_INIT` to length, now checked against 6 points.
+- **TOC frame-count ambiguity resolved.** 0.5.1/0.5.2 couldn't tell whether
+  TOC-entry byte 12 or byte 13 was the real frame count, since both captures
+  used 3-frame animations and both bytes read `3`. This capture uses 2
+  frames: byte 12 stayed `3` (a constant format/version tag) and byte 13
+  read `2` (the real frame count).
+- `crc16_modbus()` over the post-header payload re-confirmed as the TOC's
+  per-entry checksum field, byte-exact a second time.
+- **Located a fixed ~528-byte per-frame prefix.** Every frame in both the
+  second and third captures (5 frames total, 3 different solid colors plus
+  the one-pixel-diff pair) has exactly 528 zero bytes right after its
+  sub-header, regardless of color — strong evidence of a fixed table (as in
+  JPEG's Huffman/quantization tables) independent of image content, with a
+  variable-length entropy-coded section following it (whose length is a
+  sub-header field, self-consistent with the frame's total size across all
+  5 frames).
+- **Located the single-pixel-diff signature.** The two frames differ at
+  byte 528 itself (`0xFF`→`0x00`) and then, from the very first token after
+  that boundary onward, a recurring 2-byte token's second byte is `0x00` in
+  frame 1 and `0x01` in frame 2 for the rest of the frame — one flip, never
+  reset. The change starting in the first post-prefix token matches `(0,0)`
+  being first in raster-scan order. Reads as a running prediction context
+  permanently perturbed by a "differs from expectation" event, consistent
+  with (but not proof of) the transform/DCT-style coding hypothesis from
+  0.5.2.
+
+### Known gaps
+- The entropy-coded pixel section itself is still not decoded — this
+  capture shows *that* one pixel differing perturbs a running context, not
+  *how* to construct that context or the tokens themselves.
+- The RGB565-looking color-field pair's exact byte offset isn't consistent
+  between captures 2 and 3, so its precise layout is still unclear even
+  though the values themselves clearly track real colors.
+- Next useful capture: the differing pixel at a different position, to map
+  how position affects where in the byte stream the change appears and
+  whether the 528-byte boundary is truly fixed or scales with something.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.2] - 2026-07-29
 
 **"Save to GIF" research notes, round two.** A second, deliberately simple
