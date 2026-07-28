@@ -4,6 +4,7 @@ Usage:
     python3 -m aula_l99_hacky.cli --list
     python3 -m aula_l99_hacky.cli --handshake
     python3 -m aula_l99_hacky.cli --color 0000FF
+    python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
     python3 -m aula_l99_hacky.cli --rtc
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
 
@@ -66,22 +67,43 @@ def _run_dongle(transport: HidrawTransport, tx: protocol.Transaction, debug: boo
     return reply
 
 
+def _acked(tx: protocol.Transaction, reply: bytes) -> bool:
+    return (reply[0] == protocol.CMD_PREFIX
+            and reply[1] == tx.outgoing[1]
+            and bool(reply[protocol.ACK_OFFSET] & protocol.ACK_FLAG))
+
+
 def _run_sequence(device, transactions, args) -> int:
-    """Run a cable-path transaction list, checking each reply echoes its opcode."""
+    """Run a cable-path transaction list, checking each reply acks its opcode."""
     failures = 0
     with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
         for tx in transactions:
-            reply = _run_cable(transport, tx, args.debug, args.gap)
+            attempts = protocol.SESSION_OPEN_RETRIES if tx.retry_until_ack else 1
+            reply = None
+            for attempt in range(1, attempts + 1):
+                try:
+                    reply = _run_cable(transport, tx, args.debug, args.gap)
+                except OSError as exc:
+                    # The keyboard is busy (an effect is running); it recovers.
+                    if attempt == attempts:
+                        raise
+                    if args.debug:
+                        print(f"{tx.name}: attempt {attempt} failed ({exc.strerror}), retrying")
+                    time.sleep(protocol.RETRY_DELAY_SECONDS)
+                    continue
+                if reply is None or _acked(tx, reply):
+                    break
+                if attempt < attempts:
+                    if args.debug:
+                        print(f"{tx.name}: attempt {attempt} not acked "
+                              f"({reply[:4].hex()}), retrying")
+                    time.sleep(protocol.RETRY_DELAY_SECONDS)
+
             if reply is None:
                 continue
-            sent, got = tx.outgoing, reply
-            if got[0] != protocol.CMD_PREFIX or got[1] != sent[1]:
-                print(f"{tx.name}: WARNING expected an echo of opcode "
-                      f"0x{sent[1]:02x}, got {got[:4].hex()}", file=sys.stderr)
-                failures += 1
-            elif not got[protocol.ACK_OFFSET] & protocol.ACK_FLAG:
-                print(f"{tx.name}: WARNING device did not ack "
-                      f"(reply {got[:4].hex()})", file=sys.stderr)
+            if not _acked(tx, reply):
+                print(f"{tx.name}: WARNING no ack for opcode "
+                      f"0x{tx.outgoing[1]:02x}, got {reply[:4].hex()}", file=sys.stderr)
                 failures += 1
     return failures
 
@@ -122,6 +144,27 @@ def cmd_color(args: argparse.Namespace) -> int:
           f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
 
     transactions = protocol.build_color_transfer(protocol.build_uniform_colors(rgb))
+    return 1 if _run_sequence(device, transactions, args) else 0
+
+
+def cmd_effect(args: argparse.Namespace) -> int:
+    device = find_l99()
+    if not _require_cable(device, "selecting effects"):
+        return 1
+
+    try:
+        effect_id = int(args.effect, 0)
+        rgb = protocol.parse_rgb(args.color) if args.color else (0xFF, 0x00, 0x00)
+        blocks_args = dict(rgb=rgb, speed=args.speed, brightness=args.brightness)
+        transactions = protocol.build_effect_transfer(effect_id, **blocks_args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    name = protocol.EFFECT_NAMES.get(effect_id, "unknown")
+    print(f"using {device.path}; effect 0x{effect_id:02X} ({name}) "
+          f"colour #{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X} "
+          f"speed {args.speed} brightness {args.brightness}")
     return 1 if _run_sequence(device, transactions, args) else 0
 
 
@@ -180,6 +223,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="list hidraw devices and exit")
     parser.add_argument("--handshake", action="store_true", help="open and close a session")
     parser.add_argument("--color", metavar="RRGGBB", help="set every key to one colour")
+    parser.add_argument("--effect", metavar="ID",
+                        help="select a built-in effect by id, e.g. 0x05 (see --list-effects)")
+    parser.add_argument("--list-effects", action="store_true",
+                        help="show the known effect ids and exit")
+    parser.add_argument("--speed", type=int, default=protocol.EFFECT_SPEED_DEFAULT,
+                        help="effect speed %(default)s (1=slowest, 5=fastest)")
+    parser.add_argument("--brightness", type=int, default=protocol.EFFECT_BRIGHTNESS_MAX,
+                        help="effect brightness (1..5, default %(default)s)")
     parser.add_argument("--rtc", action="store_true", help="set the keyboard's clock")
     parser.add_argument("--send-hex", metavar="HEX", help="send one raw packet and print the reply")
     parser.add_argument("--timeout", type=float, default=1.0, help="reply read timeout in seconds")
@@ -198,8 +249,17 @@ def main() -> int:
         if args.list:
             _print_devices()
             return 0
+        if args.list_effects:
+            for eid, ename in sorted(protocol.EFFECT_NAMES.items()):
+                mark = "confirmed" if eid in protocol.EFFECT_CONFIRMED else "untested"
+                print(f"  0x{eid:02X}  {ename:<18} {mark}")
+            print("\nIds are the 1-based position in the vendor app's effect list.")
+            return 0
         if args.handshake:
             return cmd_handshake(args)
+        # --effect first: --color doubles as the effect's colour parameter.
+        if args.effect:
+            return cmd_effect(args)
         if args.color:
             return cmd_color(args)
         if args.rtc:

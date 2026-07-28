@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-28
+
+### Added
+- `--effect ID` selects one of the keyboard's built-in preset effects (opcode
+  `0x13`), with `--color`, `--speed` (1–5) and `--brightness`. The effect runs
+  on the keyboard; the host only selects it and its parameters.
+- `--list-effects` lists all 20 preset ids and flags which are confirmed by
+  capture rather than inferred.
+- Effect payload layout: `[0]` effect id, `[1..3]` R G B, `[8]` a mode flag,
+  `[9]` brightness, `[10]` speed `1..5`. Speed was pinned down by working the
+  vendor app's slider from middle to minimum to maximum and watching byte 10
+  go `03`, `01`, `05`.
+- Effect ids are the 1-based position in the vendor app's 20-entry effect list.
+  `0x04`–`0x08` (glittering, fluttering, colourful, breath, spectrum) and
+  `0x01` (static) are confirmed by capture; the rest follow from list order.
+- `0x80` identified as the custom per-key mode rather than a preset — it is
+  what pairs with a `0x23` colour upload.
+- Command headers are retried, so the tool still works if the vendor app is
+  open at the same time; sharing the hidraw node with it otherwise makes reads
+  return the app's own `0xF5` poll replies and time out. Data blocks are never
+  retried, since a retry mid-transfer could corrupt an upload.
+
+### Changed
+- The `AA 55` trailer marks end-of-record and its offset varies per command:
+  bytes 14–15 for an effect payload, 62–63 for colour and RTC blocks.
+
+### Fixed
+- `--color` no longer shadows `--effect`: passing both ran the solid-colour
+  path and silently ignored the effect, since `--color` doubles as the effect's
+  colour parameter.
+
+### Known gaps
+- Effect ids `0x02`, `0x03` and `0x09`–`0x14` are named from the vendor app's
+  list order rather than confirmed by capture.
+- Byte 8 of the effect payload is unidentified. It is `0x00` for ids `0x04` and
+  `0x07` and `0x01` elsewhere, but it is not a "colour supported" flag: `0x04`
+  accepts a colour.
+- Byte 9 is read as brightness because it only ever appeared as `0x05`, which
+  is the top of the speed byte's range. The vendor app exposes no brightness
+  control, so this is inference, not evidence.
+- There is no opcode `0x00`: it was an artifact of classifying data blocks by
+  their first byte instead of positionally. Effect payloads for ids `0x04`–
+  `0x08` begin with `0x04`, which reads exactly like a command header.
+
 ## [0.2.0] - 2026-07-28
 
 ### Added
@@ -37,11 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--send-hex` rejects over-length packets instead of silently sending them.
 
 ### Known gaps
-- Effect selection, brightness and macros are still unknown. Effects run on the
-  keyboard itself: the vendor app polls `0xF5` ~27x/s only to mirror the
-  keyboard's current LED state in its preview.
-- Opcodes `0x13` and `0x00`, and the meaning of the 16-bit value returned by
-  the commit, are unidentified.
+- The 16-bit value returned by the commit is unidentified; it is most likely a
+  checksum over the upload. Macros have not been looked at.
 - Nothing on the dongle path has been tested against hardware.
 
 ## [0.1.0] - 2026-07-28

@@ -46,7 +46,57 @@ OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # on-screen preview, which means lighting effects run
                          # on the keyboard rather than being streamed from the
                          # PC. Reading is not implemented here yet.
+OP_EFFECT = 0x13         # select a built-in effect (1 block out)
 OP_END = 0xF0            # close a session
+
+# --- built-in effects (opcode 0x13) ----------------------------------------
+# The effect runs on the keyboard; the host only selects it and its parameters.
+#
+# Payload block, with the AA 55 trailer at bytes 14..15 rather than 62..63:
+#   [0]      effect id
+#   [1..3]   R G B
+#   [8]      mode flag, 0x01 for most effects but 0x00 for ids 0x04 and 0x07
+#   [9]      brightness, seen only as 0x05 (believed to be the 1..5 max)
+#   [10]     speed, 1..5, confirmed by working the speed slider min..max
+#   [14..15] AA 55
+EFFECT_SPEED_MIN = 1
+EFFECT_SPEED_MAX = 5
+EFFECT_SPEED_DEFAULT = 3
+EFFECT_BRIGHTNESS_MAX = 5
+EFFECT_TRAILER_OFFSET = 14
+
+# The vendor app lists 20 presets; the id is the 1-based position in that list.
+# Ids 0x04..0x08 were confirmed by capture (selecting glittering, fluttering,
+# colourful, breath and spectrum produced exactly those values); the rest are
+# read off the app's list order and are untested.
+EFFECT_NAMES = {
+    0x01: "static",       # confirmed: pairs with a 0x23 per-key colour upload
+    0x02: "single-on",
+    0x03: "single-off",
+    0x04: "glittering",   # confirmed
+    0x05: "fluttering",   # confirmed
+    0x06: "colourful",    # confirmed
+    0x07: "breath",       # confirmed
+    0x08: "spectrum",     # confirmed
+    0x09: "outward",
+    0x0A: "scrolling",
+    0x0B: "rolling",
+    0x0C: "rotating",
+    0x0D: "explode",
+    0x0E: "launch",
+    0x0F: "ripples",
+    0x10: "flowing",
+    0x11: "pulsating",
+    0x12: "tilt",
+    0x13: "shuttle",
+    0x14: "led-off",
+}
+EFFECT_CONFIRMED = frozenset({0x01, 0x04, 0x05, 0x06, 0x07, 0x08})
+
+# Not a preset: the custom per-key mode, seen whenever the vendor app had the
+# per-key colour editor open. Select this alongside a 0x23 colour upload.
+EFFECT_CUSTOM = 0x80
+EFFECT_NAMES[EFFECT_CUSTOM] = "custom (per-key)"
 
 TRAILER = bytes([0xAA, 0x55])
 TRAILER_OFFSET = 62
@@ -103,12 +153,22 @@ RTC_SET_ACK = bytes.fromhex(
 )
 
 
+# Retries exist for one situation: the vendor app being open at the same time.
+# It holds the same hidraw node and polls 0xF5 continuously, so our reads pick
+# up the replies to its polls (04 F5 00 FF) and time out. 9 attempts were
+# needed to open a session under that contention; with the app closed none are
+# needed, even with an effect running on the keyboard.
+SESSION_OPEN_RETRIES = 20
+RETRY_DELAY_SECONDS = 0.05
+
+
 @dataclass(frozen=True)
 class Transaction:
     name: str
     outgoing: bytes
     expect_reply: bool = False
     expected_reply: bytes | None = None
+    retry_until_ack: bool = False
 
 
 def checksum(payload: bytes) -> int:
@@ -219,14 +279,18 @@ def build_transfer(opcode: int, blocks: list[bytes], name: str) -> list[Transact
     """Wrap a data transfer in the session framing the vendor app always uses:
     begin, command + blocks, commit, end."""
     transactions = [
-        Transaction("begin", build_command(OP_BEGIN), expect_reply=True),
-        Transaction(name, build_command(opcode, len(blocks)), expect_reply=True),
+        Transaction("begin", build_command(OP_BEGIN), expect_reply=True,
+                    retry_until_ack=True),
+        Transaction(name, build_command(opcode, len(blocks)), expect_reply=True,
+                    retry_until_ack=True),
     ]
     transactions += [
         Transaction(f"{name}-block{i}", block) for i, block in enumerate(blocks)
     ]
-    transactions.append(Transaction("commit", build_command(OP_COMMIT), expect_reply=True))
-    transactions.append(Transaction("end", build_command(OP_END), expect_reply=True))
+    transactions.append(Transaction("commit", build_command(OP_COMMIT), expect_reply=True,
+                                    retry_until_ack=True))
+    transactions.append(Transaction("end", build_command(OP_END), expect_reply=True,
+                                    retry_until_ack=True))
     return transactions
 
 
@@ -240,6 +304,45 @@ def build_color_transfer(colors: dict[int, tuple[int, int, int]]) -> list[Transa
     return build_transfer(OP_COLOR_SET, build_color_blocks(colors), "color")
 
 
+def build_effect_blocks(
+    effect_id: int,
+    rgb: tuple[int, int, int] = (0xFF, 0x00, 0x00),
+    speed: int = EFFECT_SPEED_DEFAULT,
+    brightness: int = EFFECT_BRIGHTNESS_MAX,
+    mode_flag: int | None = None,
+) -> list[bytes]:
+    """The single data block that selects a built-in effect.
+
+    `mode_flag` defaults to the value the vendor app used for this id: 0x00 for
+    the two effects seen with it, 0x01 otherwise. Pass it explicitly to
+    experiment.
+    """
+    if not 0 <= effect_id <= 0xFF:
+        raise ValueError(f"effect id out of range: {effect_id}")
+    if not EFFECT_SPEED_MIN <= speed <= EFFECT_SPEED_MAX:
+        raise ValueError(f"speed must be {EFFECT_SPEED_MIN}..{EFFECT_SPEED_MAX}, got {speed}")
+    if not 1 <= brightness <= EFFECT_BRIGHTNESS_MAX:
+        raise ValueError(f"brightness must be 1..{EFFECT_BRIGHTNESS_MAX}, got {brightness}")
+    if len(rgb) != 3 or not all(0 <= c <= 255 for c in rgb):
+        raise ValueError(f"bad colour: {rgb!r}")
+
+    if mode_flag is None:
+        mode_flag = 0x00 if effect_id in (0x04, 0x07) else 0x01
+
+    block = bytearray(PACKET_SIZE)
+    block[0] = effect_id
+    block[1:4] = bytes(rgb)
+    block[8] = mode_flag
+    block[9] = brightness
+    block[10] = speed
+    block[EFFECT_TRAILER_OFFSET:EFFECT_TRAILER_OFFSET + 2] = TRAILER
+    return [bytes(block)]
+
+
+def build_effect_transfer(effect_id: int, **kwargs) -> list[Transaction]:
+    return build_transfer(OP_EFFECT, build_effect_blocks(effect_id, **kwargs), "effect")
+
+
 def build_rtc_transfer(when: datetime) -> list[Transaction]:
     return build_transfer(OP_RTC, build_rtc_blocks(when), "rtc")
 
@@ -251,7 +354,8 @@ def build_cable_handshake() -> list[Transaction]:
     the device reply with COMMIT_ERROR rather than an ack.
     """
     return [
-        Transaction("begin", build_command(OP_BEGIN), expect_reply=True),
+        Transaction("begin", build_command(OP_BEGIN), expect_reply=True,
+                    retry_until_ack=True),
         Transaction("end", build_command(OP_END), expect_reply=True),
     ]
 

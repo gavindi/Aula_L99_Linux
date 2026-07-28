@@ -9,12 +9,13 @@ separate `EEEF:268A` USB-serial device, already documented in
 
 Confirmed on real hardware (wired `0C45:800A`, interface 3):
 
-- Session framing, writing per-key RGB, and the RTC-set command.
+- Session framing, writing per-key RGB, selecting built-in effects, and the
+  RTC-set command.
 - Every packet builder in `protocol.py` reproduces the vendor app's own packets
   byte-for-byte — see "Verifying against a capture" below.
 
-Not yet known: how to select a lighting *effect*, brightness, macros, and
-opcodes `0x13` and `0x00`. Effects run on the keyboard itself — the vendor app
+Not yet known: macros, and the meaning of byte 8 of the effect payload.
+Effects run on the keyboard itself — the vendor app
 polls `0xF5` ~27x/s to mirror the keyboard's current LED state in its preview,
 rather than driving the lighting from the PC. The dongle path has never been
 tested at all; its constants are inherited guesses from the AULA F75 MAX.
@@ -35,6 +36,10 @@ python3 -m aula_l99_hacky.cli --handshake --debug
 
 # set every key to one colour, stored on the keyboard
 python3 -m aula_l99_hacky.cli --color 00FF00
+
+# run a built-in effect: id, colour, speed 1-5
+python3 -m aula_l99_hacky.cli --list-effects
+python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
 
 # set the keyboard's clock
 python3 -m aula_l99_hacky.cli --rtc
@@ -64,8 +69,7 @@ reply:    04 <opcode> 00 01 ...                                (byte 3 = ack)
 | `0xF5` | read back current per-key colour             | 9 in |
 | `0x02` | commit; reply returns 16 bits at offset 4    | 0 |
 | `0xF0` | end session                                  | 0 |
-| `0x13` | unidentified                                 | 1 |
-| `0x00` | unidentified                                 | 0 |
+| `0x13` | select a built-in effect                     | 1 out |
 
 Data blocks flow *out* from the host for a write (`0x23`) and *back* from the
 device for a query (`0xF5`). The command header looks identical either way, so
@@ -78,12 +82,46 @@ Colour is plain RGB, passed through literally (verified with `#00FF00` →
 `00 ff 00` and `#0000FF` → `00 00 ff`). The L99 has 84 keys in ids `0x00`–`0x7F`;
 positions with no physical key are sent as four zero bytes.
 
+**Effect blocks.** One block, with the trailer at bytes 14–15 rather than
+62–63 — the trailer marks end-of-record and records are not all the same
+length. Layout: `[0]` effect id, `[1..3]` R G B, `[8]` a mode flag (`0x01` for
+most ids but `0x00` for `0x04` and `0x07`), `[9]` brightness (only ever seen as
+`0x05`), `[10]` speed `1..5`. Speed was confirmed by working the vendor slider
+from middle to minimum to maximum and watching byte 10 go `03`, `01`, `05`.
+
+The id is the **1-based position in the vendor app's effect list**, which has 20
+entries: `0x01` static, `0x02` single-on, `0x03` single-off, `0x04` glittering,
+`0x05` fluttering, `0x06` colourful, `0x07` breath, `0x08` spectrum, `0x09`
+outward, `0x0A` scrolling, `0x0B` rolling, `0x0C` rotating, `0x0D` explode,
+`0x0E` launch, `0x0F` ripples, `0x10` flowing, `0x11` pulsating, `0x12` tilt,
+`0x13` shuttle, `0x14` led-off. Ids `0x04`–`0x08` were confirmed by capture; the
+rest follow from list order. `--list-effects` marks which is which.
+
+`0x80` is not in that list: it is the custom per-key mode, sent whenever the
+vendor app had the per-key colour editor open, and it is what pairs with a
+`0x23` colour upload.
+
+**Beware when parsing captures.** A data block is whatever follows a header
+with a non-zero block count, *positionally*. Do not classify by first byte:
+effect payloads for ids `0x04`–`0x08` start with `0x04`, which reads exactly
+like a command header and will silently corrupt an analysis.
+
 **Timing.** Packets must not be issued back-to-back — with no gap the second
 data block fails with `ETIMEDOUT`, and a reply read immediately after a command
 returns the command echoed with the ack bit still clear. 2 ms was enough on the
 test unit; the default is 10 ms, tunable with `--gap`. The vendor app leaves a
 very uniform ~36.7 ms, which looks like Windows timer granularity rather than a
 device requirement.
+
+**Do not run this while the vendor app is open.** Both processes share the one
+hidraw node, and the app polls `0xF5` continuously, so a `GET_FEATURE` here
+picks up the reply to *its* poll instead of ours: commands come back as
+`04 F5 00 FF`, replies desync, and reads time out. It took 9 attempts to open a
+session under that contention. With the app closed, none of this happens — not
+even while an effect is running on the keyboard, which was my first and wrong
+explanation for it. Command headers are retried anyway so the tool degrades
+gracefully; data blocks are never retried, since a retry mid-transfer could
+corrupt an upload.
 
 **Commit errors.** Committing a session that uploaded nothing replies with
 `0xFF` in the ack byte instead of `0x01`.
