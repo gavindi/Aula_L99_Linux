@@ -5,6 +5,71 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-29
+
+Touchscreen image support. This is the `EEEF:268A` panel, a CDC-ACM USB-serial
+device — an entirely separate device from the keyboard's HID channel, so it
+lives in its own module and shares no code with `aula_l99_hacky`.
+
+### Added
+- `tools/aula_l99_screen/`: convert images to the panel's native format.
+  - `--convert IMAGE -o FILE` produces the `.bin` the panel expects.
+  - `--describe FILE` decodes a `.bin` header and verifies its CRC.
+  - `--list` finds the panel by VID/PID rather than assuming `/dev/ttyACM0`.
+  - `--send IMAGE` writes the payload to the port (see Known gaps).
+- Panel image format, derived from the vendor's own `qt-tool/Image2Bin.exe` by
+  feeding it known images and decoding the output:
+
+        [0..3]   uint32 LE  payload size (width * height * 2)
+        [4..5]   uint16 LE  width
+        [6..7]   uint16 LE  height
+        [8]      0x00       constant in every sample
+        [9..10]  uint16 LE  CRC16/MODBUS over the pixel data
+        [11..]   pixels     RGB565, little-endian, row-major
+
+- Binary-safe serial transport: the port is put in raw mode via a `cfmakeraw`
+  equivalent, since Python exposes none.
+
+### Verified
+- The encoder reproduces `Image2Bin.exe` **byte-for-byte** for four images
+  across two different sizes, header and pixels alike.
+- Pixel encoding was checked against a known input: the first pixel decodes to
+  `0x05BF`, exactly RGB565 for the cyan `(0,180,255)` line at y=0, and the last
+  to `0x0845` for the `(10,10,40)` background.
+- The dimension fields are real rather than constants: a 200x100 input yields a
+  40011-byte file with width=200, height=100.
+- The checksum is CRC16/MODBUS little-endian; CRC16/ARC, CCITT, XMODEM, Kermit
+  and plain byte and word sums were all tested and none matched.
+
+### Fixed
+- The serial port was being opened as a cooked tty, which corrupted binary
+  payloads: `ONLCR` expands every `0x0A` and `IXON` swallows `0x11`/`0x13` —
+  100 bytes of a 17 KB test payload. Raw mode is now mandatory in the
+  transport.
+
+### Known gaps
+- **Nothing has been shown on the panel yet.** The payload is right, but the
+  framing the vendor uses to send it is not known, and writing the bytes raw to
+  the port produces no visible change and no reply, at any baud from 9600 to
+  2000000.
+- The vendor sends images via `qt-tool/SerialPortTool.exe`, which takes three
+  arguments and exits immediately without them. Driving it under an `ioctl`
+  shim is the most direct route to capturing the real framing.
+- Under Wine the vendor app cannot find the panel at all: it locates the port
+  through SetupAPI, and Wine's `Enum\USB` tree contains the keyboard (which
+  `winebus` registers) but not CDC-ACM serial devices. This is a limitation of
+  Wine's device model, not a configuration error, and no COM-port symlink fixes
+  it.
+- Byte 8 of the header is `0x00` in every sample; its meaning is unknown.
+- Touch input, brightness and screen power remain uncaptured.
+
+### Superseded
+- An earlier implementation of this module used a JPEG-based format taken from
+  third-party documentation of this panel (64-byte header, magic
+  `12 34 56 78`, command `0x02`). That format is wrong for this hardware — the
+  vendor's converter emits raw RGB565 — and it is why images sent with it never
+  appeared. It has been replaced, not kept as a fallback.
+
 ## [0.3.0] - 2026-07-28
 
 ### Added
