@@ -50,27 +50,28 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from five captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from six captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
-to `(319,479)` — bottom-right), and `save_to_gif_5.pcapng` (the same red
+to `(319,479)` — bottom-right), `save_to_gif_5.pcapng` (the same red
 frame 1, but frame 2 is a clean 50/50 vertical split — left half red, right
-half blue). There is still no `--target gif`, because the pixel payload
-format isn't understood well enough to safely construct one, though this
-round made the first real crack in it. What's known:
+half blue), and `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
+where the split frame repeats unchanged). There is still no `--target gif`,
+because the pixel payload format isn't understood well enough to safely
+construct one, though hardware testing has made real progress. What's known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed against 5 distinct
-  GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`) plus the
-  three previously-known values. There's no known general formula for the
-  matching CRC init, though, so this doesn't unlock arbitrary upload sizes —
-  see `final_chunk_cmd()` in `protocol.py`.
+  (payload_len % 256)`, not a fixed opcode — confirmed against 6 distinct
+  GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`) plus
+  the three previously-known values. There's no known general formula for
+  the matching CRC init, though, so this doesn't unlock arbitrary upload
+  sizes — see `final_chunk_cmd()` in `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame). Its
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
-  already used for the single-image header, confirmed byte-exact in four of
-  the five captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
+  already used for the single-image header, confirmed byte-exact in five of
+  the six captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
   is a constant format/version tag, byte 13 is the real frame count.
 - Each frame has its own ~24-byte sub-header, including the self-referential
   frame byte length and a pair of RGB565 color fields: one holds the color of
@@ -203,42 +204,51 @@ alternating with frame 1 — unmodified solid red — the whole time; easy to
 miss when frame 1's red and frame 2's red-left half looked similar, obvious
 once frame 2 turned green/yellow.)
 
-An eighth experiment tested whether the row-grammar is tied to a
-particular frame *slot*: frame 1's entire content was replaced with a
-byte-for-byte copy of frame 2's already-proven-working red/blue split (TOC
-offsets, sizes, and checksum all updated to match). Result: the fallback
-animation — despite every byte being ones that render correctly when
-they're in frame 2's slot.
+An eighth experiment (frame 1's content replaced with a byte-for-byte copy
+of frame 2's proven split) and a ninth (a hand-built 3-frame blob: solid
+red, split, split again via an exact copy) both produced the fallback
+animation. At the time these were read as evidence for frame index
+selecting the decode routine, and/or a sequential delta encoding between
+frames. Both experiments padded the wire transfer with trailing zero bytes
+to reach a round multiple of 2048, to avoid needing an unsolved CRC value
+for a new final-chunk length — which turned out to matter.
 
-This points at frame *index*, not content, selecting the decode routine:
-frame 0 requires the continuous-run encoding solid frames use; frame 1+ can
-use the row-grammar. One speculative explanation: frame 0 may serve as a
-full/reference frame that later frames are decoded *relative to* (a delta
-scheme) — which frame 0 can't participate in, having no prior frame to
-reference. That would also reframe `save_to_gif_3`/`4`'s persistent,
-never-resetting flip: not a per-row flag that should reset, but a one-time
-mode switch — "same as reference, skip N pixels" until the first real
-difference, then permanently switched to explicit data for the rest of the
-frame. Consistent with the evidence so far, but unconfirmed — this one
-experiment can't rule out some other unidentified field, or an error in
-reconstructing the modified frame, as the real cause.
+**`save_to_gif_6.pcapng` overturns that reading.** It's a real,
+vendor-generated 3-frame capture — solid red, split, split again
+*unchanged* — captured specifically to see what "no visible change between
+frames" looks like from the real encoder. Its frame 1 and frame 2 are
+**byte-for-byte identical**: the real encoder just re-emits a frame's full
+content verbatim when nothing changes. There's no delta or no-op token to
+find. Its frame 1 is also byte-identical to `save_to_gif_5`'s frame 1 (the
+same split, independently captured), confirming the encoder is
+deterministic and content-driven. And the reconstructed blob from
+experiment nine — built by hand, before this capture existed — turned out
+to be byte-for-byte identical to what `save_to_gif_6.pcapng` actually
+contains. The only difference was packetization: the real capture ends in
+a genuine 540-byte final chunk (now solved: `cmd 0x23`, init `0xA9BB`),
+while the experiment padded to avoid needing that unsolved value.
+Confirmed on real hardware: `save_to_gif_6`'s capture renders correctly.
 
-A ninth experiment tried to test the delta-scheme idea more directly: a
-3-frame blob (frame 0 solid red, frame 1 the proven split, frame 2 an
-*exact copy* of frame 1's content, with a rebuilt 3-entry TOC). If "any
-index other than 0 works" were the whole story, frame 2 should have
-rendered the same split. Result: the fallback again.
+**Confirmed directly** once the panel was back on Linux: re-sent as a
+proper, unpadded upload — the same 5 packets as `save_to_gif_6.pcapng`,
+byte-for-byte — the exact content that failed padded in experiment 9
+rendered correctly, the full 3-frame animation playing as expected. Same
+bytes, only the packetization differed. Padding — not frame index, not a
+delta requirement — was the cause, and by the same logic likely explains
+experiment 8's failure too.
 
-This doesn't cleanly answer whether index 2 specifically supports
-row-grammar content, because the result itself may point at a confound: if
-the row-grammar is a *sequential* delta — relative to the immediately
-preceding frame, not always frame 0 — frame 2's bytes should describe the
-change from frame 1's state (already the split), not repeat frame 1's own
-delta-from-solid-red verbatim. Read this way, the failure is actually
-evidence *against* "each frame deltas from frame 0" (which predicts reusing
-the same valid delta twice should still work) and *for* a frame-to-frame
-sequential delta instead — but that's inference from a negative result, not
-a confirmed mechanism, since the delta token grammar itself isn't decoded.
+That makes padding's status genuinely inconsistent rather than simply
+"unsafe": the padding-only control from earlier (padding the working
+2-frame blob with no other change) rendered correctly, while this padded
+3-frame content did not, despite using the identical technique. Padding
+isn't reliably safe for further experiments — prefer real captures or
+exact, unpadded packetization over it going forward. `save_to_gif_3`/`4`'s
+persistent flip is unexplained again — the delta-mode reframing of it
+doesn't have a basis anymore, and nothing else has replaced it yet. The
+3-stripe row-count experiment (0.5.9) used the same padding technique and
+should be distrusted pending a re-test without it — not yet done, since it
+would need a new `CRC_INIT` entry (for a 122-byte final chunk) that no
+capture has provided.
 
 ## Image format
 

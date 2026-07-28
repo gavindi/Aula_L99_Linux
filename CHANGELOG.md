@@ -5,6 +5,96 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.15] - 2026-07-29
+
+**"Save to GIF" research: padding confirmed as the cause of 0.5.13's
+failure, by direct A/B test.** With the panel back on Linux, 0.5.13's
+failed 3-frame experiment was re-sent using proper, unpadded packetization
+instead of trailing zero-pad bytes.
+
+### Verified
+- Re-sent the exact same content that failed padded in 0.5.13's ninth
+  experiment, this time as 3 full 2048-byte writes + the real 540-byte
+  final chunk (`cmd 0x23`, solved in 0.5.14) + commit -- literally the same
+  5 packets as `save_to_gif_6.pcapng`, byte-for-byte. Result: the full
+  3-frame animation played correctly.
+- Same bytes, only the packetization differed between this and 0.5.13's
+  attempt. That is now a direct, confirmed A/B result, not inference from
+  a separate capture: padding -- not frame index, not a delta requirement
+  -- caused 0.5.13's failure, and by the same logic likely explains 0.5.12's
+  eighth experiment too (identical technique).
+
+### Changed
+- **Padding's status is now known to be inconsistent, not simply unsafe.**
+  0.5.9's padding-only control (padding the working 2-frame blob, nothing
+  else changed) rendered correctly; this padded 3-frame content did not,
+  despite the identical "round up to the next multiple of 2048" technique.
+  Padding should not be trusted for further experiments -- prefer real
+  captures or exact, unpadded packetization (solving the needed `CRC_INIT`
+  entry from a genuine capture) instead.
+
+### Known gaps
+- 0.5.9's 3-stripe row-count experiment used the same padding technique and
+  should be distrusted pending a re-test without it -- not yet done, since
+  it needs a new `CRC_INIT` entry (for a 122-byte final chunk) that no
+  capture has provided yet.
+- `save_to_gif_3`/`4`'s persistent, never-resetting flip is unexplained
+  again, with no replacement theory yet.
+- The bulk of the entropy coding, and solid-color frames' unrelated byte
+  structure, are otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
+## [0.5.14] - 2026-07-29
+
+**"Save to GIF" research: `save_to_gif_6.pcapng` overturns 0.5.12/0.5.13's
+delta-encoding theory.** A sixth GIF capture -- a real, vendor-generated
+3-frame animation (solid red, split, split again *unchanged*) built
+specifically to see what "no visible change between frames" looks like --
+answers that question directly and, in the process, reveals the actual
+cause of two previous "failed" hardware experiments.
+
+### Verified
+- `save_to_gif_6.pcapng`'s frame 1 and frame 2 are **byte-for-byte
+  identical**. The real encoder simply re-emits a frame's full content
+  verbatim when nothing changes -- there is no delta or no-op token.
+- Its frame 1 is also byte-identical to `save_to_gif_5`'s frame 1 (the same
+  split, independently captured), confirming the encoder is deterministic
+  and content-driven, not context- or position-dependent.
+- 8th `cmd`/`CRC_INIT` data point: a 540-byte final chunk predicted
+  `cmd=0x23` before checking, confirmed exact; its CRC init (`0xA9BB`)
+  solved and added to `CRC_INIT`.
+- Direct comparison: the hand-built 3-frame blob from 0.5.13's ninth
+  experiment (built *before* this capture existed) is byte-for-byte
+  identical in content to what `save_to_gif_6.pcapng` actually contains.
+  The only difference was packetization -- the real capture ends in a
+  genuine 540-byte final chunk, while the experiment padded the wire
+  transfer to a round multiple of 2048 to avoid needing an unsolved CRC
+  value. The user confirmed `save_to_gif_6`'s capture renders correctly on
+  the panel.
+
+### Changed
+- **Overturns 0.5.12/0.5.13's delta/reference-frame hypothesis.** Since the
+  content 0.5.13's ninth experiment sent was, byte-for-byte, exactly what a
+  real capture proves renders correctly, the padding technique used in that
+  experiment (and 0.5.12's eighth experiment, and 0.5.9's three-run row
+  test) is the more likely cause of those failures, not frame index or a
+  delta requirement. Pending direct re-test with the now-solved `0x23` CRC
+  value (no padding needed) once hardware is available again.
+- This removes the basis for reframing `save_to_gif_3`/`4`'s persistent,
+  never-resetting flip as a one-time delta-mode switch (0.5.12). That
+  observation still stands; its explanation is open again.
+
+### Known gaps
+- 0.5.9's three-run row-count experiment and 0.5.12's frame-slot-swap
+  experiment both used the same padding technique and should be re-tested
+  without it before trusting their conclusions either.
+- `save_to_gif_3`/`4`'s persistent flip is unexplained again.
+- The bulk of the entropy coding, and solid-color frames' unrelated byte
+  structure, are otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.13] - 2026-07-29
 
 **"Save to GIF" research, hardware round eight: 3-frame test is
