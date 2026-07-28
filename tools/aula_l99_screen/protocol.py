@@ -184,8 +184,8 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
                                         # packets are reproduced byte-for-byte
                                         # by build_packet() at this address.
 
-# "Save to GIF", confirmed from three independent captures --
-# wireshark_dumps/save_to_gif_1/2/3.pcapng: every capture's write/commit
+# "Save to GIF", confirmed from four independent captures --
+# wireshark_dumps/save_to_gif_1/2/3/4.pcapng: every capture's write/commit
 # packets are reproduced byte-for-byte by build_packet() at this address
 # (resolving one of the two undocumented slots the vendor binary references
 # -- 0x04200000 remains unidentified). Address only: there is no builder for
@@ -193,12 +193,15 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
 # see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
 
-# GIF container format, from three captures: save_to_gif_1.pcapng (a real
+# GIF container format, from four captures: save_to_gif_1.pcapng (a real
 # multi-frame photo GIF), save_to_gif_2.pcapng (a 3-frame solid
-# red/green/blue test GIF), and save_to_gif_3.pcapng (a 2-frame test GIF,
-# both frames solid red except one white pixel at (0,0) in frame 2) -- the
-# last two captured specifically to make further progress here, which they
-# did. The blob written to GIF_FLASH_BASE is a header of N * 20-byte entries
+# red/green/blue test GIF), save_to_gif_3.pcapng (a 2-frame test GIF, both
+# frames solid red except one white pixel at (0,0) -- top-left corner -- in
+# frame 2), and save_to_gif_4.pcapng (identical to save_to_gif_3.pcapng
+# except the white pixel is at (319,479) -- bottom-right corner -- instead)
+# -- the last three captured specifically to make further progress here,
+# which they did. The blob written to GIF_FLASH_BASE is a header of N *
+# 20-byte entries
 # (one per frame; N=3, 3 and 2 respectively across the three captures,
 # comfortably under the vendor's own gif_maxframes="200" and
 # gif_headlength="256" in layouts/rgb-keyboard.xml), followed by the frames'
@@ -253,26 +256,37 @@ GIF_FLASH_BASE = 0x04240000
 #     [14:16] u16      0x0100 in save_to_gif_2/3, 0x0101 in save_to_gif_1 --
 #                       plausibly a mode/complexity flag distinguishing
 #                       "flat" test content from a real photo's, unconfirmed
-#     [16:20] --       a pair of RGB565-looking uint16 fields whose exact
-#                       byte offset isn't pinned down (16:18 in
-#                       save_to_gif_3, 18:20 in save_to_gif_2 -- see "Known
-#                       gaps" for why). Values line up with real colors: for
-#                       a single-color frame, one slot holds that color
-#                       (0xF800 red, 0x001F blue, 0x07E0 green in
-#                       save_to_gif_2); for save_to_gif_3's frame 2 (solid
-#                       red + one white pixel), the two slots hold 0xFFFF
-#                       (white, the differing pixel's color) and 0xF800 (red,
-#                       the background) respectively -- consistent with
-#                       "color of the first pixel" / "color of everything
-#                       else," but not confirmed as a general rule.
+#     [16:18] u16      the color of this frame's first pixel in raster
+#                       order, RGB565. Confirmed by save_to_gif_3 vs. 4: the
+#                       differing pixel is white and everything else is red;
+#                       when the diff is at (0,0) (save_to_gif_3, frame 2)
+#                       this field is white (0xFFFF); when the diff is at
+#                       (319,479) instead (save_to_gif_4, frame 2) this field
+#                       is red (0xF800), i.e. it tracks whichever color pixel
+#                       (0,0) actually is in each case.
+#     [18:20] u16      the "other" color present in the frame, if any RGB565.
+#                       0x0000 when the frame is a single flat color (both
+#                       captures' frame 1). When frame 2 has one differently-
+#                       colored pixel, this holds that color if it's NOT the
+#                       first pixel (0xFFFF white in save_to_gif_4, since the
+#                       diff is at the end) or the background color if the
+#                       diff IS the first pixel (0xF800 red in save_to_gif_3,
+#                       where [16:18] already claimed white for the diff
+#                       pixel). This pair is internally consistent across
+#                       save_to_gif_3 and 4, but does NOT explain
+#                       save_to_gif_2: its three frames are each a single flat
+#                       color with no second color, yet their color sits at
+#                       [18:20] with [16:18]=0 -- the reverse of what this
+#                       rule predicts. Unexplained; possibly tied to
+#                       save_to_gif_2's much larger content length (below).
 #
-# The "fixed prefix" hypothesis: every frame in save_to_gif_2/3 has exactly
+# The "fixed prefix" hypothesis: every frame in save_to_gif_2/3/4 has exactly
 # 528 bytes of zero immediately after its sub-header, byte-identical
 # regardless of the frame's color -- consistent with a fixed table (Huffman
 # or quantization-style, as in JPEG) that doesn't depend on image content,
 # followed by a variable-length entropy-coded section (the [12:14] bytes
-# above) that does. Not confirmed, but the exact-528 match across 5
-# differently-colored frames from 2 separate captures is a strong signal.
+# above) that does. Not confirmed, but the exact-528 match across 7
+# differently-colored frames from 3 separate captures is a strong signal.
 #
 # The single-pixel diff in save_to_gif_3 (frame 2 has one white pixel at
 # (0,0), everything else red) shows up as a precise, repeatable pattern:
@@ -280,13 +294,31 @@ GIF_FLASH_BASE = 0x04240000
 # prefix: 0xFF in frame 1, 0x00 in frame 2), and from there on every
 # following occurrence of a recurring "0xFF 0x00" 2-byte token in frame 1
 # becomes "0xFF 0x01" in frame 2 -- the second byte flips once, at the very
-# first token, and never flips back for the rest of the frame. That the
-# change starts in the very first token (immediately after the fixed prefix)
-# matches (0,0) being the first pixel in raster-scan order. Reads as some
-# kind of running state or context that a "differs from prediction" event
-# permanently perturbs -- consistent with the transform/DCT-style coding
-# hypothesis (a DC predictor context that never resets mid-frame) -- but the
-# actual bitstream algorithm is not decoded.
+# first token, and never flips back for the rest of the frame (605 bytes
+# differ in total, essentially the whole frame from byte 528 to the end).
+# That the change starts in the very first token (immediately after the
+# fixed prefix) matches (0,0) being the first pixel in raster-scan order.
+#
+# save_to_gif_4 moves the same one-pixel diff to the opposite extreme --
+# (319,479), the LAST pixel in raster order -- and this is the single most
+# informative result of the four captures: only **5 bytes** differ between
+# that frame and its all-red counterpart (vs. 605 for the (0,0) case), all
+# of them clustered at the very end of the frame (plus the two size-field
+# bytes at [8] and [12], expected since the frame is 2 bytes longer). Total
+# frame length is unaffected by where the diff pixel is (1728/1730 bytes in
+# both captures) -- only the LOCAL EXTENT of the diff changes, from "nearly
+# the whole frame" to "nearly nothing," depending on how early the differing
+# pixel occurs in raster order. This is strong, position-controlled evidence
+# for a running state or context that a "differs from prediction" event
+# permanently perturbs from that point onward: an early divergence corrupts
+# everything downstream of it (hence the huge save_to_gif_3 diff), a late
+# one corrupts almost nothing (hence save_to_gif_4's tiny one) -- consistent
+# with the transform/DCT-style coding hypothesis (a DC predictor context
+# that never resets mid-frame), but the actual bitstream algorithm is still
+# not decoded. The terminal encoding also isn't a simple continuation of the
+# same 0x00->0x01 token flip: save_to_gif_4's tail changes from repeating
+# "...FF 00 FF 00" to "...FE 00 00 01", a distinct pattern rather than one
+# more flipped token, suggesting special handling at the very end of a frame.
 #
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded. It is NOT raw RGB565 (frames are well under

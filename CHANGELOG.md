@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-07-29
+
+**"Save to GIF" research notes, round four.** A fourth capture
+(`wireshark_dumps/save_to_gif_4.pcapng`: the same red-frame/one-white-pixel
+pair as round three, but the white pixel moved from `(0,0)` to `(319,479)` --
+the opposite end of raster order) produces the single most informative
+result of the investigation so far: where the differing pixel sits controls
+*how much* of the frame's encoding changes, not *how much data* the frame
+needs. Still no new command.
+
+### Verified
+- `0x04240000` re-confirmed a fourth time; `cmd`/CRC-init formula holds again
+  (`0xB1`, matching round three exactly since the payload length is
+  identical); `crc16_modbus()` re-confirmed as the TOC checksum a third time.
+- **Total frame size is independent of where the differing pixel is.** Both
+  `save_to_gif_3.pcapng` (diff at top-left) and `save_to_gif_4.pcapng` (diff
+  at bottom-right) produce frames of exactly the same two lengths (1728 and
+  1730 bytes). The unchanged reference frame is even byte-identical between
+  the two captures, confirming the encoder is deterministic.
+- **Diff extent is sharply position-dependent.** Diffing each capture's two
+  frames directly: the top-left diff (round three) changes 605 bytes, nearly
+  the whole frame; the bottom-right diff (this round) changes only 5 bytes,
+  clustered at the very end. This is strong, position-controlled evidence
+  for a running encode-time context that a "differs from expectation" event
+  permanently perturbs from that point in the raster scan onward -- an early
+  divergence corrupts everything downstream of it, a late one corrupts
+  almost nothing.
+- **Color-field pair semantics resolved for these two captures**: one
+  sub-header field holds the color of the frame's first pixel in raster
+  order, the other holds the "other" color present (if any). Confirmed
+  consistent between `save_to_gif_3` and `4` (the fields swap depending on
+  whether the diff pixel is first or last), but this still doesn't explain
+  `save_to_gif_2`'s solid frames, whose sole color sits in the "other" slot
+  instead of the "first pixel" slot.
+- The terminal-of-frame encoding for a last-pixel diff isn't a simple
+  continuation of the same token-flip pattern seen for a first-pixel diff:
+  the tail changes from repeating `...FF 00 FF 00` to `...FE 00 00 01`, a
+  distinct pattern rather than one more flipped token.
+
+### Known gaps
+- The entropy-coded pixel section is still not decoded. This round narrows
+  *where* a change appears; it doesn't yet reveal how a token is built.
+- The color-field/`save_to_gif_2` inconsistency above is unresolved --
+  possibly tied to `save_to_gif_2`'s much larger content length, not
+  confirmed.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.3] - 2026-07-29
 
 **"Save to GIF" research notes, round three.** A third capture

@@ -50,18 +50,20 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from three captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
-GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames), and
+from four captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
-`(0,0)` in frame 2) — the last two captured specifically to make further
+`(0,0)` — top-left — in frame 2), and `save_to_gif_4.pcapng` (the same pair,
+but the white pixel moved to `(319,479)` — bottom-right, the last pixel in
+raster order). The last three were captured specifically to make further
 progress, which they did. There is still no `--target gif`, because the
 pixel payload format isn't understood well enough to safely construct one.
 What's known:
 
 - Same wire protocol/framing as the two targets above. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed exactly against all
-  three GIF captures' final chunks (`0x71`, `0x35`, `0xB1`) plus the three
+  (payload_len % 256)`, not a fixed opcode — confirmed against all four GIF
+  captures' final chunks (`0x71`, `0x35`, `0xB1` twice) plus the three
   previously-known values. There's no known general formula for the matching
   CRC init, though, so this doesn't unlock arbitrary upload sizes — see
   `final_chunk_cmd()` in `protocol.py`.
@@ -69,37 +71,43 @@ What's known:
   offset, total payload size, `320x480` dimensions, a format tag, frame
   count, a likely delay field). Its per-entry checksum field is **solved**:
   it's `crc16_modbus()` — the same function already used for the
-  single-image header — over the payload following the header, confirmed
-  byte-exact in two of the three captures. The third capture also resolved
-  an ambiguity from the first two: byte 12 is a constant format/version tag
-  (always 3), and byte 13 is the real frame count (3, 3, then 2) — the first
-  two captures happened to have the same value in both bytes.
-- Each frame also has its own ~24-byte sub-header. Confirmed: the frame's own
-  byte length (self-referential, exact in all 8 frames across all three
-  captures), and a pair of RGB565-looking color fields whose exact byte
-  offset isn't pinned down yet but whose values track real colors (a solid
-  frame's fill color; for the single-pixel-diff frame, one slot held the
-  diff pixel's white and the other the red background).
-- **The strongest new lead**: every frame in the second and third captures
-  has exactly **528 bytes of zero** right after its sub-header, regardless of
-  color — consistent with a fixed table (Huffman/quantization-style, as in
-  JPEG) that doesn't depend on content, followed by a variable-length
-  entropy-coded section. And the single-pixel diff between
-  `save_to_gif_3`'s two frames shows up as a precise, repeatable signature:
-  a recurring 2-byte token flips its second byte from `0x00` to `0x01`
-  starting at the very first token after that 528-byte prefix (consistent
-  with `(0,0)` being the first pixel in raster order) and never flips back.
-  Reads like a running prediction context that a "differs from expectation"
-  event permanently perturbs — support for the transform/DCT-style coding
-  hypothesis, but the actual bitstream algorithm is still not decoded. Full
-  detail in the comment block above `GIF_FLASH_BASE` in `protocol.py`.
+  single-image header — confirmed byte-exact in three of the four captures.
+  `save_to_gif_3` also resolved an ambiguity from the first two: byte 12 is a
+  constant format/version tag (always 3), byte 13 is the real frame count
+  (3, 3, 2, 2) — the first two captures happened to share the same value in
+  both bytes.
+- Each frame also has its own ~24-byte sub-header, including the
+  self-referential frame byte length (confirmed exact in all 10 frames
+  across all four captures) and a pair of RGB565-looking color fields.
+  `save_to_gif_3` vs. `4` pinned these down: one field holds the color of the
+  frame's first pixel in raster order, the other holds the "other" color
+  present, if any (`0x0000` for a single flat color). Consistent within both
+  captures, but doesn't explain `save_to_gif_2`'s solid frames, whose single
+  color sits in the "other" slot instead — unexplained.
+- **The strongest new lead**: every frame in captures 2–4 has exactly
+  **528 bytes of zero** right after its sub-header, regardless of color —
+  consistent with a fixed table (Huffman/quantization-style, as in JPEG)
+  that doesn't depend on content, followed by a variable-length
+  entropy-coded section.
+- **The most informative single result**: moving the one differing pixel
+  from `(0,0)` (`save_to_gif_3`) to `(319,479)` (`save_to_gif_4`) shrinks the
+  byte-level diff from **605 bytes** (nearly the entire frame) down to just
+  **5**, clustered at the very end — while the total frame length stays
+  identical either way. Position doesn't change how much data is needed,
+  only how much of the frame is affected by an early vs. late divergence.
+  That reads as a running prediction context that a "differs from
+  expectation" event permanently perturbs from that point onward — an early
+  divergence corrupts everything downstream, a late one corrupts almost
+  nothing — support for the transform/DCT-style coding hypothesis, but the
+  actual bitstream algorithm is still not decoded. Full detail in the
+  comment block above `GIF_FLASH_BASE` in `protocol.py`.
 
-Making further progress likely needs a capture that moves the differing
-pixel to a different position (to map how position affects where in the
-byte stream the change appears, and to test whether the fixed-528-byte
-boundary is really fixed or scales with something), the same way this round
-resolved the checksum, the format-tag/frame-count ambiguity, and roughly
-where the entropy-coded section begins.
+Making further progress from here is a harder problem than the last few
+rounds: the "where" question (which this round answered cleanly) doesn't by
+itself reveal "how" a token is constructed. Likely needs either more
+captures targeting specific hypotheses (e.g. isolating whether 528 bytes is
+truly fixed independent of image size) or literally decoding the entropy
+coding by hand from the byte patterns already in hand.
 
 ## Image format
 
