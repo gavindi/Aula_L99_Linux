@@ -137,18 +137,19 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 6 independent samples across 4 capture files:
+    byte. Confirmed against 7 independent samples across 5 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
-    chunk (11 bytes -> cmd=0x12=CMD_FINAL), and all three wireshark_dumps/
-    save_to_gif_1/2/3.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes ->
-    0x35, 1450 bytes -> 0xB1 -- all three predicted exactly by this formula
-    before being checked).
+    chunk (11 bytes -> cmd=0x12=CMD_FINAL), and wireshark_dumps/
+    save_to_gif_1/2/3/5.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes ->
+    0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F -- every one predicted exactly
+    by this formula before being checked; save_to_gif_4.pcapng repeats
+    save_to_gif_3's 1450-byte/0xB1 case rather than adding a new one).
 
     This only gives you the cmd byte. There is no known general formula for
     the matching CRC_INIT entry (two hypotheses -- init as a function of just
     this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 6 known (cmd, init) pairs and neither held), so calling this
+    against all 7 known (cmd, init) pairs and neither held), so calling this
     with a payload length outside CRC_INIT will raise in crc16_packet().
     """
     return (CMD_WRITE + payload_len) % 256
@@ -157,17 +158,18 @@ def final_chunk_cmd(payload_len: int) -> int:
 # Each command uses its own CRC init; see final_chunk_cmd() above for why
 # CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
 # opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35/0xB1 are solved for exactly the three lengths they were
-# observed at (wireshark_dumps/save_to_gif_1/2/3.pcapng's final chunks) -- not
-# a general result, since no formula for CRC_INIT vs. length was found (see
-# final_chunk_cmd()).
+# captures. 0x71/0x35/0xB1/0x7F are solved for exactly the lengths they were
+# observed at (wireshark_dumps/save_to_gif_1/2/3/5.pcapng's final chunks) --
+# not a general result, since no formula for CRC_INIT vs. length was found
+# (see final_chunk_cmd()).
 CRC_INIT = {
     CMD_WRITE: 0xF104,
     CMD_COMMIT: 0xEEC4,
     CMD_FINAL: 0xD141,
     0x71: 0x1CB0,   # save_to_gif_1.pcapng final chunk (1386-byte payload)
     0x35: 0xD9F1,   # save_to_gif_2.pcapng final chunk (1582-byte payload)
-    0xB1: 0x9F4E,   # save_to_gif_3.pcapng final chunk (1450-byte payload)
+    0xB1: 0x9F4E,   # save_to_gif_3/4.pcapng final chunk (1450-byte payload)
+    0x7F: 0x6F7A,   # save_to_gif_5.pcapng final chunk (120-byte payload)
 }
 
 CHUNK_SIZE = 2048
@@ -185,7 +187,7 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
                                         # by build_packet() at this address.
 
 # "Save to GIF", confirmed from four independent captures --
-# wireshark_dumps/save_to_gif_1/2/3/4.pcapng: every capture's write/commit
+# wireshark_dumps/save_to_gif_1/2/3/4/5.pcapng: every capture's write/commit
 # packets are reproduced byte-for-byte by build_packet() at this address
 # (resolving one of the two undocumented slots the vendor binary references
 # -- 0x04200000 remains unidentified). Address only: there is no builder for
@@ -193,7 +195,7 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
 # see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
 
-# GIF container format, from four captures: save_to_gif_1.pcapng (a real
+# GIF container format, from five captures: save_to_gif_1.pcapng (a real
 # multi-frame photo GIF), save_to_gif_2.pcapng (a 3-frame solid
 # red/green/blue test GIF), save_to_gif_3.pcapng (a 2-frame test GIF, both
 # frames solid red except one white pixel at (0,0) -- top-left corner -- in
@@ -320,11 +322,96 @@ GIF_FLASH_BASE = 0x04240000
 # "...FF 00 FF 00" to "...FE 00 00 01", a distinct pattern rather than one
 # more flipped token, suggesting special handling at the very end of a frame.
 #
+# save_to_gif_5.pcapng is the first real crack in the entropy-coded content
+# itself. It reuses save_to_gif_3/4's solid-red frame 1 as a reference and
+# replaces frame 2 with a clean 50/50 vertical split (left half red, right
+# half blue -- 76800 of 153600 pixels different, vs. one single pixel in the
+# earlier captures), specifically to test whether the 528-byte fixed prefix
+# actually is fixed, independent of how much of the frame differs.
+#
+#   - 528 CONFIRMED FIXED even at 50% of the frame different: frame 2's
+#     content section is still exactly (its own size32) - 528 bytes, same as
+#     every earlier sample, now checked against something far more complex
+#     than a single pixel.
+#   - Frame 2's content section is exactly 1920 bytes = 480 rows * 4 bytes,
+#     and is a single 4-byte unit (b'\x9f\x00\x9f\x01') repeated all 480
+#     times, byte-for-byte identical every repeat (every row has the
+#     identical red/blue split, so this is consistent with the content being
+#     genuinely periodic per row rather than evidence of a literal per-row
+#     reset).
+#   - 0x9F = 159 = 160 - 1, exactly the length of each color half (160
+#     pixels) minus one. Strong evidence that (at least) the first byte of
+#     each 2-byte sub-unit is a run length, stored as length-1.
+#   - The second byte of each sub-unit is 0x00 for the red (first-pixel-
+#     color) half and 0x01 for the blue ("other" color) half -- consistent
+#     with indexing into the two-slot color palette described above (color
+#     0 = [16:18]'s color, color 1 = [18:20]'s). But this does NOT obviously
+#     reconcile with save_to_gif_3/4's behavior: there, the equivalent byte
+#     flips from 0x00 to 0x01 ONCE, at the point of divergence, and then
+#     stays 0x01 for hundreds of subsequent bytes spanning many rows, rather
+#     than alternating back to 0x00 for each new row the way a true
+#     per-run color index would. Whether that's a different code path for a
+#     single-pixel run vs. a half-frame run, or the byte means something
+#     else entirely that happens to look like a color index here, is not
+#     resolved.
+#   - The reference frame's own content section, now cross-checked precisely:
+#     1200 bytes = 600 repeats of b'\xff\x00' for 320x480 = 153600 solid-red
+#     pixels (previously only the repeating pattern was known, not the exact
+#     count) -- 600 tokens for 153600 pixels doesn't factor into a clean
+#     per-token pixel count either (153600 / 600 = 256, but the visible
+#     length byte is 0xFF = 255, not 256 -- off by one from the naive
+#     reading, same "length-1" convention as the 0x9F finding above would
+#     actually predict: 255+1=256 pixels per full token, 600*256=153600
+#     exactly).
+#
+# First live hardware experiment (no capture file -- the panel was plugged
+# into this Linux box directly, via aula_l99_screen.device.SerialTransport):
+#
+#   1. save_to_gif_5.pcapng's reconstructed blob was sent to GIF_FLASH_BASE
+#      with build_upload(), all 4 packets acked, and the panel correctly
+#      displayed the half-red/half-blue split. This is the first time any of
+#      our own code -- not just a passively observed Windows capture -- wrote
+#      to this address and had the *result* (not just the wire bytes)
+#      confirmed correct: real proof the TOC/sub-header/checksum
+#      understanding above is complete and correct, not just self-consistent
+#      with captures.
+#   2. One byte was then flipped in that known-good blob: the second byte of
+#      row-token 240 of 480 in frame 2's content, b'\x9f\x00\x9f\x01' ->
+#      b'\x9f\x00\x9f\x00' (the byte read above as the blue-half's color
+#      index). The TOC crc16_modbus checksum was recomputed and updated to
+#      match, and the modified blob was re-uploaded the same way -- all 4
+#      packets acked again, so nothing about the wire transfer itself failed.
+#   3. The panel did NOT show a localized change (e.g. row 240's right half
+#      turning red). It played a completely different, smaller GIF, centered
+#      on screen -- almost certainly leftover content from a previous,
+#      larger GIF upload still physically present in flash: this write only
+#      ever sent 4216 bytes, so it never touched (let alone erased) whatever
+#      a bigger prior upload had left further into that 128 KiB region.
+#      Re-uploading the original unmodified blob immediately restored the
+#      correct half-red/half-blue image, confirming the panel itself wasn't
+#      damaged -- the flipped byte caused a decode-time issue, not a
+#      transfer-time one.
+#
+# This revises the "per-run color index" reading of that byte from directly
+# above: a plain static index wouldn't explain jumping to unrelated,
+# differently-sized leftover content. More consistent with that byte
+# affecting how many bytes the decoder consumes for that token, or a related
+# stream-position/continuation quantity, so flipping it desynced the
+# decoder's read position for everything after it -- eventually running past
+# this upload's own 4216 bytes and into stale data from a previous, larger
+# upload that the flash write never overwrote. Also confirms flash is NOT
+# cleared/zeroed by a write shorter than what previously occupied the same
+# region, which matters for interpreting any future mutation experiment:
+# a "completely different result" can mean "read into old debris," not
+# "here is what this byte controls."
+#
 # Everything else in the sub-header, and the bulk of every frame's own
-# payload, is still undecoded. It is NOT raw RGB565 (frames are well under
-# width*height*2 bytes), not zlib, not raw-deflate, and its byte histogram is
-# heavily skewed toward small values (0x00 dominates, then 1-4, 28, 30). No
-# JPEG SOI marker (FFD8) appears anywhere in a frame.
+# payload, is still undecoded -- in particular, no confirmed model yet
+# reconciles the clean per-row run-length reading above with the persistent,
+# never-resetting flip seen in save_to_gif_3/4, or with the hardware result
+# just above. It is NOT raw RGB565 (frames are well under width*height*2
+# bytes), not zlib, not raw-deflate. No JPEG SOI marker (FFD8) appears
+# anywhere in a frame.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region

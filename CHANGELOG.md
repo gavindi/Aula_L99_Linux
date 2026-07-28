@@ -5,6 +5,90 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-07-29
+
+**"Save to GIF" research, first live hardware round.** The panel was plugged
+directly into this Linux box, moving from passive capture analysis to
+replay-and-mutate testing against real hardware. First result: strong
+confirmation of everything so far. Second result: a mutation experiment that
+didn't behave as predicted, but revealed something real about the flash and
+decoder behavior.
+
+### Verified
+- `save_to_gif_5.pcapng`'s reconstructed blob, sent directly to the panel via
+  `build_upload()` (all 4 packets acked), rendered the correct half-red/
+  half-blue split. This is the first confirmation that our *output* is
+  correct, not just that our wire bytes match a Windows capture -- validates
+  the TOC/sub-header/checksum understanding built up over rounds 1-5 against
+  the actual physical result, not just byte-comparison against captures.
+- Flipping one byte in that known-good blob (the blue half's color-index
+  byte in row-token 240 of 480) and re-uploading (recomputing the
+  `crc16_modbus` TOC checksum to match) did not produce a localized change.
+  The panel instead played a completely different, smaller GIF centered on
+  screen. Re-uploading the original blob immediately restored the correct
+  image, confirming the panel wasn't damaged -- this was a decode-time
+  effect of the flipped byte, not a transfer-time failure.
+- This is best explained by two things together: the flash write only
+  touches the bytes actually sent (4216 in this case), so it doesn't erase
+  whatever a previous, larger upload left further into that flash region;
+  and the flipped byte likely isn't a simple static per-run color index (a
+  plain index wouldn't explain jumping to unrelated, differently-sized
+  content) but something that affects how many bytes the decoder consumes,
+  so flipping it desynced the read position for everything downstream until
+  it ran past this upload's own data and into that leftover content.
+
+### Known gaps
+- The three pieces of evidence about that "second byte" -- `save_to_gif_5`'s
+  clean per-row alternation, `save_to_gif_3`/`4`'s persistent flip, and this
+  round's decoder-desync result -- are not yet reconciled into one model.
+- The entropy coding scheme is otherwise still not decoded. A working
+  hardware replay-and-mutate loop now exists, though, which should make
+  further experiments faster than capture-only analysis.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
+## [0.5.5] - 2026-07-29
+
+**"Save to GIF" research notes, round five.** A fifth capture
+(`wireshark_dumps/save_to_gif_5.pcapng`: the same red baseline frame, but
+frame 2 is a clean 50/50 vertical split -- left half red, right half blue --
+instead of a single differing pixel) confirms the 528-byte fixed prefix is
+genuinely content-independent, and produces the first real structural read
+on the entropy-coded section itself. Still no new command.
+
+### Verified
+- `0x04240000` re-confirmed a fifth time; `crc16_modbus()` re-confirmed as
+  the TOC checksum a fourth time.
+- 7th `cmd`/`CRC_INIT` data point: a 120-byte final chunk predicted
+  `cmd=0x7F` before checking, confirmed exact; its CRC init (`0x6F7A`) solved
+  and added to `CRC_INIT`.
+- **528-byte prefix confirmed genuinely fixed, not content-dependent.** With
+  50% of the frame now a different color (vs. one pixel in rounds 3-4), the
+  boundary between the fixed prefix and the entropy-coded section is still
+  exactly 528 bytes. This was the specific question this capture was
+  designed to answer.
+- **First real structure decoded in the entropy-coded section.** The
+  half-split frame's content is exactly 1920 bytes = 480 rows x 4 bytes, and
+  is a single 4-byte unit (`9F 00 9F 01`) repeated identically 480 times.
+  `0x9F` = 159 = 160-1, matching each color half's length minus one --
+  evidence the first byte of a 2-byte sub-unit is a run length stored as
+  length-1. The reference solid-red frame's content (1200 bytes = 600 x
+  `FF 00`) fits the same reading: 600 x (255+1) = 153600, exactly the pixel
+  count.
+
+### Known gaps
+- The second byte of each sub-unit (0/1 for the two color halves here) does
+  not obviously reconcile with `save_to_gif_3`/`4`'s behavior, where the
+  equivalent byte flips once at the point of divergence and stays flipped
+  for hundreds of subsequent bytes across many rows, rather than
+  alternating back per row. Whether it's a genuine per-run color index, a
+  persistent context flag, or something else that looks like both depending
+  on content, is unresolved.
+- The rest of the sub-header and entropy coding scheme is still not fully
+  decoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.4] - 2026-07-29
 
 **"Save to GIF" research notes, round four.** A fourth capture
