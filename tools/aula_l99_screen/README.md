@@ -7,11 +7,10 @@ here, and the two share no code.
 
 ## Status
 
-Image upload works, confirmed on real hardware for `--target photo-frame`
-(the default): 154 packets, every one acked by the panel, image visible
-afterwards. `--target background` uses a flash address confirmed only against
-captured traffic (see "Upload destinations" below) — not yet tried against
-real hardware. The panel may need a restart before it redraws from flash.
+Image upload works, confirmed on real hardware for both `--target
+photo-frame` (the default) and `--target background`: 154 packets, every one
+acked by the panel, image visible afterwards. The panel may need a restart
+before it redraws from flash.
 
 Not implemented: touch input, brightness, screen power, `--target gif`.
 
@@ -39,10 +38,10 @@ The vendor app's own string table (`Windows/AULA L99/language/1033.lan`
 to photo frame". Two are supported here, both using the identical wire
 protocol and image format below — only the flash base address differs:
 
-| `--target`    | flash base   | status                                            |
-|---------------|--------------|----------------------------------------------------|
-| `photo-frame` | `0x041E0000` | confirmed on hardware                               |
-| `background`  | `0x04180000` | confirmed against captures only, see below          |
+| `--target`    | flash base   | status                 |
+|---------------|--------------|------------------------|
+| `photo-frame` | `0x041E0000` | confirmed on hardware  |
+| `background`  | `0x04180000` | confirmed on hardware  |
 
 `--address` overrides `--target` if you want to experiment with other
 locations (e.g. the still-undocumented `0x4200000`/`0x4240000` slots the

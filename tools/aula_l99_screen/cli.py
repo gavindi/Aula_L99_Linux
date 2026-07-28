@@ -10,9 +10,8 @@ Usage:
 This is the touchscreen, not the keyboard: a USB-serial device, unrelated to
 the vendor HID protocol in aula_l99_hacky.
 
-`--upload` writes an image to the panel's flash. `--target photo-frame`
-(default) is confirmed working on real hardware; `--target background` uses
-an address verified only against captured traffic, not yet against hardware.
+`--upload` writes an image to the panel's flash, confirmed working on real
+hardware for both `--target photo-frame` (default) and `--target background`.
 The panel may need a restart before it redraws from flash.
 """
 from __future__ import annotations

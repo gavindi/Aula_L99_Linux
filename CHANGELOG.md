@@ -33,6 +33,8 @@ release adds a second, confirmed from newly captured traffic.
   `0x04180000` (commits at `0x04180000`, `0x041a0000`, `0x041c0000`), not
   `0x041E0000`. No extra "activate" command exists beyond the standard
   write/commit sequence and normal CDC-ACM serial-port open/close.
+- `--target background` confirmed on real hardware: the panel's background
+  changes as expected.
 
 ### Fixed
 - `protocol.FLASH_BASE`'s comment claimed it was "where the vendor writes the
@@ -40,10 +42,6 @@ release adds a second, confirmed from newly captured traffic.
   the comment was corrected as part of the rename.
 
 ### Known gaps
-- `--target background` has not been tried against real hardware — only
-  matched against captured traffic. Confirm it actually changes the panel's
-  background (and whether it needs a restart, like the photo-frame path) on
-  real hardware before relying on it.
 - "Save to GIF" (animated frames) is a third, uncaptured destination/protocol
   and remains unimplemented.
 - The `0x4200000`/`0x4240000` slots referenced in the vendor binary are still
