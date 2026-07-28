@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-07-29
+
+**"Save to GIF" research, hardware round two: revises 0.5.6's conclusion.**
+Two more single-byte mutation experiments against the same known-good
+`save_to_gif_5` blob, both reverted afterward. Together with 0.5.6's first
+experiment, the pattern across all three points somewhere different than
+0.5.6 concluded.
+
+### Verified
+- Same flag-byte flip as 0.5.6, but on row-token 479 of 480 (the very last
+  row -- the changed byte is literally the last byte of the whole upload):
+  same result as before, the identical different, smaller, centered GIF.
+- The opposite edit: row-token 240's *other* sub-token, flipped `0 → 1`
+  instead of `1 → 0` (claiming a run stops immediately rather than claiming
+  a nonexistent one continues -- the direction that should *shorten* a read
+  rather than lengthen it, if the byte governs consumed length). Same
+  result again.
+- Confirmed directly: the fallback animation is the *exact same* one all
+  three times, not three different-looking failures.
+- Each mutation was reversible; re-uploading the original blob restored the
+  correct half-red/half-blue image every time.
+
+### Changed
+- **Revises 0.5.6's leading theory.** Three mutations -- two positions
+  (including one with nothing downstream left to run off to), two opposite
+  directions -- all producing the identical result is a poor fit for
+  "decoder desyncs and reads whatever raw bytes are next in flash" (0.5.6's
+  conclusion): that predicts different-looking garbage per attempt, not one
+  identical fallback. It fits much better with the panel validating the
+  content somehow and falling back to a fixed, previously-cached animation
+  on any failure, rather than rendering bad data.
+
+### Known gaps
+- Single-byte fuzzing of this stream looks like it won't reveal more on its
+  own: the response is all-or-nothing, with no gradient between "slightly
+  wrong" and "very wrong" to follow.
+- What the content-level validation actually checks is unknown, and it
+  still isn't reconciled with `save_to_gif_5`'s clean per-row alternation or
+  `save_to_gif_3`/`4`'s persistent flip.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.6] - 2026-07-29
 
 **"Save to GIF" research, first live hardware round.** The panel was plugged

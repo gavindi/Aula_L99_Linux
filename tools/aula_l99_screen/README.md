@@ -98,32 +98,43 @@ round made the first real crack in it. What's known:
   many rows, rather than alternating back per row the way a clean color
   index would. Unresolved.
 
-**Live hardware test, no capture file this time.** With the panel plugged
+**Live hardware testing, no capture file this time.** With the panel plugged
 directly into Linux, `save_to_gif_5`'s reconstructed blob was sent straight
 to the panel with `build_upload()` and it rendered the correct half-red/
 half-blue split — the first time our own code's *output*, not just its wire
 bytes, was confirmed correct, rather than just matching a Windows capture.
-Then a single byte was flipped in that known-good blob (the blue half's
-color-index byte in one row token) and re-uploaded. Instead of a localized
-change, the panel played a completely different, smaller GIF, centered on
-screen — almost certainly leftover content from a previous, larger upload
-still sitting in that flash region, since this 4216-byte write never
-touched (or erased) whatever came after it. Re-uploading the original blob
-immediately restored the correct image, confirming the panel itself was
-fine — this was a decode-time effect, not a transfer-time one. That revises
-the "simple per-run color index" reading of that byte: a plain static index
-wouldn't explain jumping to unrelated, differently-sized content. More
-consistent with that byte controlling how many bytes the decoder consumes,
-so flipping it desynced the read position for everything after it until it
-ran past this upload's own data into old debris. Also confirms flash isn't
-cleared by a shorter write, which matters for interpreting any future
-mutation test.
 
-Making further progress from here means resolving that reconciliation —
-between the clean per-row reading in `save_to_gif_5`, the persistent flip in
-`save_to_gif_3`/`4`, and this hardware result — most likely through more
-careful, hardware-verified mutation experiments now that a working
-replay-and-observe loop exists, rather than passive capture analysis alone.
+From that known-good blob, three single-byte mutations were tried, each
+re-uploaded (with the TOC `crc16_modbus` checksum recomputed to match) and
+each reverted afterward by re-uploading the original:
+
+1. The blue half's flag byte in row-token 240 of 480, `1 → 0`.
+2. The same flag byte in row-token 479 — the very *last* row, where the
+   changed byte is literally the last byte of the whole upload.
+3. The *other* sub-token's flag in row-token 240, the opposite direction,
+   `0 → 1`.
+
+All three produced the exact same result: not a localized change, and not
+three different glitches, but the identical different, smaller GIF playing
+centered on screen every time. That's a poor fit for "wrong byte count
+consumed, decoder reads whatever's next in flash" — attempt 2 in particular
+shouldn't have had anywhere to run off to, being the last byte of the
+stream, and a raw overread would more plausibly land somewhere different
+each time rather than reproducing identically. It fits much better with the
+panel validating the uploaded content somehow (not the TOC-level checksum,
+which was correct each time and still acked normally) and falling back to a
+fixed, previously-cached animation on failure, rather than rendering bad
+data or erroring visibly.
+
+Practically, this means single-byte fuzzing of this stream is unlikely to
+reveal more on its own: the response is all-or-nothing — exactly right
+decodes correctly, anything else produces the identical fallback — with no
+gradient between "slightly wrong" and "very wrong" to follow. What
+"exactly right" actually requires (satisfying whatever that validation is)
+remains unknown, and reconciling it with `save_to_gif_5`'s clean per-row
+reading and `save_to_gif_3`/`4`'s persistent-flip behavior is still open.
+Progress from here probably needs a different angle than more ad hoc byte
+flips.
 
 ## Image format
 

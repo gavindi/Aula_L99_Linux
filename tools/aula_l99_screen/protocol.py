@@ -364,8 +364,8 @@ GIF_FLASH_BASE = 0x04240000
 #     actually predict: 255+1=256 pixels per full token, 600*256=153600
 #     exactly).
 #
-# First live hardware experiment (no capture file -- the panel was plugged
-# into this Linux box directly, via aula_l99_screen.device.SerialTransport):
+# Live hardware experiments (no capture file -- the panel was plugged into
+# this Linux box directly, via aula_l99_screen.device.SerialTransport):
 #
 #   1. save_to_gif_5.pcapng's reconstructed blob was sent to GIF_FLASH_BASE
 #      with build_upload(), all 4 packets acked, and the panel correctly
@@ -378,32 +378,49 @@ GIF_FLASH_BASE = 0x04240000
 #   2. One byte was then flipped in that known-good blob: the second byte of
 #      row-token 240 of 480 in frame 2's content, b'\x9f\x00\x9f\x01' ->
 #      b'\x9f\x00\x9f\x00' (the byte read above as the blue-half's color
-#      index). The TOC crc16_modbus checksum was recomputed and updated to
-#      match, and the modified blob was re-uploaded the same way -- all 4
-#      packets acked again, so nothing about the wire transfer itself failed.
+#      index/second-run flag). TOC crc16_modbus recomputed and updated to
+#      match; re-uploaded the same way -- all 4 packets acked again, so
+#      nothing about the wire transfer itself failed.
 #   3. The panel did NOT show a localized change (e.g. row 240's right half
 #      turning red). It played a completely different, smaller GIF, centered
-#      on screen -- almost certainly leftover content from a previous,
-#      larger GIF upload still physically present in flash: this write only
-#      ever sent 4216 bytes, so it never touched (let alone erased) whatever
-#      a bigger prior upload had left further into that 128 KiB region.
-#      Re-uploading the original unmodified blob immediately restored the
-#      correct half-red/half-blue image, confirming the panel itself wasn't
-#      damaged -- the flipped byte caused a decode-time issue, not a
-#      transfer-time one.
+#      on screen.
+#   4. Same edit position, but flipping row-token 479 of 480 instead -- the
+#      very LAST row, whose changed byte is literally the last byte of the
+#      whole upload. If the effect were "wrong byte count consumed, runs off
+#      the end of our own data and into whatever flash holds next," this
+#      position should have had nowhere left to run off to. Same result as
+#      step 3 anyway: the identical different, smaller, centered GIF.
+#   5. A third edit, same row 240 position as step 2 but the OPPOSITE flag
+#      (the FIRST sub-token's byte, 0x00 -> 0x01 -- claiming that run stops
+#      immediately rather than claiming a nonexistent one continues). If the
+#      byte's role were "how many more bytes to consume," this direction
+#      should *shorten* the read for that row rather than lengthen it, and
+#      should stay safely inside our own 4216-byte upload. Same result
+#      again: the identical different, smaller, centered GIF, confirmed to
+#      be the *exact same* animation each of the three times, not three
+#      different glitches.
+#   Every one of these was reversible: re-uploading the original unmodified
+#   blob immediately restored the correct half-red/half-blue image each
+#   time, confirming the panel itself was never damaged by any of this.
 #
-# This revises the "per-run color index" reading of that byte from directly
-# above: a plain static index wouldn't explain jumping to unrelated,
-# differently-sized leftover content. More consistent with that byte
-# affecting how many bytes the decoder consumes for that token, or a related
-# stream-position/continuation quantity, so flipping it desynced the
-# decoder's read position for everything after it -- eventually running past
-# this upload's own 4216 bytes and into stale data from a previous, larger
-# upload that the flash write never overwrote. Also confirms flash is NOT
-# cleared/zeroed by a write shorter than what previously occupied the same
-# region, which matters for interpreting any future mutation experiment:
-# a "completely different result" can mean "read into old debris," not
-# "here is what this byte controls."
+# Three single-byte mutations, two different byte positions, two opposite
+# edit directions, and all three produced the exact same result -- not
+# three different-looking failures. That's a poor fit for "wrong byte count
+# consumed, decoder desyncs and reads whatever raw bytes happen to be next
+# in flash" (step 5 in particular shouldn't have anywhere to run off to, and
+# a raw overread landing on different offsets each time would more plausibly
+# look different per attempt, not identical). It fits much better with: the
+# panel validates the uploaded content in some way (a checksum over the
+# decoded data, a consistency check on the run structure, or similar) that
+# is not the TOC-level crc16_modbus (that one was recomputed correctly each
+# time and the transfer still acked normally), and on failure falls back to
+# a fixed, previously-cached animation rather than rendering the bad data or
+# erroring visibly. Practically, this means single-byte fuzzing of this
+# stream is unlikely to reveal further structure on its own: the response is
+# all-or-nothing (exactly right decodes correctly; anything else produces
+# the identical fallback), with no gradient to follow between "slightly
+# wrong" and "very wrong." What actually constitutes "exactly right" --
+# the validation being satisfied -- is not understood.
 #
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded -- in particular, no confirmed model yet
