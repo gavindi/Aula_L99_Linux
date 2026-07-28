@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-29
+
+**"Save to GIF" row-grammar SOLVED: it's a continuous, row-boundary-
+crossing run-length encoding.** A seventh capture -- a real red/blue/red
+vertical triple stripe, same proportions as the hand-built 3-run row test
+that failed in 0.5.9 -- supplies the missing piece and replaces every
+row-token theory from the last several rounds with one complete, simple
+model. Minor version bump: this is the most significant resolution of the
+GIF investigation to date, even though `--target gif` still doesn't exist.
+
+### Verified
+- The frame's pixels are walked in **raster order as one continuous
+  sequence** -- not reset or re-paired at row boundaries. The stripe
+  frame's content decodes to exactly 961 `(length, flag)` tokens summing to
+  153600 (320x480) pixels: `(100,flag0)`, then `(120,flag1),(200,flag0)`
+  repeated 479 times, then a final `(100,flag0)`. That is exactly what a
+  row's trailing red run merging with the next row's leading red run (both
+  100px, both red, visited back-to-back in raster order) predicts -- only
+  the very first and very last red segments have nothing to merge with.
+- Each token is `(length-1, flag)`, as established in 0.5.5/0.5.8. A run
+  longer than 256px (the 1-byte length field's max) becomes multiple
+  consecutive tokens sharing the SAME flag -- confirmed against the clean
+  solid-red frame's 600x `(255, flag=0)` content: chained pieces of one
+  giant run, not 600 independent runs.
+- `flag` is the color index established in 0.5.10/0.5.11. It only changes
+  when the actual color changes to a new run; chained continuation pieces
+  of the same run keep the same flag.
+- 9th `cmd`/`CRC_INIT` data point: a 122-byte final chunk predicted
+  `cmd=0x81` before checking, confirmed exact; its CRC init (`0x13B0`)
+  solved and added to `CRC_INIT`.
+
+### Changed
+- **This reconciles `save_to_gif_3`/`4`'s persistent, never-resetting flip**
+  (open again as of 0.5.14/0.5.15): a solid-red image with one white pixel
+  decodes as one tiny run (the white pixel) followed by one enormous red
+  run (nearly the whole image), chained into hundreds of same-flag pieces
+  just like the fully-solid case. The flag "staying flipped" was never a
+  special persistent mode -- it's just many chained pieces of one giant run.
+- Every row-token theory from 0.5.8 through 0.5.13 (2-tokens-per-row
+  structure, per-row color-must-differ rule, frame-index/delta hypotheses)
+  is superseded by this single continuous-RLE model, which fits all of that
+  evidence at once without needing separate rules for each observation.
+
+### Known gaps
+- The fixed 528-byte prefix's actual contents/purpose are still unknown.
+- A couple of sub-header bytes ([13], [20:22]) remain unidentified.
+- Whether more than 2 palette colors is possible is untested.
+- `save_to_gif_2`'s solid frames encode far less efficiently (4151 varied
+  tokens) than `save_to_gif_3`/`4`/`5`'s clean 600 uniform tokens for the
+  same 153600-pixel solid color -- possibly that source image wasn't
+  perfectly flat, not investigated.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`: even with the run-length grammar solved, safely
+  constructing new content needs the 528-byte prefix decoded too.
+
 ## [0.5.15] - 2026-07-29
 
 **"Save to GIF" research: padding confirmed as the cause of 0.5.13's

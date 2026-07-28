@@ -137,20 +137,20 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 8 independent samples across 6 capture files:
+    byte. Confirmed against 9 independent samples across 7 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
     chunk (11 bytes -> cmd=0x12=CMD_FINAL), and wireshark_dumps/
-    save_to_gif_1/2/3/5/6.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes
-    -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes -> 0x23 --
-    every one predicted exactly by this formula before being checked;
-    save_to_gif_4.pcapng repeats save_to_gif_3's 1450-byte/0xB1 case rather
-    than adding a new one).
+    save_to_gif_1/2/3/5/6/7.pcapng final chunks (1386 bytes -> 0x71, 1582
+    bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes -> 0x23,
+    122 bytes -> 0x81 -- every one predicted exactly by this formula before
+    being checked; save_to_gif_4.pcapng repeats save_to_gif_3's
+    1450-byte/0xB1 case rather than adding a new one).
 
     This only gives you the cmd byte. There is no known general formula for
     the matching CRC_INIT entry (two hypotheses -- init as a function of just
     this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 8 known (cmd, init) pairs and neither held), so calling this
+    against all 9 known (cmd, init) pairs and neither held), so calling this
     with a payload length outside CRC_INIT will raise in crc16_packet().
     """
     return (CMD_WRITE + payload_len) % 256
@@ -159,10 +159,10 @@ def final_chunk_cmd(payload_len: int) -> int:
 # Each command uses its own CRC init; see final_chunk_cmd() above for why
 # CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
 # opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35/0xB1/0x7F/0x23 are solved for exactly the lengths they
-# were observed at (wireshark_dumps/save_to_gif_1/2/3/5/6.pcapng's final
-# chunks) -- not a general result, since no formula for CRC_INIT vs. length
-# was found (see final_chunk_cmd()).
+# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81 are solved for exactly the lengths
+# they were observed at (wireshark_dumps/save_to_gif_1/2/3/5/6/7.pcapng's
+# final chunks) -- not a general result, since no formula for CRC_INIT vs.
+# length was found (see final_chunk_cmd()).
 CRC_INIT = {
     CMD_WRITE: 0xF104,
     CMD_COMMIT: 0xEEC4,
@@ -172,6 +172,7 @@ CRC_INIT = {
     0xB1: 0x9F4E,   # save_to_gif_3/4.pcapng final chunk (1450-byte payload)
     0x7F: 0x6F7A,   # save_to_gif_5.pcapng final chunk (120-byte payload)
     0x23: 0xA9BB,   # save_to_gif_6.pcapng final chunk (540-byte payload)
+    0x81: 0x13B0,   # save_to_gif_7.pcapng final chunk (122-byte payload)
 }
 
 CHUNK_SIZE = 2048
@@ -565,11 +566,53 @@ GIF_FLASH_BASE = 0x04240000
 # without it -- not yet done, since it would need a new CRC_INIT entry
 # (for a 122-byte final chunk) that no capture has provided.
 #
-# Everything else in the sub-header, and the bulk of every frame's own
-# payload, is still undecoded -- in particular, solid-color frames'
-# completely different byte-level structure (b'\xff\x00' repeated ~600
-# times, no per-row pairing at all) compared to this row-token grammar is
-# still unexplained. It is NOT
+# === RESOLVED: the "row-grammar" is a continuous, row-boundary-crossing
+# === run-length encoding. save_to_gif_7.pcapng supplied exactly that
+# === 122-byte-final-chunk capture (a red/blue/red vertical triple stripe,
+# === 100/120/100 px, same proportions as the earlier failed hand-built
+# === attempt) and, decoded in full, replaces every "row token" theory
+# === above with a complete, simple model that fits all prior evidence:
+#
+#   - The frame's pixel content is walked in raster order (row-major, left
+#     to right, top to bottom) as ONE continuous sequence -- NOT reset or
+#     re-paired at row boundaries. Confirmed exactly: this stripe frame's
+#     content decodes as 961 (length, flag) tokens whose lengths sum to
+#     exactly 153600 (320*480), and whose runs are NOT "2 (or 3) per row" --
+#     a run's trailing pixels on one row merge with the next row's leading
+#     pixels whenever they're the same color, since raster order visits them
+#     back-to-back with nothing in between. Token sequence: (100,flag0),
+#     then (120,flag1),(200,flag0) repeated 479 times, then a final
+#     (100,flag0) -- exactly what merging predicts: 100 (row 0's leading
+#     red) + 120 (its blue middle) + [100 (row 0's trailing red) fused with
+#     100 (row 1's leading red) = 200] + 120 (row 1's blue) + 200 (fused
+#     row1/row2 red) + ... + a final unfused 100 (row 479's trailing red,
+#     nothing after it to merge with).
+#   - Each token is (length-1, flag), as established earlier (0.5.5, 0.5.8).
+#     A run longer than 256 px (the 1-byte length field's max) is split into
+#     multiple consecutive tokens that all share the SAME flag -- confirmed
+#     against save_to_gif_3/4/5's clean solid-red frame: exactly 600 tokens,
+#     ALL (255, flag=0), sum 600*256=153600. These are chained pieces of one
+#     giant run, not 600 independent runs.
+#   - flag is a color index (0 or 1) into the sub-header's two RGB565 slots,
+#     as established in 0.5.10/0.5.11. It only changes when the actual pixel
+#     color changes to a genuinely new run; chained continuation pieces of
+#     the same run keep the same flag (hence "all (255,0)" for a solid
+#     frame, not alternating).
+#
+# This also finally reconciles save_to_gif_3/4's persistent, never-resetting
+# flip (0.5.3/0.5.4, unexplained again as of 0.5.14/0.5.15): a solid-red
+# image with one white pixel decodes as one tiny run (the white pixel,
+# flag0) followed by one enormous red run (nearly the whole image, flag1),
+# chained into ~600 consecutive same-flag pieces just like the fully-solid
+# case -- the flag "staying flipped" for hundreds of tokens is just many
+# chained pieces of that single giant run, not a special persistent mode.
+#
+# What's still open: the fixed 528-byte prefix's actual contents/purpose,
+# the unidentified sub-header bytes ([13], [20:22]), whether more than 2
+# palette colors is possible, and gif_2's solid frames being encoded far
+# less efficiently (4151 varied tokens for the same 153600-pixel solid red
+# that save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
+# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 

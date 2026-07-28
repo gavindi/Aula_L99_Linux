@@ -50,28 +50,30 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from six captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from seven captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
 to `(319,479)` — bottom-right), `save_to_gif_5.pcapng` (the same red
 frame 1, but frame 2 is a clean 50/50 vertical split — left half red, right
-half blue), and `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
-where the split frame repeats unchanged). There is still no `--target gif`,
+half blue), `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
+where the split frame repeats unchanged), and `save_to_gif_7.pcapng` (a
+red/blue/red vertical triple stripe). There is still no `--target gif`,
 because the pixel payload format isn't understood well enough to safely
-construct one, though hardware testing has made real progress. What's known:
+construct one, but the core row-grammar is now solved (see below). What's
+known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed against 6 distinct
-  GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`) plus
-  the three previously-known values. There's no known general formula for
-  the matching CRC init, though, so this doesn't unlock arbitrary upload
-  sizes — see `final_chunk_cmd()` in `protocol.py`.
+  (payload_len % 256)`, not a fixed opcode — confirmed against 7 distinct
+  GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`,
+  `0x81`) plus the three previously-known values. There's no known general
+  formula for the matching CRC init, though, so this doesn't unlock arbitrary
+  upload sizes — see `final_chunk_cmd()` in `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame). Its
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
-  already used for the single-image header, confirmed byte-exact in five of
-  the six captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
+  already used for the single-image header, confirmed byte-exact in six of
+  the seven captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
   is a constant format/version tag, byte 13 is the real frame count.
 - Each frame has its own ~24-byte sub-header, including the self-referential
   frame byte length and a pair of RGB565 color fields: one holds the color of
@@ -242,13 +244,47 @@ That makes padding's status genuinely inconsistent rather than simply
 2-frame blob with no other change) rendered correctly, while this padded
 3-frame content did not, despite using the identical technique. Padding
 isn't reliably safe for further experiments — prefer real captures or
-exact, unpadded packetization over it going forward. `save_to_gif_3`/`4`'s
-persistent flip is unexplained again — the delta-mode reframing of it
-doesn't have a basis anymore, and nothing else has replaced it yet. The
-3-stripe row-count experiment (0.5.9) used the same padding technique and
-should be distrusted pending a re-test without it — not yet done, since it
-would need a new `CRC_INIT` entry (for a 122-byte final chunk) that no
-capture has provided.
+exact, unpadded packetization over it going forward.
+
+### RESOLVED: the row-grammar is a continuous run-length encoding
+
+`save_to_gif_7.pcapng` supplied exactly the missing piece — a real capture
+with a 122-byte final chunk, same length as the earlier failed hand-built
+3-stripe attempt. It's a red/blue/red vertical triple stripe (100/120/100
+px, same proportions as that earlier attempt), and decoding it in full
+replaces every row-token theory above with one simple, complete model:
+
+- The frame's pixels are walked in raster order as **one continuous
+  sequence** — not reset or re-paired at row boundaries. This stripe
+  frame's content decodes to exactly 961 `(length, flag)` tokens summing to
+  153600 (320×480) pixels, and the run lengths prove it: `(100,flag0)`,
+  then `(120,flag1),(200,flag0)` repeated 479 times, then a final
+  `(100,flag0)`. That's exactly what you'd get if a row's trailing red
+  merges with the next row's leading red into one 200px run, every time,
+  since raster order visits them back-to-back with nothing in between —
+  only the very first and very last red segments stay unmerged, having
+  nothing to merge with.
+- Each token is `(length−1, flag)`, as established earlier. A run longer
+  than 256px (the 1-byte length field's max) becomes multiple consecutive
+  tokens sharing the **same** flag — confirmed against the solid-red
+  frame's clean 600× `(255, flag=0)` content: chained pieces of one giant
+  run, not 600 independent runs.
+- `flag` is the color index established in earlier rounds. It only changes
+  when the actual color changes to a new run; chained continuation pieces
+  of the same run keep the same flag.
+
+This also finally reconciles `save_to_gif_3`/`4`'s persistent, never-
+resetting flip: a solid-red image with one white pixel decodes as one tiny
+run (the white pixel) followed by one enormous red run (nearly the whole
+image), chained into hundreds of same-flag pieces just like the fully-solid
+case. The flag "staying flipped" was never a special persistent mode — it's
+just many chained pieces of one giant run.
+
+Still open: the fixed 528-byte prefix's actual contents/purpose, a couple
+unidentified sub-header bytes, whether more than 2 palette colors is
+possible, and why `save_to_gif_2`'s solid frames encode far less
+efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s clean 600 —
+possibly that source image wasn't perfectly flat).
 
 ## Image format
 
