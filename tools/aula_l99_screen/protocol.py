@@ -123,19 +123,50 @@ def build_image_file(rgb_rows: bytes, width: int = PANEL_WIDTH,
 # The device acks every packet with ASCII "OK".
 TRANSFER_MAGIC = bytes([0x5A, 0xA5])
 CMD_WRITE = 0x07
-CMD_FINAL = 0x12
-CMD_COMMIT = 0x0B
+CMD_FINAL = 0x12       # = final_chunk_cmd(11); the value for an 11-byte final
+                        # chunk specifically, not a general "final" opcode --
+                        # see final_chunk_cmd() below.
+CMD_COMMIT = 0x0B      # = final_chunk_cmd(4); commit payloads are always the
+                        # 4-byte region byte count, so this is always what
+                        # the formula gives -- not an independent opcode.
 CONST_DATA = 0x64
 CONST_COMMIT = 0x66
 
-# Each command uses its own CRC init. Verified against all 308 packets in both
-# upstream captures; a single init does not fit all three.
-CRC_INIT = {CMD_WRITE: 0xF104, CMD_COMMIT: 0xEEC4, CMD_FINAL: 0xD141}
 
-# wireshark_dumps/save_to_gif_1.pcapng's final short data chunk uses cmd
-# 0x71, not CMD_FINAL (0x12), for otherwise identical const/framing. Meaning
-# unconfirmed (only one capture, no second sample to cross-check); not used
-# by build_upload(), which only ever emits CMD_FINAL.
+def final_chunk_cmd(payload_len: int) -> int:
+    """cmd byte for a non-full write chunk, as a function of its payload length.
+
+    Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
+    byte. Confirmed against 5 independent samples across 3 capture files:
+    2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
+    4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
+    chunk (11 bytes -> cmd=0x12=CMD_FINAL), and both wireshark_dumps/
+    save_to_gif_1/2.pcapng final chunks (1386 bytes -> 0x71, 1582 bytes ->
+    0x35 -- both predicted exactly by this formula before being checked).
+
+    This only gives you the cmd byte. There is no known general formula for
+    the matching CRC_INIT entry (two hypotheses -- init as a function of just
+    this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
+    against all 5 known (cmd, init) pairs and neither held), so calling this
+    with a payload length outside CRC_INIT will raise in crc16_packet().
+    """
+    return (CMD_WRITE + payload_len) % 256
+
+
+# Each command uses its own CRC init; see final_chunk_cmd() above for why
+# CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
+# opcodes. Verified against all 308 packets in both upstream photo-frame
+# captures. 0x71/0x35 are solved for exactly the two lengths they were
+# observed at (wireshark_dumps/save_to_gif_1.pcapng's 1386-byte final chunk,
+# save_to_gif_2.pcapng's 1582-byte one) -- not a general result, since no
+# formula for CRC_INIT vs. length was found (see final_chunk_cmd()).
+CRC_INIT = {
+    CMD_WRITE: 0xF104,
+    CMD_COMMIT: 0xEEC4,
+    CMD_FINAL: 0xD141,
+    0x71: 0x1CB0,   # save_to_gif_1.pcapng final chunk (1386-byte payload)
+    0x35: 0xD9F1,   # save_to_gif_2.pcapng final chunk (1582-byte payload)
+}
 
 CHUNK_SIZE = 2048
 REGION_SIZE = 0x20000          # 128 KiB; a commit follows each filled region
@@ -151,43 +182,75 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
                                         # packets are reproduced byte-for-byte
                                         # by build_packet() at this address.
 
-# "Save to GIF", confirmed from wireshark_dumps/save_to_gif_1.pcapng: its 157
-# write/commit packets are also reproduced byte-for-byte by build_packet() at
-# this address (resolving one of the two undocumented slots the vendor binary
-# references -- 0x04200000 remains unidentified). Address only: there is no
-# builder for this format. The bytes written there are NOT build_image_file()
-# output -- see the GIF container notes below.
+# "Save to GIF", confirmed from wireshark_dumps/save_to_gif_1.pcapng AND
+# save_to_gif_2.pcapng independently: both captures' write/commit packets are
+# reproduced byte-for-byte by build_packet() at this address (resolving one
+# of the two undocumented slots the vendor binary references --
+# 0x04200000 remains unidentified). Address only: there is no builder for
+# this format. The bytes written there are NOT build_image_file() output --
+# see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
 
-# GIF container format (from the single save_to_gif_1.pcapng capture --
-# NOT cross-checked against a second sample, unlike the CRC inits above).
-# The blob written to GIF_FLASH_BASE is a header of N * 20-byte entries (one
-# per frame; N=3 in the capture, comfortably under the vendor's own
-# gif_maxframes="200" and gif_headlength="256" in layouts/rgb-keyboard.xml),
-# followed by the frames' payload data. Per-entry layout, little-endian:
+# GIF container format, from two captures: save_to_gif_1.pcapng (a real
+# multi-frame photo GIF) and save_to_gif_2.pcapng (a deliberately simple
+# 3-frame solid red/green/blue test GIF, captured specifically to make
+# further progress here -- it did). The blob written to GIF_FLASH_BASE is a
+# header of N * 20-byte entries (one per frame; N=3 in both captures,
+# comfortably under the vendor's own gif_maxframes="200" and
+# gif_headlength="256" in layouts/rgb-keyboard.xml), followed by the frames'
+# payload data. Per-entry layout, little-endian:
 #
 #     [0:4]   uint32   this frame's absolute byte offset into the blob
-#                       (confirmed against the actual write-chunk addresses)
+#                       (confirmed against the actual write-chunk addresses,
+#                       in both captures)
 #     [4:8]   uint32   total payload size after the header (same value
-#                       repeated in every entry, not truly per-frame)
-#     [8:10]  uint16   width (320 in the capture)
-#     [10:12] uint16   height (480 in the capture)
-#     [12]    u8       frame count (3)
-#     [13]    u8       unidentified (also 3 -- coincidence or real field is
-#                       unclear from one sample)
+#                       repeated in every entry, not truly per-frame;
+#                       confirmed in both captures)
+#     [8:10]  uint16   width (320 in both captures)
+#     [10:12] uint16   height (480 in both captures)
+#     [12]    u8       frame count (3 in both captures)
+#     [13]    u8       unidentified (also 3 in both captures -- coincidence
+#                       or real field is still unclear)
 #     [14:16] u16      0x0000, unidentified/reserved
-#     [16:18] u16      50 -- plausibly a delay, unit unconfirmed (likely
-#                       centiseconds, matching GIF's own convention)
-#     [18:20] u16      0xdb63, identical in every entry -- plausibly a
-#                       checksum over the whole post-header payload
-#                       (parallel to crc16_modbus() below) but unverified
+#     [16:18] u16      50 in both captures -- plausibly a delay, unit
+#                       unconfirmed (likely centiseconds, matching GIF's own
+#                       convention); both test animations may just share the
+#                       vendor UI's default
+#     [18:20] u16      SOLVED: crc16_modbus() -- the same CRC16/MODBUS
+#                       function already used for the single-image header
+#                       above -- computed over the payload following this
+#                       header. Verified byte-exact in save_to_gif_2.pcapng
+#                       (0x3c73 both ways). Identical in every entry within
+#                       one capture (it's a whole-payload field, not truly
+#                       per-frame) but differs between the two captures, as
+#                       expected for a real checksum.
 #
-# Each frame's own payload is NOT raw RGB565: at 101548-106996 bytes it's
-# well under 320*480*2 = 307200, its byte histogram is heavily skewed toward
-# small values (0x00 dominates, then 1-4, 28, 30), and it is neither zlib nor
-# raw-deflate. Some custom compressed or delta-coded scheme -- not decoded.
-# Cracking it needs targeted follow-up captures (e.g. a solid-color 1-frame
-# GIF, then a 2-frame GIF differing by one pixel) that aren't available yet.
+# Each frame has its own 20-ish-byte sub-header (offsets relative to the
+# frame's own start, i.e. blob[frame_offset:]), decoded by diffing
+# save_to_gif_2's three solid-color frames -- two of which are byte-identical
+# for ~8800 bytes except one small window, which is what pinned these down:
+#
+#     [8:12]  uint32   this frame's own byte length, self-referential --
+#                       confirmed exact for all 6 frames across both captures
+#     [18:20] uint16   the frame's dominant/fill color, RGB565: confirmed
+#                       exactly 0xF800 (pure red), 0x001F (pure blue), 0x07E0
+#                       (pure green) for save_to_gif_2's three test frames
+#     [20:22] uint16   a close-but-different variant of the same color
+#                       (0xC800, 0x0019, 0x07E6 respectively) -- purpose
+#                       unidentified
+#
+# Everything else in the sub-header, and the bulk of every frame's own
+# payload, is still undecoded. It is NOT raw RGB565 (frames are well under
+# width*height*2 bytes), not zlib, not raw-deflate, and its byte histogram is
+# heavily skewed toward small values (0x00 dominates, then 1-4, 28, 30) --
+# consistent with some compressed or delta-coded scheme, not raw pixels. No
+# JPEG SOI marker (FFD8) appears anywhere in a frame. The strongest clue so
+# far: two different solid-color frames in save_to_gif_2 are byte-identical
+# for thousands of bytes except that one 4-byte window carrying the color --
+# suggestive of a transform/DCT-style coding where a flat image produces a
+# near-constant coefficient stream that differs mainly in a DC/base-color
+# term, rather than of simple run-length encoding, but this is a hypothesis,
+# not a confirmed finding.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region
@@ -248,7 +311,12 @@ def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]
         if take == CHUNK_SIZE:
             packets.append(build_packet(CMD_WRITE, CONST_DATA, address, chunk))
         else:
-            packets.append(build_packet(CMD_FINAL, CONST_DATA, address, chunk))
+            # Only ever 11 bytes for the 320x480 images this module builds,
+            # giving CMD_FINAL -- see final_chunk_cmd() for why this isn't a
+            # fixed opcode in general. A different image size would need a
+            # CRC_INIT entry for whatever cmd this computes to; none is
+            # known, so build_packet() raises rather than sending a bad CRC.
+            packets.append(build_packet(final_chunk_cmd(len(chunk)), CONST_DATA, address, chunk))
         offset += take
         region_bytes += take
 

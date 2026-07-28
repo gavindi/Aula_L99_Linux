@@ -49,30 +49,42 @@ the vendor binary references, `0x04200000`, is still unidentified.
 
 ### Save to GIF (unimplemented)
 
-`0x04240000` is confirmed as the "Save to GIF" flash address, from
-`wireshark_dumps/save_to_gif_1.pcapng` — but there is no `--target gif`,
-because the payload format isn't understood well enough to safely construct
-one. What's known:
+`0x04240000` is confirmed as the "Save to GIF" flash address — independently,
+from two captures, `wireshark_dumps/save_to_gif_1.pcapng` (a real photo GIF)
+and `save_to_gif_2.pcapng` (a 3-frame solid red/green/blue test GIF captured
+specifically to make further progress, which it did) — but there is still no
+`--target gif`, because the pixel payload format isn't understood well enough
+to safely construct one. What's known:
 
-- Same wire protocol/framing as the two targets above (same magic, write/
-  commit/CRC-init machinery), except the final short data chunk uses `cmd
-  0x71` instead of `0x12` — meaning unconfirmed.
+- Same wire protocol/framing as the two targets above. The final short data
+  chunk's `cmd` byte, previously a mystery (`0x71` in the first capture), is
+  now solved: `cmd = CMD_WRITE + (payload_len % 256)`, not a fixed opcode —
+  confirmed exactly against both GIF captures' final chunks (`0x71` and
+  `0x35`) plus the three previously-known values. There's no known general
+  formula for the matching CRC init, though, so this doesn't unlock arbitrary
+  upload sizes — see `final_chunk_cmd()` in `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame: byte
   offset, total payload size, `320x480` dimensions, frame count, a likely
-  delay field, and a likely-but-unverified checksum) followed by the frames'
-  data. See the comment block above `GIF_FLASH_BASE` in `protocol.py` for the
-  full field-by-field breakdown.
-- **Each frame's pixel data is not raw RGB565.** It's roughly a third smaller
-  than a full `320x480` RGB565 frame, isn't zlib/deflate, and its byte
-  distribution looks like a run-length or delta-coded scheme, not pixels.
-  Undecoded.
+  delay field). Its per-entry checksum field is now **solved**: it's
+  `crc16_modbus()` — the same function already used for the single-image
+  header — over the payload following the header, confirmed byte-exact.
+- Each frame also has its own sub-header. Two fields are confirmed: the
+  frame's own byte length (self-referential, exact in all 6 frames across
+  both captures), and — from diffing the second capture's three solid-color
+  frames — the frame's dominant/fill color in RGB565 (exactly pure red/
+  blue/green for the three test frames). See the comment block above
+  `GIF_FLASH_BASE` in `protocol.py` for the full field-by-field breakdown.
+- **Each frame's pixel data is still not decoded.** It's not raw RGB565, not
+  zlib/deflate, and has no JPEG SOI marker. The strongest clue: two
+  differently-colored solid frames in the second capture are byte-identical
+  for thousands of bytes except one small window carrying the color —
+  suggestive of transform/DCT-style coding rather than simple run-length
+  encoding, but unconfirmed.
 
-Only one capture exists for this format, so — unlike the CRC inits below,
-which were solved from two independent samples — there's no second data
-point to cross-check a hypothesis against. Making progress here needs more
-targeted captures: e.g. a single solid-color 1-frame GIF (to see the
-degenerate case) and a 2-frame GIF differing by one pixel (to isolate how a
-run or diff is expressed).
+Making further progress needs more targeted captures — e.g. a 2-frame GIF
+differing by one pixel, to isolate how a delta or coefficient is expressed —
+the same way the solid-color capture above already resolved the checksum and
+color-field questions.
 
 ## Image format
 

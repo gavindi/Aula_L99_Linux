@@ -5,6 +5,64 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-07-29
+
+**"Save to GIF" research notes, round two.** A second, deliberately simple
+capture (`wireshark_dumps/save_to_gif_2.pcapng`: solid red/green/blue
+frames) cracks the final-chunk `cmd` byte, the TOC checksum, and part of the
+per-frame sub-header. Still no new command — the bulk of each frame's pixel
+payload remains undecoded — but this closes several of 0.5.1's open
+questions and fixes a latent bug it left in `build_upload()`.
+
+### Fixed
+- `build_upload()` always used the fixed `CMD_FINAL` (`0x12`) for a final
+  short chunk, correct only because every image this module has ever built
+  is `320x480` and therefore always has the same 11-byte remainder. Any
+  other image size would silently send the wrong `cmd` byte (and thus the
+  wrong CRC) for its final chunk. Now computed via `final_chunk_cmd()`
+  (below), which fails loudly with `ValueError` for a length with no known
+  `CRC_INIT` entry instead of silently sending bad data. No behavior change
+  for the `320x480` path this module actually uses — verified by re-running
+  the byte-for-byte check against both `save_to_bkg_1/2.pcapng` captures.
+
+### Verified
+- **The final-chunk `cmd` byte is solved**: `cmd = CMD_WRITE + (payload_len %
+  256)`, not a fixed opcode. `CMD_COMMIT` (`0x0B`) and `CMD_FINAL` (`0x12`)
+  turn out to be ordinary instances of this formula, not independent
+  opcodes — coincidentally constant because commit payloads are always 4
+  bytes and this module's images always leave an 11-byte remainder. Checked
+  exactly against 5 independent samples across 3 capture files, including
+  both GIF captures' final chunks (`0x71` for 1386 bytes, `0x35` for 1582
+  bytes) predicted correctly before being checked.
+  - No general formula for the matching `CRC_INIT` was found: two
+    hypotheses (init as a function of the cmd byte alone, or of the
+    magic+lenfield+cmd prefix) were brute-forced against all 5 known
+    (cmd, init) pairs and neither held. `CRC_INIT` gained two entries solved
+    for the exact lengths seen (`0x71`→`0x1CB0`, `0x35`→`0xD9F1`), not a
+    general result.
+- **The GIF TOC's per-frame checksum field is solved**: it's
+  `crc16_modbus()` — the same function already used for the single-image
+  header — over the payload following the header. Verified byte-exact.
+- **Two per-frame sub-header fields decoded**, by diffing two of the second
+  capture's solid-color frames (byte-identical for ~8800 bytes except one
+  4-byte window): the frame's own byte length (self-referential, exact for
+  all 6 frames across both captures), and its dominant/fill color in RGB565
+  (exactly pure red/blue/green for the three test frames).
+- `0x04240000` re-confirmed as the "Save to GIF" address from a second,
+  independent capture.
+
+### Known gaps
+- Each frame's actual pixel payload is still undecoded: not raw RGB565, not
+  zlib/deflate, no JPEG SOI marker. The strongest lead — two solid-color
+  frames being byte-identical except for one small window — points toward
+  some transform/DCT-style coding rather than simple run-length encoding,
+  but this is unconfirmed. Next step: a 2-frame GIF differing by one pixel,
+  to isolate how a coefficient or delta is expressed.
+- No general `CRC_INIT`-vs-length formula, so the cmd-byte fix above still
+  can't extend to arbitrary new upload sizes without a matching capture.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.1] - 2026-07-29
 
 **"Save to GIF" research notes.** No new command — the payload format isn't
