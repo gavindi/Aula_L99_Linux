@@ -449,11 +449,43 @@ GIF_FLASH_BASE = 0x04240000
 # investigated further; worth retrying a write before concluding a change
 # had no effect.)
 #
+# A fifth experiment tried to discriminate two readings of the flag byte
+# that a 2-run row can't distinguish (a per-run color index and a
+# continue/last framing bit happen to look identical when there are only
+# ever 2 runs, indices 0 and 1). Row 240 was rewritten as THREE runs --
+# 100px red, 100px blue, 120px red, still summing to 320 -- with
+# continuation-style flags (0, 0, 1). This grows the row from 4 to 6 bytes,
+# so the frame's self-referential size32/content-length fields, both TOC
+# entries' total-size field, and the crc16_modbus checksum were all
+# recomputed to match, and the wire transfer was padded with zero bytes to
+# the next multiple of 2048 so every chunk stayed a plain 2048-byte cmd=0x07
+# write (avoiding the need for an unverified CRC_INIT entry for a new final-
+# chunk length). Result: the fallback animation, same as every flag
+# mutation. A control upload of the ORIGINAL, unmodified blob with the same
+# kind of trailing zero-padding (nothing else changed) rendered correctly,
+# ruling out the padding itself as the cause.
+#
+# Together, this points at rows in this "2-color-split" encoding being
+# hardcoded to exactly two fixed-size sub-tokens (4 bytes), not a flexible
+# run-list terminated by a flag: the successful experiment changed lengths
+# while keeping exactly 2 tokens; every failed one either changed a flag
+# without changing token count, or changed token count outright, and all
+# fail identically. Under this reading the flag bytes may not encode
+# per-row-chosen information at all -- possibly a fixed per-slot marker
+# (always 0 for the first run, 1 for the second) that the decoder validates
+# strictly as an alignment/integrity check, with color implied purely by
+# slot position (first run = the frame's first-pixel color, second run =
+# the "other" color) rather than by the flag's value. This would also
+# explain why solid-color frames look completely different at the byte
+# level (b'\xff\x00' repeated ~600 times with no row structure at all,
+# rather than paired (length,flag) tokens per row): a single-run image may
+# use a different, non-row-bounded "one continuous run" encoding entirely,
+# not the same per-row grammar. Not confirmed -- still doesn't reconcile
+# with save_to_gif_3/4's persistent, never-resetting flip within what
+# should, by this theory, be many independent solid rows.
+#
 # Everything else in the sub-header, and the bulk of every frame's own
-# payload, is still undecoded -- in particular, no confirmed model yet
-# reconciles the clean per-row run-length reading above with the persistent,
-# never-resetting flip seen in save_to_gif_3/4, or with the flag-mutation
-# results just above. It is NOT raw RGB565 (frames are well under
+# payload, is still undecoded. It is NOT raw RGB565 (frames are well under
 # width*height*2 bytes), not zlib, not raw-deflate. No JPEG SOI marker
 # (FFD8) appears anywhere in a frame.
 

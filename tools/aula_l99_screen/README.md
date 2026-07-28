@@ -149,6 +149,35 @@ blob — and an identical second re-upload fixed it. Possibly a read/write
 race if the panel was still mid-loop reading the region being overwritten;
 worth a retry before concluding a change had no effect.)
 
+A fifth experiment tried to tell apart two readings of the flag byte that a
+2-run row can't distinguish between (a per-run color index and a
+continue/last framing bit look identical when there are only ever 2 runs,
+indexed 0 and 1). Row 240 was rewritten as **three** runs — 100px red,
+100px blue, 120px red, still summing to 320 — with continuation-style flags
+`(0, 0, 1)`. This grows the row from 4 to 6 bytes, so the frame's size
+fields, both TOC entries, and the checksum were all recomputed, and the
+wire transfer was padded with trailing zero bytes to the next multiple of
+2048 so every packet stayed a plain, already-verified `cmd=0x07` write.
+Result: the fallback animation again. A control upload — the *original*,
+unmodified blob with the same kind of zero-padding and nothing else changed
+— rendered correctly, ruling out the padding itself as the culprit.
+
+Together this points toward rows in this encoding being hardcoded to
+exactly two fixed-size sub-tokens, not a flexible run-list a flag
+terminates: the one successful experiment changed lengths while keeping
+exactly 2 tokens; every failed one either changed a flag without changing
+token count, or changed token count outright — and all fail identically.
+That reframes the flag bytes as possibly not carrying chosen information at
+all: maybe a fixed per-slot marker (always 0 for the first run, 1 for the
+second) that the decoder checks strictly, with color implied purely by slot
+position rather than by the flag's value. That would also explain why
+solid-color frames look completely different at the byte level (`FF 00`
+repeated ~600 times with no row structure at all) — possibly a separate,
+non-row-bounded "single continuous run" encoding for flat images, not the
+same per-row grammar. Unconfirmed, and still doesn't reconcile with
+`save_to_gif_3`/`4`'s persistent flip within what should, by this theory,
+be many independent solid rows.
+
 ## Image format
 
 Byte-identical to what the vendor's own `qt-tool/Image2Bin.exe` produces:

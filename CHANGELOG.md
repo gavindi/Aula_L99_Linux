@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2026-07-29
+
+**"Save to GIF" research, hardware round four: rows are likely fixed at two
+tokens.** Two more experiments against `save_to_gif_5`: one testing whether
+a 3-run row can work at all, one a control isolating whether wire padding
+was ever a confounding factor. Together they narrow the model further.
+
+### Verified
+- **3-run row test.** Row 240 rewritten as three runs (100px red, 100px
+  blue, 120px red, still summing to 320) with continuation-style flags
+  `(0, 0, 1)`, specifically to distinguish "flag = per-run color index" from
+  "flag = continue/last framing bit" -- a distinction a 2-run row can't
+  make, since both readings look identical when there are only ever runs 0
+  and 1. Grew the row from 4 to 6 bytes; recomputed the frame's size
+  fields, both TOC entries, and the checksum; padded the wire transfer to
+  the next multiple of 2048 so every packet stayed a plain, already-solved
+  `cmd=0x07` write rather than needing an unverified new CRC_INIT entry.
+  Result: the fallback animation, same as every flag mutation.
+- **Padding control.** The original, unmodified blob, with the same kind of
+  trailing zero-padding and nothing else changed, uploaded and rendered
+  correctly -- ruling out the padding mechanism itself as the cause of the
+  3-run failure.
+
+### Changed
+- **Refines the model toward: rows in this encoding are hardcoded to
+  exactly two fixed-size sub-tokens, not a flexible run-list a flag
+  terminates.** The one successful mutation (0.5.8) changed lengths while
+  keeping exactly 2 tokens; every failed one (0.5.7's three flag mutations,
+  now plus this round's 3-token attempt) either changed a flag without
+  changing token count or changed token count outright, and all fail
+  identically. Under this reading the flag bytes may not carry chosen
+  per-row information at all -- possibly a fixed per-slot marker (always 0
+  for the first run, 1 for the second) that decoding checks strictly, with
+  color implied by slot position rather than by the flag's value.
+- This would also explain why solid-color frames look nothing like this
+  row-token structure at the byte level (`FF 00` repeated ~600 times, no
+  per-row pairing) -- possibly a separate, non-row-bounded "single
+  continuous run" encoding for flat images entirely, not the same grammar.
+
+### Known gaps
+- Still unconfirmed, and still doesn't reconcile with `save_to_gif_3`/`4`'s
+  persistent, never-resetting flip within what should, under this theory,
+  be many independent solid rows.
+- The bulk of the entropy coding is otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.8] - 2026-07-29
 
 **"Save to GIF" research, hardware round three: first controlled content
