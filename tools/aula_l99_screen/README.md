@@ -223,6 +223,23 @@ frame. Consistent with the evidence so far, but unconfirmed — this one
 experiment can't rule out some other unidentified field, or an error in
 reconstructing the modified frame, as the real cause.
 
+A ninth experiment tried to test the delta-scheme idea more directly: a
+3-frame blob (frame 0 solid red, frame 1 the proven split, frame 2 an
+*exact copy* of frame 1's content, with a rebuilt 3-entry TOC). If "any
+index other than 0 works" were the whole story, frame 2 should have
+rendered the same split. Result: the fallback again.
+
+This doesn't cleanly answer whether index 2 specifically supports
+row-grammar content, because the result itself may point at a confound: if
+the row-grammar is a *sequential* delta — relative to the immediately
+preceding frame, not always frame 0 — frame 2's bytes should describe the
+change from frame 1's state (already the split), not repeat frame 1's own
+delta-from-solid-red verbatim. Read this way, the failure is actually
+evidence *against* "each frame deltas from frame 0" (which predicts reusing
+the same valid delta twice should still work) and *for* a frame-to-frame
+sequential delta instead — but that's inference from a negative result, not
+a confirmed mechanism, since the delta token grammar itself isn't decoded.
+
 ## Image format
 
 Byte-identical to what the vendor's own `qt-tool/Image2Bin.exe` produces:

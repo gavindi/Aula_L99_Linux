@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.13] - 2026-07-29
+
+**"Save to GIF" research, hardware round eight: 3-frame test is
+inconclusive, but points toward a sequential delta.** One more experiment
+against `save_to_gif_5`, extending it to 3 frames to test 0.5.12's
+frame-index hypothesis more directly. The result doesn't cleanly confirm
+or refute that hypothesis, but the reason why is itself informative.
+
+### Verified
+- Built a 3-frame blob: frame 0 solid red (unchanged), frame 1 the proven
+  red/blue split (unchanged), frame 2 an exact byte-for-byte copy of frame
+  1's content. Rebuilt the TOC as 3 entries (offsets, total-size,
+  frame-count, checksum all recomputed) and padded the wire transfer to
+  avoid needing an unverified CRC_INIT.
+- Result: the fallback animation. Reverted afterward; confirmed restored.
+
+### Changed
+- **Identifies a confound in the test design, which refines the
+  hypothesis.** If "any frame index other than 0 supports the row-grammar"
+  were the whole story, frame 2 (an exact copy of frame 1's already-working
+  content) should have rendered the same split. It didn't -- but if the
+  row-grammar is a *sequential* delta (relative to the immediately
+  preceding frame, not always frame 0), frame 2's bytes should describe the
+  change from frame 1's state, not repeat frame 1's own delta-from-
+  solid-red verbatim. Under that reading, this failure is evidence
+  *against* "each frame deltas from frame 0" (which predicts reusing an
+  already-valid delta twice should still work) and *for* a frame-to-frame
+  sequential delta instead.
+- This is inference from a negative result, not a confirmed mechanism --
+  a real test of "does index 2 support row-grammar" would need frame 2 to
+  encode a genuine delta (even a trivial "no change") from frame 1, which
+  isn't attempted since the delta token grammar itself isn't decoded.
+
+### Known gaps
+- Whether row-grammar content works at frame index 2 (or any index beyond
+  1) specifically is still untested in a way that isolates it from the
+  delta-source confound above.
+- The delta/reference-frame hypothesis from 0.5.12 remains unconfirmed.
+- The bulk of the entropy coding is otherwise still undecoded.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+
 ## [0.5.12] - 2026-07-29
 
 **"Save to GIF" research, hardware round seven: the row-grammar may be

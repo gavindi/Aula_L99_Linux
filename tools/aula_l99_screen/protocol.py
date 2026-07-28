@@ -533,6 +533,31 @@ GIF_FLASH_BASE = 0x04240000
 # can't rule out some other unidentified field or an error in reconstructing
 # the modified frame rather than a genuine per-slot/delta constraint.
 #
+# A ninth experiment tried to test the delta-scheme hypothesis more
+# directly: a 3-frame blob was built (frame 0 solid red, unchanged; frame 1
+# the proven red/blue split, unchanged; frame 2 an EXACT byte-for-byte copy
+# of frame 1's content), with a rebuilt 3-entry TOC (offsets, total-size,
+# frame-count, checksum all recomputed). If "any index != 0 supports the
+# row-grammar" were the whole story, frame 2 should have rendered the same
+# split. Result: the fallback animation again.
+#
+# This doesn't cleanly resolve whether index 2 specifically can hold
+# row-grammar content, because of a confound the result itself may be
+# pointing at: if the row-grammar is a SEQUENTIAL delta -- relative to the
+# immediately preceding frame, not always frame 0 -- then frame 2's bytes
+# should describe the change from frame 1's state (already the split), not
+# repeat frame 1's own delta-from-solid-red verbatim. Reusing identical
+# bytes would be a semantically wrong delta even though it is byte-for-byte
+# identical to something that decodes correctly elsewhere. Read this way,
+# the failure is actually evidence AGAINST "each frame deltas from frame 0"
+# (which predicts reusing the same already-valid delta twice should still
+# work) and FOR a sequential, frame-to-frame delta model instead -- but
+# this is inference from a negative result, not a confirmed mechanism, and
+# a real test would need frame 2 to encode a genuine (even if trivial,
+# e.g. "no change") delta from frame 1 rather than a copy of frame 1's own
+# delta from frame 0 -- not attempted, since the delta token grammar itself
+# isn't decoded.
+#
 # Everything else in the sub-header, and the bulk of every frame's own
 # payload, is still undecoded -- in particular, the delta/reference-frame
 # hypothesis above is not verified, and solid-color frames' completely
