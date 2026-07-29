@@ -5,6 +5,72 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-07-30
+
+**"Save to GIF": `mode_flag` confirmed as a real, functional RLE-vs-raw-
+bitmap decoder switch -- forcing a mismatch produces garbled, structured
+content, not the usual fallback animation.** First direct hardware test
+of `mode_flag`'s role, in both directions, on `save_to_gif_13`.
+
+### Verified
+- Frame 0 (solid red, real `mode_flag=0x0100`/RLE, content untouched)
+  flipped to `mode_flag=0x0002`/raw-bitmap: all 79 packets acked. The
+  panel rendered a complex, clearly non-fallback pattern -- horizontal
+  bands including a light-gray-like region, a red/black staticky "noise"
+  band, and clean red regions, repeating a few times vertically. This is
+  NOT the fallback animation and is NOT simply garbage -- the visible
+  structure (colors and rough layout resembling frame 1's real 3-stripe
+  content) is consistent with the raw-bitmap decoder reading a full
+  width*height=153600-byte window starting right after frame 0's 528-byte
+  prefix regardless of frame 0's own much smaller declared size, likely
+  running past frame 0's real boundary into frame 1's actual header and
+  content bytes in flash -- though the exact byte-level correspondence
+  wasn't rigorously confirmed, only the qualitative shape of the result.
+- Frame 1 (the real raw-bitmap 3-stripe frame, `mode_flag=0x0002`,
+  content untouched) flipped to `mode_flag=0x0100`/RLE: all 79 packets
+  acked. The panel showed a garbled, staggered scanline pattern confined
+  to roughly the top 25% of the screen, with the remaining ~75%
+  unchanged solid red -- a partial, incomplete render, not the fallback
+  either.
+- Neither direction triggered the panel's usual cached fallback
+  animation -- notably different from every other content-validation
+  failure in this whole investigation (the transition/run-structure
+  violations, the 528-byte-prefix threshold violations), which always
+  fell back to the same generic animation. Both restores this round
+  acked and took immediately, confirmed back to the original
+  solid-red/3-stripe alternation.
+
+### Changed
+- Confirms `mode_flag` is a genuine, functional field selecting between
+  two different decoders, not a passive/descriptive tag -- forcing a
+  mismatch doesn't get validated-and-rejected the way most content edits
+  in this investigation have been; it just gets decoded wrong, producing
+  visibly structured (not random) garbage. This suggests whatever
+  structural validation exists (the transition/run-structure check, the
+  528-byte-prefix count threshold) is checked WITHIN each decoder's own
+  path, not by a separate universal content check applied regardless of
+  mode -- a mismatched mode_flag bypasses the checks that would normally
+  catch a malformed frame in its own format, because the bytes are being
+  fed to the wrong decoder entirely rather than being malformed input to
+  the right one.
+
+### Known gaps
+- The exact byte-level mechanics of the raw-bitmap overrun (whether it
+  really reads into frame 1's real flash bytes, the precise mapping of
+  visible bands to specific byte ranges) aren't confirmed -- only the
+  qualitative "garbled but structured, resembling neighboring frame
+  content" result.
+- Why the RLE-misinterpretation case fills only ~25% of the screen before
+  stopping isn't explained precisely (plausible: interpreting bytes as
+  length/flag pairs instead of raw indices roughly halves how many
+  content bytes correspond to one pixel of coverage, so the declared
+  content-length in bytes runs out before covering all 153600 pixels --
+  not verified with an exact token-count calculation against the photo).
+- Only tested on save_to_gif_13's two frames; whether this generalizes to
+  other content is untested.
+- Same open items otherwise: the 528-byte prefix's true purpose, the
+  exact dithering diffusion algorithm, `save_to_gif_2`'s inefficiency.
+
 ## [0.7.4] - 2026-07-30
 
 **"Save to GIF": linear interpolation between bracket rungs is a good

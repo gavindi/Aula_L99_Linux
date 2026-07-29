@@ -643,9 +643,12 @@ good but not exact model of the duty cycle, mean deviation 3.4 points
 with no systematic bias, more consistent with error diffusion than a
 closed-form formula), the G ramp's single unexplained off-by-one
 deviation from an exact even split, the per-row variation's exact
-mechanism (error diffusion is still just a hypothesis), whether
-`mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
-example of each so far), the exact scope/mechanism of the content
+mechanism (error diffusion is still just a hypothesis), the exact
+byte-level mechanics of what happens when `mode_flag` is forced to
+mismatch its content (confirmed functional/real, confirmed to produce
+structured garbage rather than a clean fallback in both directions, but
+the exact overrun/truncation mechanics aren't mapped), the exact
+scope/mechanism of the content
 validator (14 hardware data points now fit "a row's transition/run
 structure must stay locally valid" without exception — a strong pattern
 match, not yet a decoded algorithm; how far a transition can shift before
@@ -741,6 +744,37 @@ cluster near ramp segments close to 0. Still open: the exact
 snap-vs-dither selection rule and diffusion algorithm, the G ramp's
 single unexplained off-by-one deviation, and the per-row variation's
 exact mechanism (error diffusion is still just a hypothesis).
+
+**`mode_flag` confirmed as a real, functional decoder switch — forcing a
+mismatch produces garbled, structured content, not the usual fallback
+animation.** First direct hardware test, both directions, on
+`save_to_gif_13`. Frame 0 (solid red, real `mode_flag=0x0100`/RLE, content
+untouched) flipped to `0x0002`/raw-bitmap: all 79 packets acked, and the
+panel rendered a complex, clearly non-fallback pattern — horizontal bands
+including a light-gray-like region, a red/black staticky "noise" band, and
+clean red regions, repeating a few times vertically. Not the fallback and
+not random garbage either — the visible structure (colors/layout
+resembling frame 1's real 3-stripe content) is consistent with the
+raw-bitmap decoder reading a full width×height=153600-byte window
+starting right after frame 0's 528-byte prefix regardless of frame 0's own
+much smaller declared size, likely running past frame 0's real boundary
+into frame 1's actual header/content bytes in flash — though the exact
+byte-level correspondence wasn't rigorously confirmed, only the
+qualitative shape. The reverse (frame 1, the real raw-bitmap frame,
+content untouched, flipped to `0x0100`/RLE): all 79 packets acked, panel
+showed a garbled staggered-scanline pattern confined to roughly the top
+25% of the screen, remaining ~75% unchanged solid red — a partial,
+incomplete render, again not the fallback. Neither direction triggered
+the panel's usual cached fallback animation — notably different from
+every other content-validation failure in this investigation, which
+always fell back to the same generic animation. Suggests whatever
+structural validation exists is checked *within* each decoder's own path,
+not by a separate universal content check — a mismatched `mode_flag`
+bypasses the checks that would normally catch a malformed frame, because
+the bytes are fed to the wrong decoder entirely. Confirms `mode_flag` is
+genuinely functional, not a passive tag. Untested: exact overrun
+byte-mapping, why the RLE-misinterpretation stops at ~25%, and whether
+this generalizes beyond `save_to_gif_13`.
 
 ## Image format
 

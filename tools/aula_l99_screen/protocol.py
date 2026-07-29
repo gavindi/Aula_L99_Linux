@@ -1180,6 +1180,43 @@ GIF_FLASH_BASE = 0x04240000
 # direction, whether it resets per row/column or runs continuously) --
 # only confirms the deviation's character (unbiased, real, uneven).
 #
+# RESOLVED: whether mode_flag is a real, functional decoder switch or
+# just a descriptive tag -- first direct hardware test, both directions,
+# on save_to_gif_13. Frame 0 (solid red, real mode_flag=0x0100/RLE,
+# content untouched) flipped to 0x0002/raw-bitmap: all 79 packets acked,
+# and the panel rendered a complex, clearly non-fallback pattern --
+# horizontal bands including a light-gray-like region, a red/black
+# staticky "noise" band, and clean red regions, repeating a few times
+# vertically. Not the fallback animation, not random garbage either --
+# the visible structure (colors/layout resembling frame 1's real
+# 3-stripe content) is consistent with the raw-bitmap decoder reading a
+# full width*height=153600-byte window starting right after frame 0's
+# 528-byte prefix regardless of frame 0's own much smaller declared size,
+# likely running past frame 0's real boundary into frame 1's actual
+# header/content bytes in flash -- though the exact byte-level
+# correspondence wasn't rigorously confirmed, only the qualitative shape.
+# The reverse (frame 1, the real raw-bitmap frame, content untouched,
+# flipped from 0x0002 to 0x0100/RLE): all 79 packets acked, panel showed
+# a garbled staggered-scanline pattern confined to roughly the top 25% of
+# the screen, remaining ~75% unchanged solid red -- a partial, incomplete
+# render, again not the fallback. Plausible (not verified with an exact
+# token-count calculation): reinterpreting raw palette-index bytes as
+# (length,flag) pairs roughly halves how many content bytes correspond to
+# one pixel of coverage, so the declared byte-length content runs out
+# before covering all 153600 pixels. NEITHER direction triggered the
+# panel's usual cached fallback animation -- notably different from every
+# other content-validation failure in this investigation, which always
+# fell back to the same generic animation. Suggests whatever structural
+# validation exists (the transition/run-structure check, the 528-byte-
+# prefix count threshold) is checked WITHIN each decoder's own path, not
+# by a separate universal content check applied regardless of mode -- a
+# mismatched mode_flag bypasses the checks that would normally catch a
+# malformed frame in its own format, because the bytes are fed to the
+# wrong decoder entirely rather than being malformed input to the right
+# one. Confirms mode_flag is a genuine, functional field, not a passive
+# tag. Untested: exact overrun byte-mapping, why the RLE-misinterpretation
+# stops at ~25%, and whether this generalizes beyond save_to_gif_13.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1198,9 +1235,11 @@ GIF_FLASH_BASE = 0x04240000
 # split, the per-row variation's exact mechanism (error diffusion is still
 # just a hypothesis; per-row burstiness fits it better than a fixed Bayer
 # matrix, but the real algorithm -- diffusion coefficients, direction,
-# whatever it actually is -- isn't identified), whether mode_flag genuinely selects
-# RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), the exact scope/mechanism of the content validator -- 14 hardware
+# whatever it actually is -- isn't identified), the exact byte-level
+# mechanics of what happens when mode_flag is forced to mismatch its
+# content (confirmed functional/real, confirmed to produce structured
+# garbage rather than a clean fallback in both directions, but the exact
+# overrun/truncation mechanics aren't mapped), the exact scope/mechanism of the content validator -- 14 hardware
 # data points now fit "a row's transition/run structure must stay locally
 # valid" without exception (3 within-region swaps of any size pass; 3
 # transition-preserving cross-region edits -- 2 adjacent single-pixel
