@@ -856,6 +856,28 @@ GIF_FLASH_BASE = 0x04240000
 #     one more retry than that case did; every upload itself acked cleanly
 #     throughout, so the flakiness is on the panel's redraw-trigger side,
 #     not the wire transfer.
+#   - RETRACTED the "scale/magnitude threshold" hypothesis above by
+#     bisecting it directly. Cross-stripe block swaps (same gray<->red
+#     type as the 40x40 one) at 8x8 (128 total differing positions), 4x4
+#     (32), 2x2 (8), and 1x1 (2) ALL fell back -- including the 1x1 case,
+#     which changes the exact same byte count (2) as the successful
+#     within-stripe swap above. Byte count alone can't be the deciding
+#     factor if 2 bytes changed produces opposite outcomes depending on
+#     what was swapped. A same-region swap in the dark-red stripe (columns
+#     106-107, values 2 and 3, both native there) rendered correctly,
+#     confirming a second, independent within-region success in a
+#     different stripe with a different flag pair. The pattern across all
+#     8 data points so far (2 within-region successes, 6 cross-region
+#     failures at every size from 1 to 1600 pixels/side): edits that keep
+#     every pixel within its OWN stripe's already-established flag set
+#     (gray: {0,1,5,6,7,8,9,10}; dark-red: {2,3}; red: {4}) pass, and
+#     edits that put a flag value into a column range where it doesn't
+#     already belong fail -- regardless of how many bytes are touched
+#     either way. Reads as a per-region (likely per-column-range)
+#     flag-membership constraint, not a diff-size threshold. Not yet
+#     tested: a within-region swap larger than 2 bytes, or whether the
+#     boundary is truly per-stripe vs. some other partition that happens
+#     to coincide with the 3 stripes here.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -907,12 +929,13 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), exactly where the content validator's pass/fail boundary sits
-# between "2 bytes changed" (confirmed OK) and "1600 bytes changed, same
-# permutation type" (confirmed fallback) -- histogram preservation alone
-# is ruled out as the criterion, a scale/magnitude threshold is the
-# leading hypothesis, not yet bisected -- and gif_2's solid frames being
-# encoded far less efficiently (4151
+# far), the exact scope/mechanism of the content validator -- 8 data
+# points (2 within-region swaps, both OK; 6 cross-region swaps from 1 to
+# 1600 pixels/side, all fallback) fit "each stripe's pixels must stay
+# within that stripe's own established flag set," ruling out both simple
+# histogram preservation and any diff-size threshold, but this is a
+# pattern match across 8 tests, not a decoded algorithm -- and gif_2's
+# solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image
 # wasn't perfectly flat, not investigated. It is NOT raw RGB565 for the

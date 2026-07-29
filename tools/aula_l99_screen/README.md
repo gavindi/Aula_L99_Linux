@@ -437,6 +437,26 @@ behavior documented in the 0.5.x era, just needing one more retry than
 that case did; every upload itself acked cleanly, so the flakiness is on
 the panel's redraw-trigger side, not the wire transfer.
 
+**Bisecting that pass/fail boundary retracts the scale/magnitude
+hypothesis and replaces it with something cleaner: per-region flag
+membership.** Cross-stripe block swaps (same gray↔red type, between the
+light-gray and red stripes) at 8×8 (128 total differing positions), 4×4
+(32), 2×2 (8), and 1×1 (2) all fell back — including the 1×1 case, which
+changes the exact same byte count (2) as the successful within-stripe swap
+above. Byte count alone can't be the deciding factor if 2 bytes changed
+produces opposite outcomes depending on *what* was swapped. A same-region
+swap in the dark-red stripe (columns 106–107, values 2 and 3, both native
+there) rendered correctly — a second, independent within-region success in
+a different stripe with a different flag pair. Across all 8 data points so
+far (2 within-region successes, 6 cross-region failures spanning 1 to 1600
+pixels/side): edits that keep every pixel within its *own* stripe's
+already-established flag set (gray: {0,1,5,6,7,8,9,10}; dark-red: {2,3};
+red: {4}) pass; edits that put a flag value into a column range where it
+doesn't already belong fail, regardless of how many bytes are touched
+either way. Reads as a per-region (likely per-column-range) flag-membership
+constraint, not a diff-size threshold — though this is a pattern match
+across 8 tests, not a decoded algorithm.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -457,11 +477,12 @@ simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
-example of each so far), exactly where the content validator's pass/fail
-boundary sits (a 2-byte permutation renders correctly, an 800x-larger
-same-kind permutation falls back — histogram preservation is ruled out as
-the criterion, a scale/magnitude threshold is the leading hypothesis, not
-yet bisected), and why `save_to_gif_2`'s solid
+example of each so far), the exact scope/mechanism of the content
+validator (8 data points fit "each stripe's pixels must stay within that
+stripe's own established flag set" — 2 within-region swaps pass, 6
+cross-region swaps from 1 to 1600 pixels/side all fail — but this is a
+pattern match across 8 tests, not a decoded algorithm), and why
+`save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).

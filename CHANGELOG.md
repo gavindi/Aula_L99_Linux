@@ -5,6 +5,57 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] - 2026-07-30
+
+**"Save to GIF": the content validator isn't a magnitude threshold -- it's
+per-region flag membership.** Bisection of 0.6.10's pass/fail boundary
+overturns that round's leading hypothesis and replaces it with a cleaner,
+fully-explanatory one.
+
+### Verified
+- Cross-stripe block swaps (same gray<->red swap type as 0.6.10, between
+  `save_to_gif_13`'s light-gray and red stripes) at decreasing sizes: 8x8
+  (128 total differing positions), 4x4 (32), 2x2 (8), and 1x1 (2) --
+  **every single one fell back**, all the way down to a single pixel pair.
+- A 1x1 cross-stripe swap (2 total differing positions -- the exact same
+  byte count as 0.6.10's successful within-stripe swap) still fell back.
+  This directly refutes 0.6.10's "scale/magnitude threshold" hypothesis:
+  byte count alone cannot be the deciding factor, since 2 bytes changed
+  produced opposite outcomes depending on *what* was swapped.
+- A same-region swap in the DARK-RED stripe (columns 106-107, values 2 and
+  3 -- both native to that stripe, the same kind of edit as 0.6.10's
+  successful gray-stripe swap but in a different region and a different
+  flag pair) rendered correctly, not the fallback. Second independent
+  confirmation that within-region swaps pass.
+- All restores this round acked cleanly every time; one needed a retry
+  before the panel visibly redrew (same known flaky-redraw behavior as
+  0.6.10, not a new issue).
+
+### Changed
+- Retracts the "scale/magnitude-based validation" hypothesis from 0.6.10.
+  The real pattern across all data so far: edits that keep every pixel
+  within its own stripe's already-established flag set (gray stripe:
+  {0,1,5,6,7,8,9,10}; dark-red stripe: {2,3}; red stripe: {4}) pass,
+  regardless of how many pixels are touched (a within-region swap of 2
+  bytes passes the same as, presumably, a larger one would). Edits that
+  put a flag value into a column range where it doesn't already belong --
+  even a single pixel -- fail, regardless of how few bytes are touched.
+  This is a per-region (likely per-column-range) flag-membership
+  constraint, not a diff-size threshold.
+
+### Known gaps
+- Not yet tested: a within-region swap larger than 2 bytes (would confirm
+  region-membership is sufficient on its own, independent of size, rather
+  than "small AND region-correct").
+- Not yet tested: whether the boundary is truly per contiguous stripe, or
+  something coarser/finer (e.g. per exact column, or per some other
+  partition that happens to align with the 3 stripes here).
+- The underlying mechanism is still a hypothesis, not a decoded algorithm
+  -- consistent with 6 cross-region failures and 2 within-region successes
+  so far, not yet stress-tested against a case designed to break it.
+- Same open items as 0.6.10 otherwise (528-byte prefix, sub-header byte
+  [13], dithering algorithm, `mode_flag`, `save_to_gif_2` inefficiency).
+
 ## [0.6.10] - 2026-07-30
 
 **"Save to GIF": first hardware-confirmed edit of the raw-bitmap format --
