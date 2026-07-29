@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-07-30
+
+**"Save to GIF": the 528-byte prefix's tolerance boundary is exactly 8
+bytes, and it's a pure count threshold, not a specific critical byte.**
+Tight bisection of 0.6.16's 5-10 byte range, plus a confirming isolation
+test.
+
+### Verified
+- Bisected the padding-region tolerance from 0.6.16 down to an exact
+  boundary: 7 bytes non-zero passes, 8 bytes passes, 9 bytes fails, 10
+  bytes fails (0.6.16). **Exactly 8 bytes tolerated, the 9th breaks it.**
+- Isolated the 9th byte specifically: flipping ONLY offset 26 (frame 0's
+  padding, the byte that turns a passing 8-byte edit into a failing
+  9-byte one when added) from 0 to 1, with offsets 18-25 left untouched,
+  rendered correctly -- not the fallback. So offset 26 is not itself a
+  meaningfully-checked field; the failure at 9 bytes was purely about
+  *how many* bytes were touched in total, not *which* byte.
+
+### Changed
+- Confirms the 0.6.16 "magnitude threshold" reading over the "hidden
+  structured field" alternative: if there were a real field starting
+  around offset 26, flipping it alone should have broken something. It
+  didn't. The padding region genuinely tolerates a small, fixed number of
+  changed bytes (8) regardless of which bytes they are, and rejects more
+  than that -- a count-based check, not a positional one.
+
+### Known gaps
+- Whether the count that matters is "bytes changed from the original
+  all-zero state" or something more specific (e.g. "bytes with a specific
+  bit pattern") is untested -- all tests here used non-zero-from-zero
+  changes only.
+- Whether 8 is specific to this frame/region or a broader constant
+  (e.g. shared with some other part of the format) is unknown.
+- Whether this generalizes to frame 1 (raw-bitmap mode) is untested.
+- Same open items otherwise: sub-header byte [13], dithering algorithm,
+  `mode_flag`, delay field's unit, `save_to_gif_2` inefficiency.
+
 ## [0.6.16] - 2026-07-30
 
 **"Save to GIF": the 528-byte prefix's zero padding is NOT inert -- it's

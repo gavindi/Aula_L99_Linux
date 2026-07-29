@@ -987,6 +987,22 @@ GIF_FLASH_BASE = 0x04240000
 # that just happens to read as zero in every simple capture seen so far,
 # rather than a tolerance-based check on otherwise-free padding. Whether
 # this generalizes to frame 1 (raw-bitmap mode) is untested.
+#
+# Tight bisection pins the boundary down exactly: 7 bytes passes, 8 bytes
+# passes, 9 bytes fails, 10 fails (0.6.16) -- EXACTLY 8 bytes tolerated.
+# Isolating the 9th byte specifically (flipping ONLY offset 26 -- the byte
+# that turns a passing 8-byte edit into a failing 9-byte one -- with
+# offsets 18-25 left untouched) rendered correctly, not the fallback. So
+# offset 26 is not itself a meaningfully-checked field; the 9-byte failure
+# was purely about HOW MANY bytes were touched in total, not which byte.
+# This confirms the "magnitude threshold" reading over "hidden structured
+# field starting around offset 26": if there were a real field there,
+# flipping it alone should have broken something, and it didn't. The
+# padding region genuinely tolerates a small, fixed count of changed bytes
+# (8) regardless of which ones, and rejects more than that -- a count-based
+# check, not a positional one. Untested: whether "8" is specific to this
+# region/frame or a broader constant, and whether the count that matters
+# is "bytes changed from zero" specifically or something more general.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -1029,9 +1045,9 @@ GIF_FLASH_BASE = 0x04240000
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
 # matches the (overflowing) content-length field exactly -- and now known
-# to be actively validated with a tolerance boundary between 5 and 10
-# non-zero bytes, not simply unused or strictly zero, exact byte and
-# mechanism still unmapped), the unidentified
+# to tolerate EXACTLY 8 non-zero bytes anywhere in the padding, confirmed a
+# pure count threshold rather than a specific critical byte, mechanism
+# behind the count still unknown), the unidentified
 # sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
 # per-channel grid (light gray here), the exact per-channel dithering

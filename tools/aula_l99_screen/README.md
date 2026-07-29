@@ -564,6 +564,19 @@ structured field that just happens to read as zero in every simple
 capture so far. Whether this generalizes to frame 1 (raw-bitmap mode) is
 untested.
 
+**Tight bisection pins the boundary down exactly: 8 bytes.** 7 bytes
+passes, 8 passes, 9 fails, 10 fails — the tolerance is exactly 8 non-zero
+bytes. A follow-up isolated the 9th byte specifically: flipping *only*
+offset 26 (the byte that turns a passing 8-byte edit into a failing
+9-byte one), leaving offsets 18–25 untouched, still rendered correctly.
+So offset 26 isn't itself a meaningfully-checked field — the 9-byte
+failure was purely about *how many* bytes were touched, not *which* one.
+This confirms the magnitude-threshold reading over "hidden structured
+field": if there were a real field at offset 26, flipping it alone should
+have broken something, and it didn't. The padding genuinely tolerates a
+small, fixed count of changed bytes (8) regardless of which ones, and
+rejects more — a count-based check, not a positional one.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -578,10 +591,11 @@ after the fix.
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
 a color table, fixed-size up to 11 palette slots, still exactly 528 bytes
 in `save_to_gif_13`'s frame 2 by construction — size32 - 528 matches the
-overflowing content-length field exactly — and now known to be actively
-validated with a tolerance boundary between 5 and 10 non-zero bytes, not
-simply unused or strictly zero, exact byte and mechanism still unmapped),
-one unidentified sub-header byte, why a dithered color sometimes gets the
+overflowing content-length field exactly — and now known to tolerate
+exactly 8 non-zero bytes anywhere in the padding, confirmed a pure count
+threshold rather than a specific critical byte, mechanism behind the
+count still unknown), one unidentified sub-header byte, why a dithered
+color sometimes gets the
 simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
