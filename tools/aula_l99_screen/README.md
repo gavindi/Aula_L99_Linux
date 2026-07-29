@@ -50,7 +50,7 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from ten captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from eleven captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
@@ -60,8 +60,9 @@ half blue), `save_to_gif_6.pcapng` (a 3-frame version of `save_to_gif_5`
 where the split frame repeats unchanged), `save_to_gif_7.pcapng` (a
 red/blue/red vertical triple stripe), `save_to_gif_8.pcapng` (four
 distinct-colored vertical stripes), `save_to_gif_9.pcapng` (a black/white
-grid, shifted one pixel in frame 2), and `save_to_gif_10.pcapng` (eight
-distinct-colored vertical stripes, including gray). There is still no
+grid, shifted one pixel in frame 2), `save_to_gif_10.pcapng` (eight
+distinct-colored vertical stripes, including gray), and `save_to_gif_11.pcapng`
+(the same eight colors, reordered so gray is first). There is still no
 `--target gif`, because the pixel payload format isn't understood well
 enough to safely construct one, but the core row-grammar is now solved
 (see below). What's known:
@@ -328,11 +329,23 @@ direct slot (7 saturated primaries were fine; one mid-tone gray wasn't).
 The 528-byte prefix is still exactly 528 bytes with 9 total palette slots
 in play (7 real + 2 dither-pair).
 
+**`save_to_gif_11.pcapng`** is the control: same 8 colors, reordered so
+gray is *first* (was last) and white is last (was first). Decisive result:
+gray still dithers, now using slots 0–1 instead of 7–8, with the **exact
+same pair** — `[16:18]`=`0x640C`, `[18:20]`=`0x9C13`, byte-identical to
+`save_to_gif_10`. Every other color, including white in gray's old spot,
+gets a clean direct slot. This rules out "ran out of slots, first come
+first served" — it was never about position. The encoder maps this
+specific gray to this specific dither pair deterministically, regardless
+of what else is in the frame.
+
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
 a color table, and fixed-size up to 9 palette slots and far denser
-content), one unidentified sub-header byte, exactly which colors trigger
-dithering vs. get a direct slot, and why `save_to_gif_2`'s solid frames
-encode far less efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s
+content), one unidentified sub-header byte, exactly which *other* colors
+(besides this one gray) trigger dithering — confirmed color-specific and
+deterministic, but the real boundary (luminance? saturation? something
+else?) is still unmapped — and why `save_to_gif_2`'s solid frames encode
+far less efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s
 clean 600 — possibly that source image wasn't perfectly flat).
 
 ## Image format

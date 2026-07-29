@@ -673,15 +673,30 @@ GIF_FLASH_BASE = 0x04240000
 #   - 12th cmd/CRC_INIT data point along the way (312-byte final chunk,
 #     cmd 0x3F, solved as usual).
 #
+# save_to_gif_11.pcapng is a control for save_to_gif_10: same 8 colors,
+# reordered so gray is FIRST (was last) and white is last (was first). This
+# directly tests whether dithering is about the specific color or just "ran
+# out of slots" (order-dependent capacity limit). Result is decisive: gray
+# STILL dithers, now using slots 0-1 instead of 7-8, with the EXACT SAME
+# pair -- [16:18]=0x640C, [18:20]=0x9C13, byte-identical to save_to_gif_10
+# -- while all 7 other colors (including white, now in the position gray
+# held before) get clean direct slots at [20:22] through [32:34], and the
+# content's dither-token run correspondingly shows up at the START of the
+# frame instead of the end. This rules out "7-slot capacity limit, first
+# come first served" conclusively: it was never about position or order,
+# and the encoder maps this specific gray to this specific dither pair
+# deterministically, independent of what else is in the frame.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, and confirmed fixed-size up to 9 palette
 # slots and far denser content), the unidentified sub-header byte [13],
-# exactly which colors qualify for a direct palette slot vs. triggering
-# dithering (untested beyond "7 saturated primaries fine, one mid-tone
-# gray triggered it"), and gif_2's solid frames being encoded far less
-# efficiently (4151 varied tokens for the same 153600-pixel solid red that
-# save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
-# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
+# exactly which OTHER colors (besides this one gray) trigger dithering --
+# confirmed color-specific and deterministic, but the actual boundary
+# (luminance? saturation? something else?) is still unmapped -- and gif_2's
+# solid frames being encoded far less efficiently (4151 varied tokens for
+# the same 153600-pixel solid red that save_to_gif_3/4/5 encode in exactly
+# 600 uniform tokens) -- possibly gif_2's source image wasn't perfectly
+# flat, not investigated. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 

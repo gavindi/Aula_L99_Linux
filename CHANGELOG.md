@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-07-29
+
+**"Save to GIF": dithering confirmed color-specific, not a slot-order
+limit.** An eleventh capture -- the same 8 colors as 0.6.3, reordered so
+gray is first instead of last -- is the decisive control experiment.
+
+### Verified
+- Gray still dithers, now using palette slots 0-1 instead of 7-8, with the
+  **exact same pair** as 0.6.3 -- `[16:18]`=`0x640C`, `[18:20]`=`0x9C13`,
+  byte-identical to `save_to_gif_10`.
+- Every other color, including white (now in gray's old last position),
+  gets a clean direct palette slot. The content's dither-token run moves
+  correspondingly to the start of the frame instead of the end.
+- All 25 packets reproduce byte-for-byte against the existing `0x3F`
+  `CRC_INIT` entry -- same final-chunk length as `save_to_gif_10`, not a
+  new data point.
+
+### Changed
+- **Rules out "7-slot capacity, first come first served" conclusively.**
+  It was never about position or order: the encoder maps this specific
+  gray to this specific dither pair deterministically, independent of what
+  else is in the frame or which slot it would otherwise occupy.
+
+### Known gaps
+- Exactly which *other* colors (besides this one gray) trigger dithering
+  is still untested -- confirmed color-specific and deterministic, but the
+  actual boundary (luminance? saturation? something else?) is unmapped.
+- The 528-byte prefix's actual contents/purpose are still unknown.
+- One sub-header byte ([13]) remains unidentified.
+- `save_to_gif_2`'s solid frames still encode far less efficiently than
+  `save_to_gif_3`/`4`/`5`'s, unexplained.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`.
+
 ## [0.6.3] - 2026-07-29
 
 **"Save to GIF": found the palette's real limit -- dithering, confirmed
