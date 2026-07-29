@@ -5,6 +5,64 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-30
+
+**"Save to GIF": the first fully from-scratch GIF -- not derived from any
+capture -- rendered correctly on hardware.** Every success before this
+round was a small edit to already-valid captured content; this is the
+first proof the RLE model is complete enough to actually build new
+working uploads, not just decode and mutate existing ones.
+
+### Verified
+- Hand-built a 2-frame, 320x480 blob purely from the confirmed model: a
+  TOC of 20-byte entries, each frame a 528-byte fixed prefix (copying the
+  two still-unexplained-but-always-constant magic byte pairs verbatim,
+  writing width/height/size32/content-length/mode_flag/palette from
+  scratch) followed by continuous-raster-order RLE content (palette
+  built in first-appearance order, runs chained in <=256px pieces,
+  restricted to "safe" colors -- max(R,G,B) in {0,255} -- so no dithering
+  needs to be solved). Content: frame 0 solid blue, frame 1 a 16x16 red/
+  white checkerboard -- new content, never captured or mutated from one.
+- Solved the practical `CRC_INIT` obstacle without any new brute-force:
+  since a solid run can be split into any number of chained same-flag
+  tokens without changing the rendered image (each split costs exactly 2
+  bytes), the blob's total length was tuned by padding frame 0's single
+  run into more pieces until the wire packetization's final chunk landed
+  on an already-solved length (1080 bytes, from `save_to_gif_12`) with no
+  new CRC_INIT value needed and no external padding bytes.
+- Self-verified before upload: TOC `crc16_modbus` matches, both frames'
+  RLE content sums to exactly 153600 pixels, packetizes to 12 packets with
+  no exceptions.
+- Uploaded to the panel: all 12 packets acked, and the panel showed
+  exactly the intended animation -- solid blue alternating with the red/
+  white checkerboard -- confirmed by the user, not the fallback.
+
+### Changed
+- This is the strongest evidence yet that the GIF format's RLE encoding,
+  TOC/sub-header layout, and packetization are genuinely fully understood
+  for the "safe colors, no dithering" case -- not just consistent with
+  every capture examined, but sufficient to construct new, independently
+  verified working uploads.
+- Scope: this specific success is for `mode_flag=0x0100` RLE-encoded
+  content only, using colors that don't need dithering. Photos, the
+  raw-bitmap format, and any color requiring dithering are still out of
+  scope for an encoder -- the palette/dithering assignment algorithm
+  (0.6.6-0.6.9, 0.6.18) isn't solved well enough to build correct
+  dithered content from scratch yet.
+
+### Known gaps
+- Not yet wired into `cli.py` as a real `--target gif` option -- this was
+  a standalone proof-of-concept script, not integrated tooling.
+- The `CRC_INIT`-length-matching trick (splitting a solid run to hit an
+  already-known final-chunk length) only works when some frame has a
+  large enough solid/uniform region to split -- a general encoder needs a
+  fallback or a clear error for images that don't have one.
+- No multi-frame (>2), non-solid-reference-frame, or larger/more complex
+  from-scratch content has been tried yet.
+- Same longstanding open items otherwise: the 528-byte prefix's true
+  purpose, the dithering algorithm, `mode_flag`'s general meaning, the
+  delay field's unit, `save_to_gif_2`'s inefficiency.
+
 ## [0.6.19] - 2026-07-30
 
 **"Save to GIF": "the unidentified sub-header byte [13]" was stale

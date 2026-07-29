@@ -47,7 +47,7 @@ protocol and image format below — only the flash base address differs:
 locations. `0x04240000` is "Save to GIF"'s address (see below); one more slot
 the vendor binary references, `0x04200000`, is still unidentified.
 
-### Save to GIF (unimplemented)
+### Save to GIF (proof-of-concept encoder exists; not wired into the CLI)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
 from thirteen captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
@@ -64,10 +64,14 @@ grid, shifted one pixel in frame 2), `save_to_gif_10.pcapng` (eight
 distinct-colored vertical stripes, including gray), `save_to_gif_11.pcapng`
 (the same eight colors, reordered so gray is first), `save_to_gif_12.pcapng`
 (black and orange, testing the dithering boundary), and `save_to_gif_13.pcapng`
-(light gray and dark red, following up). There is still no `--target gif`,
-because the pixel payload format isn't understood well enough to safely
-construct one, but the core row-grammar is now solved (see below). What's
-known:
+(light gray and dark red, following up). There is still no `--target gif`
+in `cli.py`, but a from-scratch encoder now exists and has been proven on
+hardware: a hand-built 2-frame blob (solid blue + a red/white checkerboard,
+new content, not derived from any capture) was uploaded and rendered
+correctly — the first real proof the RLE model is complete enough to
+*construct* working uploads, not just decode existing ones. This is
+restricted to "safe" colors (`max(R,G,B)` in `{0,255}`), since the
+dithering algorithm for anything else still isn't solved. What's known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
@@ -627,6 +631,26 @@ unconfirmed), and why
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).
+
+**The from-scratch encoder, in outline** (proof-of-concept script, not
+yet in `cli.py`): build each frame as continuous-raster-order RLE (palette
+in first-appearance order, runs chained into <=256px pieces), write a
+528-byte prefix per frame (copying the two still-unexplained-but-always-
+constant magic byte pairs verbatim; everything else — width/height/size32/
+content-length/`mode_flag=0x0100`/palette — derived from the model), and
+assemble the TOC (`crc16_modbus` over the concatenated frame payloads,
+same value in every entry). The one real practical obstacle is
+`CRC_INIT`: since there's no general formula relating a final chunk's
+length to its CRC init, an arbitrary from-scratch blob's length usually
+won't match any of the handful of lengths solved from real captures. The
+workaround exploits the RLE grammar itself — a solid run can be split into
+any number of chained same-flag tokens without changing the rendered
+image, each split costing exactly 2 bytes — so a frame with a large solid
+region can have its length tuned until the final chunk lands exactly on
+an already-solved length, with no external padding and no new `CRC_INIT`
+value needed. This only works if some frame has a solid region large
+enough to absorb the needed adjustment; a general encoder would need a
+fallback (or a clear error) for images that don't.
 
 ## Image format
 

@@ -1059,6 +1059,37 @@ GIF_FLASH_BASE = 0x04240000
 # u16 field (solved and re-verified repeatedly this session, including for
 # save_to_gif_13's overflowing case). Removed from the open list below.
 #
+# MILESTONE: the first fully from-scratch GIF -- not derived from any
+# capture -- rendered correctly on hardware. Every prior success was a
+# small edit to already-valid captured content; this proves the RLE model
+# is complete enough to actually BUILD new working uploads. Built purely
+# from the confirmed model: a TOC of 20-byte entries, each frame a
+# 528-byte fixed prefix (copying the two still-unexplained-but-always-
+# constant magic byte pairs verbatim; width/height/size32/content-length/
+# mode_flag=0x0100/palette all derived from scratch) followed by
+# continuous-raster-order RLE content, restricted to "safe" colors
+# (max(R,G,B) in {0,255}) so no dithering needs solving. Content: frame 0
+# solid blue, frame 1 a 16x16 red/white checkerboard -- new, never
+# captured or mutated from one. The one practical obstacle, CRC_INIT
+# (no general formula relating a final chunk's length to its init, so an
+# arbitrary from-scratch length usually matches none of the ~13 solved
+# values), was worked around without any new brute force: a solid run can
+# be split into any number of chained same-flag tokens with no change to
+# the rendered image, each split costing exactly 2 bytes, so frame 0's
+# single run was split into enough pieces to land the wire packetization's
+# final chunk exactly on an already-solved length (1080 bytes, from
+# save_to_gif_12) -- no external padding, no new CRC_INIT entry. Self-
+# verified before upload (TOC crc16_modbus matches, both frames' RLE
+# content sums to exactly 153600 pixels, packetizes with no exceptions),
+# then uploaded: all 12 packets acked, and the panel showed exactly the
+# intended animation, confirmed by the user, not the fallback. Not yet
+# wired into cli.py as a real --target gif option -- this was a standalone
+# proof-of-concept script. The CRC_INIT-length-matching trick only works
+# when some frame has a large enough solid region to split; a general
+# encoder needs a fallback or a clear error for images that don't. Scope
+# is RLE-mode, non-dithered content only -- photos and the raw-bitmap
+# format are still out of reach for an encoder.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
