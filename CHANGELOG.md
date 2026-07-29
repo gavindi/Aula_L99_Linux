@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.18] - 2026-07-30
+
+**"Save to GIF": the 8-byte tolerance is not specific to frame 0 or the
+RLE format -- it's identical in frame 1's raw-bitmap mode too.**
+
+### Verified
+- Repeated the 0.6.17 bisection on `save_to_gif_13`'s frame 1 (the
+  154128-byte raw-bitmap frame, padding starting at offset 38 instead of
+  frame 0's offset 18): 8 non-zero bytes passes, 9 fails. Exactly the same
+  boundary as frame 0 (1728 bytes, RLE mode).
+
+### Changed
+- With the same exact threshold holding across two frames of very
+  different size (1728 vs. 154128 bytes) and different content encoding
+  (RLE tokens vs. raw indexed bitmap), "8" looks like a genuine constant
+  of the format or firmware -- not an artifact of frame size, position
+  within the blob, or encoding mode. Still no candidate mechanism for why
+  8 specifically (alignment, a small fixed buffer, a coarse checksum
+  granularity, etc. are all just guesses at this point).
+
+### Known gaps
+- No candidate explanation for why 8 is the specific number.
+- Same open items otherwise: sub-header byte [13], dithering algorithm,
+  `mode_flag`, delay field's unit, `save_to_gif_2` inefficiency.
+
 ## [0.6.17] - 2026-07-30
 
 **"Save to GIF": the 528-byte prefix's tolerance boundary is exactly 8

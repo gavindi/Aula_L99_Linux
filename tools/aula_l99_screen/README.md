@@ -577,6 +577,15 @@ have broken something, and it didn't. The padding genuinely tolerates a
 small, fixed count of changed bytes (8) regardless of which ones, and
 rejects more — a count-based check, not a positional one.
 
+**The same 8-byte threshold holds in frame 1's raw-bitmap mode too, not
+just frame 0's RLE mode.** Repeating the bisection there (154128 bytes,
+padding starting at offset 38 instead of offset 18): 8 non-zero bytes
+passes, 9 fails — the exact same boundary. With the same threshold across
+two frames of very different size and content encoding, "8" looks like a
+genuine constant of the format or firmware, not an artifact of frame size,
+blob position, or encoding mode. Still no candidate mechanism for why 8
+specifically.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -592,10 +601,10 @@ Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
 a color table, fixed-size up to 11 palette slots, still exactly 528 bytes
 in `save_to_gif_13`'s frame 2 by construction — size32 - 528 matches the
 overflowing content-length field exactly — and now known to tolerate
-exactly 8 non-zero bytes anywhere in the padding, confirmed a pure count
-threshold rather than a specific critical byte, mechanism behind the
-count still unknown), one unidentified sub-header byte, why a dithered
-color sometimes gets the
+exactly 8 non-zero bytes anywhere in the padding, a pure count threshold
+that holds identically in both RLE-mode and raw-bitmap-mode frames,
+mechanism behind the count still unknown), one unidentified sub-header
+byte, why a dithered color sometimes gets the
 simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),

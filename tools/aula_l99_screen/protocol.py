@@ -1003,6 +1003,14 @@ GIF_FLASH_BASE = 0x04240000
 # check, not a positional one. Untested: whether "8" is specific to this
 # region/frame or a broader constant, and whether the count that matters
 # is "bytes changed from zero" specifically or something more general.
+#
+# Repeated on frame 1 (154128 bytes, raw-bitmap mode, padding starting at
+# offset 38 instead of frame 0's offset 18): 8 non-zero bytes passes, 9
+# fails -- EXACTLY the same boundary as frame 0 (1728 bytes, RLE mode).
+# With the same threshold holding across two frames of very different
+# size and content encoding, "8" looks like a genuine constant of the
+# format or firmware, not an artifact of frame size, blob position, or
+# encoding mode. Still no candidate mechanism for why 8 specifically.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -1046,7 +1054,8 @@ GIF_FLASH_BASE = 0x04240000
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
 # matches the (overflowing) content-length field exactly -- and now known
 # to tolerate EXACTLY 8 non-zero bytes anywhere in the padding, confirmed a
-# pure count threshold rather than a specific critical byte, mechanism
+# pure count threshold (not a specific critical byte) that holds
+# identically in both RLE-mode and raw-bitmap-mode frames, mechanism
 # behind the count still unknown), the unidentified
 # sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
