@@ -1082,13 +1082,21 @@ GIF_FLASH_BASE = 0x04240000
 # verified before upload (TOC crc16_modbus matches, both frames' RLE
 # content sums to exactly 153600 pixels, packetizes with no exceptions),
 # then uploaded: all 12 packets acked, and the panel showed exactly the
-# intended animation, confirmed by the user, not the fallback. Not yet
-# wired into cli.py as a real --target gif option -- this was a standalone
-# proof-of-concept script. The CRC_INIT-length-matching trick only works
-# when some frame has a large enough solid region to split; a general
-# encoder needs a fallback or a clear error for images that don't. Scope
-# is RLE-mode, non-dithered content only -- photos and the raw-bitmap
-# format are still out of reach for an encoder.
+# intended animation, confirmed by the user, not the fallback.
+#
+# 0.7.1 generalized this into build_gif_blob() (below) and wired it into
+# cli.py as a real --target gif option, taking one image per frame via
+# --upload. Re-verified byte-for-byte identical to the hand-built,
+# hardware-confirmed 0.7.0 blob, then re-confirmed end-to-end through the
+# actual CLI command (not a script bypassing it) with two fresh PNGs --
+# all 12 packets acked, user confirmed the intended animation. The
+# CRC_INIT-length-matching trick only works when some frame has a large
+# enough solid region to split; build_gif_blob() raises a clear
+# ValueError (naming the largest run found and the capacity needed) when
+# none does, and a separate ValueError listing every offending color and
+# its pixel count when a color needs dithering. Scope is still RLE-mode,
+# non-dithered content only -- photos and the raw-bitmap format are out
+# of reach for an encoder until the dithering algorithm is solved.
 #
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
@@ -1206,6 +1214,207 @@ def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]
             region_start = base + offset
             region_bytes = 0
     return packets
+
+
+# --- GIF encoder (0.7.0) ------------------------------------------------
+#
+# From-scratch construction of a GIF blob for GIF_FLASH_BASE, built purely
+# from the model documented above -- not derived from any capture. First
+# proven on hardware in 0.7.0 (a hand-built solid-blue + checkerboard
+# animation). Scope: RLE-mode frames only (mode_flag=0x0100), using only
+# "safe" colors -- max(R,G,B) in {0,255} -- since the dithering algorithm
+# for anything else isn't solved (see the GIF_FLASH_BASE comment block).
+
+GIF_FRAME_PREFIX_SIZE = 528
+
+# Bytes 0-1 and 6-7 of every frame's sub-header have been byte-identical
+# across every captured frame regardless of content, in every capture in
+# this investigation. Meaning unknown; copied verbatim as fixed constants.
+GIF_FRAME_MAGIC_A = bytes([0x4C, 0x54])
+GIF_FRAME_MAGIC_B = bytes([0x01, 0x03])
+
+
+def is_safe_gif_color(r: int, g: int, b: int) -> bool:
+    """A color gets a direct, undithered palette slot only if its
+    brightest channel is exactly 0 or 255 -- see the dithering-trigger
+    rule in the GIF_FLASH_BASE comment block (12/12 tested colors fit
+    this rule). Anything else needs dithering, which this encoder can't
+    produce yet.
+    """
+    return max(r, g, b) in (0, 255)
+
+
+def _gif_runs(pixels: list[tuple[int, int, int]]) -> list[tuple[int, tuple[int, int, int]]]:
+    """Raster-order (length, color) runs -- the continuous-RLE model's
+    input, before splitting into <=256px chained tokens.
+    """
+    runs = []
+    i = 0
+    n = len(pixels)
+    while i < n:
+        color = pixels[i]
+        j = i
+        while j < n and pixels[j] == color:
+            j += 1
+        runs.append((j - i, color))
+        i = j
+    return runs
+
+
+def _gif_tokens(runs, palette_index, split_at=None):
+    """split_at: optional (run_index, piece_count) to pad one run's
+    encoding into more chained same-flag tokens without changing the
+    rendered image -- each extra piece costs exactly 2 content bytes.
+    """
+    tokens = []
+    for idx, (length, color) in enumerate(runs):
+        flag = palette_index[color]
+        if split_at is not None and idx == split_at[0]:
+            pieces_count = split_at[1]
+            base, extra = divmod(length, pieces_count)
+            pieces = [base + (1 if k < extra else 0) for k in range(pieces_count)]
+        else:
+            pieces = []
+            remaining = length
+            while remaining > 0:
+                take = min(256, remaining)
+                pieces.append(take)
+                remaining -= take
+        for take in pieces:
+            tokens.append((take, flag))
+    return tokens
+
+
+def _gif_largest_run(frames_runs):
+    """(frame_index, run_index, length) of the single longest run across
+    all frames -- the best candidate for the CRC_INIT-length-matching
+    padding trick, since it has the most spare capacity.
+    """
+    best = None
+    for fi, runs in enumerate(frames_runs):
+        for ri, (length, _color) in enumerate(runs):
+            if best is None or length > best[2]:
+                best = (fi, ri, length)
+    return best
+
+
+def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
+                    width: int = PANEL_WIDTH, height: int = PANEL_HEIGHT,
+                    delay: int = 50) -> bytes:
+    """Build a from-scratch GIF blob for GIF_FLASH_BASE.
+
+    frames_pixels: one list of (r,g,b) tuples per frame, each width*height
+    long, in raster order. Raises ValueError for any color needing
+    dithering, or if no frame has a solid/uniform run large enough to
+    tune the upload length onto an already-solved CRC_INIT entry.
+    """
+    n = width * height
+    for i, px in enumerate(frames_pixels):
+        if len(px) != n:
+            raise ValueError(f"frame {i}: expected {n} pixels ({width}x{height}), got {len(px)}")
+
+    bad: dict[tuple[int, int, int], int] = {}
+    for px in frames_pixels:
+        for color in px:
+            if not is_safe_gif_color(*color):
+                bad[color] = bad.get(color, 0) + 1
+    if bad:
+        lines = "\n".join(f"  rgb{color}: {count} pixels"
+                           for color, count in sorted(bad.items(), key=lambda kv: -kv[1]))
+        raise ValueError(
+            "these colors need dithering, which this from-scratch encoder can't "
+            "produce yet (only max(R,G,B) in {0, 255} is supported):\n" + lines
+        )
+
+    frames_runs = [_gif_runs(px) for px in frames_pixels]
+
+    def build_all(split_at=None):
+        frame_bytes = []
+        for fi, runs in enumerate(frames_runs):
+            palette: list[tuple[int, int, int]] = []
+            palette_index: dict[tuple[int, int, int], int] = {}
+            for _length, color in runs:
+                if color not in palette_index:
+                    palette_index[color] = len(palette)
+                    palette.append(color)
+
+            frame_split = split_at[1:] if split_at and split_at[0] == fi else None
+            tokens = _gif_tokens(runs, palette_index, split_at=frame_split)
+
+            content = bytearray()
+            for length, flag in tokens:
+                content.append(length - 1)
+                content.append(flag)
+
+            header = bytearray(GIF_FRAME_PREFIX_SIZE)
+            header[0:2] = GIF_FRAME_MAGIC_A
+            header[2:4] = struct.pack("<H", width)
+            header[4:6] = struct.pack("<H", height)
+            header[6:8] = GIF_FRAME_MAGIC_B
+            size32 = GIF_FRAME_PREFIX_SIZE + len(content)
+            header[8:12] = struct.pack("<I", size32)
+            header[12:14] = struct.pack("<H", len(content) % 65536)
+            header[14:16] = struct.pack("<H", 0x0100)  # RLE mode
+            for i, color in enumerate(palette):
+                off = 16 + i * 2
+                if off + 2 > GIF_FRAME_PREFIX_SIZE:
+                    raise ValueError(
+                        f"frame {fi}: {len(palette)} distinct colors is too many for the "
+                        f"528-byte prefix (only ever confirmed up to 11 slots)"
+                    )
+                header[off:off + 2] = struct.pack("<H", rgb_to_rgb565(*color))
+            frame_bytes.append(bytes(header) + bytes(content))
+
+        toc_size = 20 * len(frame_bytes)
+        total_payload = sum(len(fb) for fb in frame_bytes)
+        payload = b"".join(frame_bytes)
+        crc = crc16_modbus(payload)
+
+        toc = bytearray(toc_size)
+        offset = toc_size
+        for i, fb in enumerate(frame_bytes):
+            e = 20 * i
+            struct.pack_into("<I", toc, e + 0, offset)
+            struct.pack_into("<I", toc, e + 4, total_payload)
+            struct.pack_into("<H", toc, e + 8, width)
+            struct.pack_into("<H", toc, e + 10, height)
+            toc[e + 12] = 3  # constant format/version tag, matches every capture
+            toc[e + 13] = len(frame_bytes)
+            struct.pack_into("<H", toc, e + 14, 0)
+            struct.pack_into("<H", toc, e + 16, delay)
+            struct.pack_into("<H", toc, e + 18, crc)
+            offset += len(fb)
+        return bytes(toc) + payload
+
+    baseline = build_all()
+    base_remainder = len(baseline) % CHUNK_SIZE
+
+    candidate_targets = sorted(set(CRC_INIT) | {0})
+    deltas = []
+    for target in candidate_targets:
+        delta = (target - base_remainder) % CHUNK_SIZE
+        if delta % 2 == 0:
+            deltas.append(delta)
+    deltas.sort()
+
+    if deltas and deltas[0] == 0:
+        return baseline
+
+    fi, ri, run_length = _gif_largest_run(frames_runs)
+    base_pieces = -(-run_length // 256)  # ceil
+    capacity = run_length - base_pieces
+
+    for delta in deltas:
+        extra = delta // 2
+        if extra <= capacity:
+            return build_all(split_at=(fi, ri, base_pieces + extra))
+
+    raise ValueError(
+        "no frame has a large enough solid/uniform run to tune the upload length onto "
+        "an already-solved CRC_INIT entry -- add a bigger solid-color region to one frame "
+        f"(largest run found: {run_length} px, needed capacity: {deltas[0] // 2 if deltas else '?'} "
+        "extra pieces)"
+    )
 
 
 def describe(blob: bytes) -> str:

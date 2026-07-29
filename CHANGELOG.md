@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-30
+
+**"Save to GIF": `--target gif` is now a real CLI feature, confirmed
+working end-to-end on hardware.** Wires up 0.7.0's proof-of-concept
+encoder into `protocol.py`/`cli.py` properly, rather than leaving it a
+standalone script.
+
+### Added
+- `protocol.build_gif_blob(frames_pixels, width, height, delay=50)`: the
+  from-scratch encoder from 0.7.0, generalized -- takes any number of
+  frames, validates every pixel's color up front and raises a `ValueError`
+  listing every offending color and its pixel count if any need dithering,
+  and raises a clear `ValueError` (naming the largest run found and the
+  capacity needed) if no frame has a large enough solid/uniform region for
+  the `CRC_INIT`-length-matching trick to work. Re-verified byte-for-byte
+  identical to 0.7.0's hand-built, hardware-confirmed blob.
+- `cli.py`: `--upload` now takes one or more image paths (`nargs="+"`).
+  `--target gif` builds a multi-frame GIF from them (one image per frame);
+  every other target still requires exactly one image, erroring clearly
+  otherwise. New `--gif-delay` flag (default 50, matching every capture).
+
+### Verified
+- Real end-to-end test: two fresh PNGs (solid blue, a 16x16 red/white
+  checkerboard) written via PIL, uploaded with the actual
+  `python3 -m aula_l99_screen.cli --upload frame0.png frame1.png --target
+  gif` command -- not a script bypassing the CLI. All 12 packets acked,
+  and the user confirmed the panel showed the intended animation.
+- The full pipeline (image loading through `cli.py`'s new
+  `_encode_gif_frame_pixels()`, then `protocol.build_gif_blob()`) produces
+  a blob byte-for-byte identical to 0.7.0's manually-verified one.
+
+### Fixed
+- `Image.getdata()` is deprecated in Pillow >=12 (removal slated for
+  Pillow 14, 2027-10-15); `cli.py` now prefers `get_flattened_data()` when
+  available, falling back for older Pillow versions.
+
+### Known gaps
+- Same scope limits as 0.7.0: RLE-mode, non-dithered ("safe") colors only.
+  Photos, the raw-bitmap format, and dithering are still out of reach for
+  an encoder.
+- Not stress-tested with more than 2 frames, larger palettes, or images
+  without a large solid region (the error path is implemented and unit
+  tested, but not exercised against a real user image that hits it).
+
 ## [0.7.0] - 2026-07-30
 
 **"Save to GIF": the first fully from-scratch GIF -- not derived from any

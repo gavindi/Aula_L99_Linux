@@ -12,7 +12,12 @@ photo-frame` (the default) and `--target background`: 154 packets, every one
 acked by the panel, image visible afterwards. The panel may need a restart
 before it redraws from flash.
 
-Not implemented: touch input, brightness, screen power, `--target gif`.
+`--target gif` also works, confirmed on real hardware, but only for images
+using "safe" colors (`max(R,G,B)` exactly 0 or 255) — anything else needs
+dithering, which isn't understood well enough yet to encode. See "Save to
+GIF" below.
+
+Not implemented: touch input, brightness, screen power.
 
 ## Usage
 
@@ -26,6 +31,10 @@ python3 -m aula_l99_screen.cli --list
 python3 -m aula_l99_screen.cli --upload picture.png
 python3 -m aula_l99_screen.cli --upload picture.png --target background
 
+# upload a GIF: one image per frame, in order (safe colors only -- see below)
+python3 -m aula_l99_screen.cli --upload frame1.png frame2.png --target gif
+python3 -m aula_l99_screen.cli --upload frame1.png frame2.png --target gif --gif-delay 50
+
 # just build the .bin the panel expects, without touching hardware
 python3 -m aula_l99_screen.cli --convert picture.png -o picture.bin
 python3 -m aula_l99_screen.cli --describe picture.bin
@@ -35,19 +44,21 @@ python3 -m aula_l99_screen.cli --describe picture.bin
 
 The vendor app's own string table (`Windows/AULA L99/language/1033.lan`
 #866-868) names three upload actions: "Save to GIF", "Save to BKG" and "Save
-to photo frame". Two are supported here, both using the identical wire
-protocol and image format below — only the flash base address differs:
+to photo frame". All three are supported here, using the identical wire
+protocol below — only the flash base address and (for GIF) the container
+format differ:
 
-| `--target`    | flash base   | status                 |
-|---------------|--------------|------------------------|
-| `photo-frame` | `0x041E0000` | confirmed on hardware  |
-| `background`  | `0x04180000` | confirmed on hardware  |
+| `--target`    | flash base   | status                                        |
+|---------------|--------------|------------------------------------------------|
+| `photo-frame` | `0x041E0000` | confirmed on hardware                         |
+| `background`  | `0x04180000` | confirmed on hardware                         |
+| `gif`         | `0x04240000` | confirmed on hardware, safe colors only (see below) |
 
 `--address` overrides `--target` if you want to experiment with other
-locations. `0x04240000` is "Save to GIF"'s address (see below); one more slot
-the vendor binary references, `0x04200000`, is still unidentified.
+locations. One more slot the vendor binary references, `0x04200000`, is
+still unidentified.
 
-### Save to GIF (proof-of-concept encoder exists; not wired into the CLI)
+### Save to GIF (`--target gif`, safe colors only)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
 from thirteen captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
@@ -64,14 +75,22 @@ grid, shifted one pixel in frame 2), `save_to_gif_10.pcapng` (eight
 distinct-colored vertical stripes, including gray), `save_to_gif_11.pcapng`
 (the same eight colors, reordered so gray is first), `save_to_gif_12.pcapng`
 (black and orange, testing the dithering boundary), and `save_to_gif_13.pcapng`
-(light gray and dark red, following up). There is still no `--target gif`
-in `cli.py`, but a from-scratch encoder now exists and has been proven on
-hardware: a hand-built 2-frame blob (solid blue + a red/white checkerboard,
-new content, not derived from any capture) was uploaded and rendered
-correctly — the first real proof the RLE model is complete enough to
-*construct* working uploads, not just decode existing ones. This is
+(light gray and dark red, following up). **`--target gif` is now a real,
+working CLI feature** — the first real proof the RLE model is complete
+enough to *construct* new uploads, not just decode existing ones. It's
 restricted to "safe" colors (`max(R,G,B)` in `{0,255}`), since the
-dithering algorithm for anything else still isn't solved. What's known:
+dithering algorithm for anything else still isn't solved:
+
+```
+python3 -m aula_l99_screen.cli --upload frame1.png frame2.png --target gif
+```
+
+One image per frame, in order. If any image uses a color that would need
+dithering, the upload is refused with a list of the offending colors and
+their pixel counts rather than silently producing something wrong. If no
+frame has a large enough solid/uniform region to tune the upload length
+onto an already-solved `CRC_INIT` entry (see below), it's also refused,
+naming the largest run found. What's known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
@@ -632,25 +651,26 @@ frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).
 
-**The from-scratch encoder, in outline** (proof-of-concept script, not
-yet in `cli.py`): build each frame as continuous-raster-order RLE (palette
-in first-appearance order, runs chained into <=256px pieces), write a
-528-byte prefix per frame (copying the two still-unexplained-but-always-
-constant magic byte pairs verbatim; everything else — width/height/size32/
-content-length/`mode_flag=0x0100`/palette — derived from the model), and
-assemble the TOC (`crc16_modbus` over the concatenated frame payloads,
-same value in every entry). The one real practical obstacle is
-`CRC_INIT`: since there's no general formula relating a final chunk's
-length to its CRC init, an arbitrary from-scratch blob's length usually
-won't match any of the handful of lengths solved from real captures. The
-workaround exploits the RLE grammar itself — a solid run can be split into
-any number of chained same-flag tokens without changing the rendered
-image, each split costing exactly 2 bytes — so a frame with a large solid
-region can have its length tuned until the final chunk lands exactly on
-an already-solved length, with no external padding and no new `CRC_INIT`
-value needed. This only works if some frame has a solid region large
-enough to absorb the needed adjustment; a general encoder would need a
-fallback (or a clear error) for images that don't.
+**The from-scratch encoder, in outline** (`protocol.build_gif_blob()`,
+used by `cli.py`'s `--target gif`): build each frame as continuous-raster-
+order RLE (palette in first-appearance order, runs chained into <=256px
+pieces), write a 528-byte prefix per frame (copying the two still-
+unexplained-but-always-constant magic byte pairs verbatim; everything
+else — width/height/size32/content-length/`mode_flag=0x0100`/palette —
+derived from the model), and assemble the TOC (`crc16_modbus` over the
+concatenated frame payloads, same value in every entry). The one real
+practical obstacle is `CRC_INIT`: since there's no general formula
+relating a final chunk's length to its CRC init, an arbitrary from-scratch
+blob's length usually won't match any of the handful of lengths solved
+from real captures. The workaround exploits the RLE grammar itself — a
+solid run can be split into any number of chained same-flag tokens
+without changing the rendered image, each split costing exactly 2 bytes —
+so the frame with the single largest solid/uniform run has its length
+tuned until the final chunk lands exactly on an already-solved length,
+with no external padding and no new `CRC_INIT` value needed. This only
+works if some frame has a region large enough to absorb the needed
+adjustment; `build_gif_blob()` raises a clear `ValueError` naming the
+largest run found and the capacity needed if none does.
 
 ## Image format
 
