@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.10] - 2026-07-30
+
+**"Save to GIF": first hardware-confirmed edit of the raw-bitmap format --
+a single-pixel swap rendered correctly, a block swap didn't.** Directly
+follows 0.6.9's two failed edits; narrows down what the panel's content
+validator actually cares about.
+
+### Verified
+- A single adjacent-pixel swap (row 0, columns 2 and 3, values 0 and 1
+  exchanged -- the smallest possible edit) was uploaded with `crc16_modbus`
+  recomputed correctly. All 79 packets acked, and the panel rendered the
+  normal 3-stripe animation **with the intended pixel visibly changed** --
+  confirmed by the user. This is the first genuine hardware proof that the
+  raw-bitmap byte-layout reading (0.6.7) is not just the best fit for the
+  static evidence, but the panel's actual internal representation: editing
+  one byte at a known position produced exactly the predicted one-pixel
+  visual change.
+- A second experiment -- swapping two whole 40x40 blocks between the
+  gray and red stripes (same size, so a pure permutation: every flag's
+  total pixel count across the frame is exactly unchanged, unlike 0.6.9's
+  overwrite) -- still fell back. Same acked/checksum-correct-but-rejected
+  pattern as every larger edit so far.
+- Restoring the original blob after the block-swap experiment needed two
+  retries before the panel actually redrew the pristine content (the first
+  retry's re-upload acked cleanly but the panel kept showing the swapped
+  render). This matches the flaky-restore behavior already documented in
+  the 0.5.x era exactly, just needing one more retry than that case did.
+
+### Changed
+- Rules out "preserves the frame's aggregate flag histogram" as the
+  validator's criterion: the failed block swap preserves it exactly, same
+  as the successful pixel swap, so histogram preservation alone can't be
+  what separates the two outcomes.
+- The successful/failed pair (2 bytes changed -> fine; 1600 bytes changed,
+  same permutation type -> fallback) points toward a scale- or
+  magnitude-based check -- how much of the frame differs from some
+  reference, not what statistical properties the difference has -- though
+  the exact threshold and mechanism are still unknown.
+
+### Known gaps
+- Where the pass/fail boundary sits between "2 bytes changed" and "1600
+  bytes changed" is unmapped -- worth bisecting in a future round.
+- The validator's real mechanism is still unidentified; this only narrows
+  the hypothesis space.
+- Same open items as 0.6.9 otherwise.
+
 ## [0.6.9] - 2026-07-30
 
 **"Save to GIF": first hardware test of the raw-bitmap model failed to the

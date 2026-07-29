@@ -408,18 +408,34 @@ this raw-bitmap frame (`mode_flag=0x0002`) is a plausible format selector,
 though with only one example of each it isn't proven.
 
 **First hardware test of the raw-bitmap reading was inconclusive, not a
-refutation.** With the panel connected, a 40×40 block of an existing valid
-flag (red) was written into `save_to_gif_13`'s light-gray stripe,
-`crc16_modbus` recomputed correctly, all 79 packets acked — and the panel
-fell back to its cached animation instead of showing the edit. The
-byte-layout reading itself stands (the full 528-byte prefix was re-checked
-byte-by-byte for both frames — genuinely all zero past the known header
-fields, no hidden checksum this edit could have broken). This matches the
-same "ack'd, checksum-correct, still falls back" opacity seen throughout
-the 0.5.x RLE mutation experiments; whatever the panel's real content
-validator checks remains unknown, now confirmed to also apply to the
-raw-bitmap format. Original blob restored immediately after and confirmed
-correct.
+refutation — but a follow-up test confirmed it directly.** With the panel
+connected, a 40×40 block of an existing valid flag (red) was written into
+`save_to_gif_13`'s light-gray stripe, `crc16_modbus` recomputed correctly,
+all 79 packets acked — and the panel fell back to its cached animation
+instead of showing the edit. The byte-layout reading itself stood (the
+full 528-byte prefix was re-checked byte-by-byte for both frames —
+genuinely all zero past the known header fields, no hidden checksum this
+edit could have broken). A second experiment swapped two whole 40×40
+blocks between the gray and red stripes instead of overwriting — a pure
+permutation that leaves every flag's total pixel count exactly unchanged —
+and still fell back, ruling out "preserves the frame's aggregate color
+histogram" as the validator's criterion.
+
+A third experiment, the smallest possible edit — swapping just two
+adjacent bytes (row 0, columns 2 and 3) — **worked**: all 79 packets
+acked, and the panel rendered the normal animation with the intended
+single-pixel change visible, confirmed by the user. This is the first
+genuine hardware proof of the raw-bitmap byte-layout reading, not just the
+best fit for static evidence. Since the failed block swap is the *same
+kind* of edit (a histogram-preserving permutation) just ~800x larger, the
+pass/fail split points toward a scale- or magnitude-based validation —
+how much of the frame differs from some reference — rather than a
+property of the difference's statistics. The exact threshold isn't
+mapped. Restoring the pristine original after this round needed two
+retries before the panel actually redrew — the same flaky-restore
+behavior documented in the 0.5.x era, just needing one more retry than
+that case did; every upload itself acked cleanly, so the flakiness is on
+the panel's redraw-trigger side, not the wire transfer.
 
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
@@ -441,9 +457,11 @@ simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
-example of each so far), what the panel's actual content validator checks
-(an ack'd, checksum-correct upload can still fall back — true for both RLE
-and raw-bitmap edits, mechanism unknown), and why `save_to_gif_2`'s solid
+example of each so far), exactly where the content validator's pass/fail
+boundary sits (a 2-byte permutation renders correctly, an 800x-larger
+same-kind permutation falls back — histogram preservation is ruled out as
+the criterion, a scale/magnitude threshold is the leading hypothesis, not
+yet bisected), and why `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).

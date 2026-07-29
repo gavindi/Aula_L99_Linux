@@ -832,6 +832,30 @@ GIF_FLASH_BASE = 0x04240000
 #     same unresolved mystery as before, now also confirmed present in the
 #     raw-bitmap format. Restored the original blob immediately after;
 #     confirmed correct by the user.
+#   - A second experiment swapped two whole 40x40 blocks between the gray
+#     and red stripes -- same size, so a pure permutation that leaves every
+#     flag's total pixel count across the frame exactly unchanged, unlike
+#     the overwrite above. Still fell back, ruling out "preserves the
+#     frame's aggregate flag histogram" as the validator's actual
+#     criterion.
+#   - A THIRD experiment, the smallest possible edit -- swapping just two
+#     adjacent bytes (row 0, columns 2 and 3, values 0 and 1) -- worked:
+#     all 79 packets acked, and the panel rendered the normal animation
+#     WITH the intended single-pixel change visible, confirmed by the
+#     user. This is the first genuine hardware proof of the raw-bitmap
+#     byte-layout reading, not just the best fit for static evidence:
+#     editing one byte at a known position produced exactly the predicted
+#     one-pixel visual change. Combined with the failed block-swap (which
+#     is the SAME kind of edit -- a histogram-preserving permutation --
+#     just 800x larger), the pass/fail split points at a scale- or
+#     magnitude-based validation (how much of the frame differs from some
+#     reference) rather than a property of the difference's statistics.
+#     The exact threshold is unmapped. Restoring the original blob after
+#     this round needed two retries before the panel actually redrew --
+#     matches the flaky-restore behavior from the 0.5.x era, just needing
+#     one more retry than that case did; every upload itself acked cleanly
+#     throughout, so the flakiness is on the panel's redraw-trigger side,
+#     not the wire transfer.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -883,7 +907,12 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), and gif_2's solid frames being encoded far less efficiently (4151
+# far), exactly where the content validator's pass/fail boundary sits
+# between "2 bytes changed" (confirmed OK) and "1600 bytes changed, same
+# permutation type" (confirmed fallback) -- histogram preservation alone
+# is ruled out as the criterion, a scale/magnitude threshold is the
+# leading hypothesis, not yet bisected -- and gif_2's solid frames being
+# encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image
 # wasn't perfectly flat, not investigated. It is NOT raw RGB565 for the
