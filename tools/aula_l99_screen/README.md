@@ -407,6 +407,20 @@ reference frame in the same capture (still RLE, `mode_flag=0x0100`) vs.
 this raw-bitmap frame (`mode_flag=0x0002`) is a plausible format selector,
 though with only one example of each it isn't proven.
 
+**First hardware test of the raw-bitmap reading was inconclusive, not a
+refutation.** With the panel connected, a 40×40 block of an existing valid
+flag (red) was written into `save_to_gif_13`'s light-gray stripe,
+`crc16_modbus` recomputed correctly, all 79 packets acked — and the panel
+fell back to its cached animation instead of showing the edit. The
+byte-layout reading itself stands (the full 528-byte prefix was re-checked
+byte-by-byte for both frames — genuinely all zero past the known header
+fields, no hidden checksum this edit could have broken). This matches the
+same "ack'd, checksum-correct, still falls back" opacity seen throughout
+the 0.5.x RLE mutation experiments; whatever the panel's real content
+validator checks remains unknown, now confirmed to also apply to the
+raw-bitmap format. Original blob restored immediately after and confirmed
+correct.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -427,7 +441,9 @@ simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
-example of each so far), and why `save_to_gif_2`'s solid
+example of each so far), what the panel's actual content validator checks
+(an ack'd, checksum-correct upload can still fall back — true for both RLE
+and raw-bitmap edits, mechanism unknown), and why `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).

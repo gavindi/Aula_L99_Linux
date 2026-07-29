@@ -817,6 +817,21 @@ GIF_FLASH_BASE = 0x04240000
 #     this raw-bitmap frame has mode_flag=0x0002 -- a plausible format
 #     selector (RLE vs. raw), though with only one example of each this
 #     isn't proven, just consistent.
+#   - First hardware test of this reading (the panel is connected): a
+#     40x40 block of an existing valid flag (4, clean red) was written into
+#     save_to_gif_13's light-gray stripe, TOC crc16_modbus recomputed
+#     correctly, all 79 packets acked -- and the panel showed the fallback
+#     animation, not the edited content. This does NOT retract the
+#     byte-layout reading above (re-checked the full 528-byte prefix for
+#     both frames byte-by-byte: genuinely all zero past the known header
+#     fields, no hidden checksum hiding there or trailing the frame that
+#     this edit could have invalidated). It matches the same "ack'd and
+#     TOC-checksum-correct but still falls back" opacity documented in the
+#     0.5.x RLE mutation experiments -- whatever the panel's real content
+#     validator checks, it rejected this edit for reasons still unknown,
+#     same unresolved mystery as before, now also confirmed present in the
+#     raw-bitmap format. Restored the original blob immediately after;
+#     confirmed correct by the user.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}

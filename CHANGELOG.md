@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-07-30
+
+**"Save to GIF": first hardware test of the raw-bitmap model failed to the
+fallback animation -- inconclusive, not a refutation.** The panel is
+connected, so the 0.6.7 raw-bitmap reading got its first real hardware
+check: a 40x40-pixel block in `save_to_gif_13`'s light-gray stripe was
+overwritten with an existing, valid palette flag (4, the frame's own clean
+red), `crc16_modbus` was recomputed correctly over the modified payload and
+written into both TOC entries, and the modified blob was packetized with
+`build_upload()` (same length as the real capture, so no new `CRC_INIT`
+entry was needed) and uploaded.
+
+### Verified
+- All 79 packets acked -- the wire transfer and TOC-level `crc16_modbus`
+  were structurally valid.
+- The panel showed the fallback animation instead of the edited stripe.
+  Re-uploading the original, unmodified blob (same procedure) restored the
+  correct 3-stripe animation; user confirmed. The panel was not damaged.
+- The full 528-byte prefix was re-checked byte-by-byte (not just the first
+  80 bytes as before) for both frames: no hidden nonzero region exists
+  anywhere in it beyond the already-decoded header fields. There is no
+  room for an undiscovered per-frame content checksum -- frame 1's raw
+  bitmap content runs from byte 528 to the frame's exact end (size32),
+  with nothing trailing it either.
+
+### Changed
+- Nothing about the raw-bitmap structural reading is retracted: the static
+  evidence for it (content length exactly 320x480, all bytes confined to
+  the palette range, clean row-by-row stripe structure, measured
+  per-channel duty cycles in the right range) is unaffected by this
+  result, since ruled out is only a hidden checksum, not the byte-per-pixel
+  layout itself.
+- This result matches the established pattern from the 0.5.x-era RLE
+  experiments: an ack'd, TOC-checksum-correct upload can still fail the
+  panel's own undocumented content validation and fall back, for reasons
+  never fully reverse-engineered even after many RLE-mode attempts back
+  then. That opacity apparently isn't specific to the RLE format --  it
+  now shows up in the raw-bitmap format too.
+
+### Known gaps
+- What the panel's content validator actually checks is still unknown for
+  both formats. A large uniform block using an existing valid flag was not
+  enough to satisfy it here, same as most non-trivial RLE edits weren't
+  enough back in 0.5.x -- whatever passes validation seems to be a narrow,
+  structurally-specific class of edit, not "any internally-consistent
+  content."
+- Same open items as 0.6.8 otherwise.
+
 ## [0.6.8] - 2026-07-30
 
 **"Save to GIF": the 8-slot dither palette decomposes into 3 independent
