@@ -535,6 +535,35 @@ anomalies) also rendered correctly. 14 hardware data points now fit the
 transition/run-structure reading without exception. How far a transition
 shift can go before it starts failing is untested.
 
+**The 528-byte prefix's zero padding got its first active test — and
+turned out not to be inert.** On frame 0 (solid red, RLE mode, the
+simplest case), the padding region (bytes 18–527, all zero in every
+capture seen so far) was overwritten with increasingly large non-zero
+patterns, `crc16_modbus` recomputed correctly each time, all 79 packets
+acked every time:
+
+| bytes changed | result |
+|---|---|
+| 200 | fallback |
+| 20 | fallback |
+| 10 | fallback |
+| 5 | real content |
+| 1 | real content |
+
+This rules out both "genuinely unused, ignored padding" (10+ bytes
+reliably fails) and "must be strictly all-zero" (1 and 5 non-zero bytes
+are both fine) — something checks this region, with real tolerance, not
+an exact-match requirement. The boundary sits between 5 and 10 bytes
+(offset 23–28), not pinned down further. This behaves differently in
+character from the content region's transition tolerance: content-region
+within-region edits pass at any size tested up to 3200 bytes, while here
+even a fairly arbitrary 10-byte pattern already fails — looks more like a
+literal magnitude threshold specific to this region, though it's also
+possible the boundary marks the start of a real, still-unidentified
+structured field that just happens to read as zero in every simple
+capture so far. Whether this generalizes to frame 1 (raw-bitmap mode) is
+untested.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -547,10 +576,12 @@ instead, which is unambiguous. All 15 captures re-verified byte-for-byte
 after the fix.
 
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
-a color table, fixed-size up to 11 palette slots, and confirmed still
-exactly 528 bytes in `save_to_gif_13`'s frame 2 by construction — size32 -
-528 matches the overflowing content-length field exactly), one
-unidentified sub-header byte, why a dithered color sometimes gets the
+a color table, fixed-size up to 11 palette slots, still exactly 528 bytes
+in `save_to_gif_13`'s frame 2 by construction — size32 - 528 matches the
+overflowing content-length field exactly — and now known to be actively
+validated with a tolerance boundary between 5 and 10 non-zero bytes, not
+simply unused or strictly zero, exact byte and mechanism still unmapped),
+one unidentified sub-header byte, why a dithered color sometimes gets the
 simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),

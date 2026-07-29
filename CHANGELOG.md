@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.16] - 2026-07-30
+
+**"Save to GIF": the 528-byte prefix's zero padding is NOT inert -- it's
+validated, and the tolerance boundary sits between 5 and 10 bytes.** First
+active test of this previously totally opaque region, on `save_to_gif_13`'s
+simplest frame (frame 0, solid red, RLE mode).
+
+### Verified
+- Frame 0's zero-padding region (bytes 18-527 of its 528-byte prefix, all
+  zero in the original capture) was overwritten with non-zero patterns of
+  increasing size, `crc16_modbus` recomputed correctly each time, all 79
+  packets acked every time:
+  - 200 bytes non-zero: fallback.
+  - 20 bytes: fallback.
+  - 10 bytes: fallback.
+  - 5 bytes: **real content, not fallback.**
+  - 1 byte (offset 18 flipped 0->1): **real content, not fallback.**
+- This rules out "must be strictly all-zero, zero tolerance" (1 and 5
+  non-zero bytes were both accepted) AND rules out "genuinely unused,
+  ignored padding" (10+ non-zero bytes reliably triggers the fallback).
+  Something checks this region, and it has real tolerance, not an
+  exact-match requirement.
+- Restores this round needed a retry twice (same known flaky-redraw
+  behavior as every prior round); every upload itself acked cleanly.
+
+### Changed
+- The prefix's zero region behaves differently in character from the
+  content region's transition/run-structure tolerance (0.6.11-0.6.15):
+  content-region within-region edits passed at ANY size tested (up to
+  3200 bytes), while here even a fairly arbitrary 10-byte pattern already
+  fails. This looks more like a literal magnitude/length threshold
+  specific to this region than a structural check -- though it's also
+  possible the boundary (somewhere in bytes 23-28, i.e. offset 18+5 to
+  18+10) marks the start of a real, still-unidentified structured field
+  that happens to read as zero in every simple capture seen so far, rather
+  than a tolerance-based check on otherwise-free padding.
+
+### Known gaps
+- The exact byte where the boundary sits (between offset 23 and 28) is
+  not pinned down -- worth a tighter bisection.
+- Whether the boundary is a true magnitude threshold or the edge of a
+  real structured field is unresolved; testing with a structured pattern
+  (e.g. a plausible checksum, a copy of a known-good value) instead of an
+  arbitrary byte sequence at ~7-8 bytes might help distinguish.
+- Whether this generalizes to frame 1 (raw-bitmap mode) or is specific to
+  frame 0's RLE mode is untested.
+- Same open items otherwise: sub-header byte [13], dithering algorithm,
+  `mode_flag`, delay field's unit, `save_to_gif_2` inefficiency.
+
 ## [0.6.15] - 2026-07-30
 
 **"Save to GIF": a 3-pixel-wide boundary shift also passes, further

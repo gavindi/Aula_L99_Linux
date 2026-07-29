@@ -962,6 +962,31 @@ GIF_FLASH_BASE = 0x04240000
 #     existing transition works too. 14 hardware data points now fit
 #     without exception. How far a shift can go before it starts failing
 #     is untested.
+#
+# First active test of the 528-byte prefix's zero-padding region (bytes
+# 18-527, all zero in every capture seen so far) -- on frame 0 (solid red,
+# RLE mode, the simplest case): overwritten with increasingly large
+# non-zero patterns, crc16_modbus recomputed correctly each time, all 79
+# packets acked every time. Result: NOT inert padding, but not a strict
+# all-zero requirement either --
+#   200 bytes non-zero: fallback.
+#   20 bytes: fallback.
+#   10 bytes: fallback.
+#   5 bytes: real content, not fallback.
+#   1 byte (offset 18, flipped 0 -> 1): real content, not fallback.
+# Rules out both "genuinely unused, ignored padding" (10+ bytes reliably
+# fails) and "must be strictly all-zero" (1 and 5 non-zero bytes are both
+# fine). The boundary sits between 5 and 10 bytes (offset 18+5=23 to
+# 18+10=28), not yet pinned down further. This behaves differently in
+# character from the content region's transition/run-structure tolerance
+# (0.6.11-0.6.15): content-region within-region edits pass at ANY size
+# tested up to 3200 bytes, while here even a fairly arbitrary 10-byte
+# pattern already fails -- looks more like a literal magnitude/length
+# threshold specific to this region, though it's also possible this
+# boundary marks the start of a real, still-unidentified structured field
+# that just happens to read as zero in every simple capture seen so far,
+# rather than a tolerance-based check on otherwise-free padding. Whether
+# this generalizes to frame 1 (raw-bitmap mode) is untested.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -1001,9 +1026,12 @@ GIF_FLASH_BASE = 0x04240000
 # after the fix, including both collision pairs.
 #
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
-# (confirmed NOT a color table, fixed-size up to 11 palette slots, and still
+# (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
-# matches the (overflowing) content-length field exactly), the unidentified
+# matches the (overflowing) content-length field exactly -- and now known
+# to be actively validated with a tolerance boundary between 5 and 10
+# non-zero bytes, not simply unused or strictly zero, exact byte and
+# mechanism still unmapped), the unidentified
 # sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
 # per-channel grid (light gray here), the exact per-channel dithering
