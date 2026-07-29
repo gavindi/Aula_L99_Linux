@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-07-30
+
+**"Save to GIF": a large within-region swap renders correctly, closing
+0.6.11's biggest open gap.** The per-region flag-membership hypothesis now
+holds across the full size range tested, from 2 bytes to 3200.
+
+### Verified
+- Two 40x40 blocks, both entirely within `save_to_gif_13`'s light-gray
+  stripe (columns 10-49 and 60-99, same size as 0.6.10's failed
+  cross-stripe 40x40 swap), were swapped with each other. All 79 packets
+  acked, and the panel rendered the normal, correct 3-stripe animation --
+  confirmed by a user photo showing a clean light-gray / dark-red / red
+  layout with no fallback. This is the same edit size that failed every
+  time it crossed a stripe boundary (0.6.10, 0.6.11), now succeeding
+  because both sides stayed within the gray stripe's own flag set.
+- Restoring the original blob needed one retry before the panel visibly
+  redrew (same flaky-redraw behavior as every prior round; the retry
+  fixed it immediately, and every upload itself acked cleanly both times).
+
+### Changed
+- Confirms the per-region flag-membership reading from 0.6.11 is not
+  merely a small-edit-size artifact: within-region edits now pass at 2
+  bytes changed (0.6.10, 0.6.11) AND at 3200 bytes changed (this round),
+  while cross-region edits fail at every tested size from 2 to 3200 bytes
+  (0.6.10, 0.6.11). Edit size appears to genuinely not matter once the
+  region-membership constraint is satisfied.
+
+### Known gaps
+- Still untested: whether the boundary is truly per contiguous stripe or
+  something finer/coarser (e.g. per exact column) that happens to align
+  with the 3 stripes here.
+- The underlying mechanism is still a hypothesis pattern-matched across 9
+  data points (3 within-region successes at sizes 2/2/3200 bytes, 6
+  cross-region failures at sizes 2-3200 bytes), not a decoded algorithm.
+- Same open items as 0.6.11 otherwise (528-byte prefix, sub-header byte
+  [13], dithering algorithm, `mode_flag`, `save_to_gif_2` inefficiency).
+
 ## [0.6.11] - 2026-07-30
 
 **"Save to GIF": the content validator isn't a magnitude threshold -- it's

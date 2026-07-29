@@ -878,6 +878,18 @@ GIF_FLASH_BASE = 0x04240000
 #     tested: a within-region swap larger than 2 bytes, or whether the
 #     boundary is truly per-stripe vs. some other partition that happens
 #     to coincide with the 3 stripes here.
+#   - CLOSED the "larger within-region swap" gap immediately after: two
+#     40x40 blocks, BOTH entirely inside the gray stripe (columns 10-49
+#     and 60-99) -- the exact same size as the 40x40 swap that failed
+#     every time it crossed a stripe boundary -- were swapped with each
+#     other. All 79 packets acked, and the panel rendered correctly,
+#     confirmed by a user photo showing a clean 3-stripe layout, no
+#     fallback. Edit size genuinely doesn't seem to matter once the
+#     region-membership constraint holds: within-region edits now pass at
+#     both 2 bytes changed and 3200 bytes changed, while cross-region
+#     edits fail at every size tested from 2 to 3200 bytes. Still
+#     untested: whether the boundary is truly per contiguous stripe or
+#     something finer/coarser that happens to align with these 3 stripes.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -929,12 +941,14 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), the exact scope/mechanism of the content validator -- 8 data
-# points (2 within-region swaps, both OK; 6 cross-region swaps from 1 to
-# 1600 pixels/side, all fallback) fit "each stripe's pixels must stay
-# within that stripe's own established flag set," ruling out both simple
-# histogram preservation and any diff-size threshold, but this is a
-# pattern match across 8 tests, not a decoded algorithm -- and gif_2's
+# far), the exact scope/mechanism of the content validator -- 9 data
+# points (3 within-region swaps at 2/2/3200 bytes, all OK; 6 cross-region
+# swaps from 2 to 3200 bytes, all fallback) fit "each stripe's pixels must
+# stay within that stripe's own established flag set," ruling out both
+# simple histogram preservation and any diff-size threshold across the
+# full range tested, but this is a pattern match across 9 tests, not a
+# decoded algorithm, and whether the true boundary is per-stripe or some
+# finer/coarser partition is untested -- and gif_2's
 # solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image
