@@ -729,6 +729,69 @@ GIF_FLASH_BASE = 0x04240000
 # both dither) is solid; the precise token layout for multi-color dithering
 # isn't.
 #
+# Offline re-analysis of save_to_gif_13's raw blob (reassembled from the
+# capture, no hardware involved) refines the palette structure, though not
+# the token grammar. Frame 2's sub-header carries 11 populated RGB565
+# slots, not simple 2-color pairs per dithered target:
+#
+#   - slot 4 (0xF800, pure red) is the frame's third, UNDITHERED stripe --
+#     the same reference red used elsewhere -- confirming this frame is 3
+#     stripes (red, light gray, dark red), not 2.
+#   - slots 2-3 (0x6000/(153,0,0)-ish and 0x9800) decode to (99,0,0) and
+#     (156,0,0), average (127.5,0,0) -- essentially exact for the (128,0,0)
+#     dark-red target. This is the SAME simple 2-slot dither pattern as
+#     save_to_gif_10/11/12's gray.
+#   - slots {0,1,5,6,7,8,9,10} -- the other 8 -- are NOT simple pairs. They
+#     are the EXHAUSTIVE set of all 2x2x2=8 combinations of three
+#     independently-quantized channels: R in {156,206}, G in {170,215}, B
+#     in {156,206} (verified: every one of the 8 slots' decoded RGB is one
+#     of these 8 combinations, and all 8 combinations are present with none
+#     missing or repeated). This is a materially different dithering scheme
+#     from every prior single-dithered-color capture: instead of one shared
+#     pair of whole colors alternating pixel-by-pixel, light gray here gets
+#     its OWN per-channel independent quantization (R, G, and B each
+#     dithered between their own two levels separately), needing all 8
+#     corners of that 3D grid as distinct palette entries rather than 2.
+#     The unweighted average of all 8 is (181, 192.5, 181), noticeably off
+#     from the (200,200,200) target -- consistent with the actual pixel
+#     stream using the 8 slots at UNEQUAL frequencies (a duty-cycle/ordered
+#     dither per channel) rather than each of the 8 combinations equally
+#     often, though the token stream itself is not yet decoded to confirm
+#     this directly (see below).
+#   - This refines, rather than confirms, the earlier "combinations of the
+#     component brightness levels from BOTH dithered targets" guess: the
+#     two dithered colors in this frame do NOT share or combine slots with
+#     each other. Dark red keeps the old simple 2-slot scheme unchanged;
+#     light gray gets an entirely separate, new 8-slot scheme. Which
+#     scheme a given color uses (2-slot pair vs. 8-slot per-channel grid)
+#     is not yet understood -- both save_to_gif_10/11's gray (128,128,128)
+#     and this frame's dark red (128,0,0) use the simple 2-slot form, so it
+#     isn't simply "achromatic vs. chromatic" or "how far from a valid
+#     corner" -- unexplained why light gray (200,200,200) needed the richer
+#     scheme when a coarser 2-slot pair, in principle, could approximate it
+#     too (e.g. the same kind of pair used for the original 128-gray).
+#
+#   - The token grammar itself remains unsolved for this frame, and a
+#     concrete new data point narrows the puzzle: assuming frame 2's
+#     content starts exactly 528 bytes into the frame (confirmed via
+#     size32 - 528 == the 16-bit content-length field's value modulo
+#     65536, i.e. the fixed-528-byte-prefix rule from every earlier capture
+#     still holds structurally) and decoding flat (length-1, flag) pairs
+#     from there, the running pixel total does NOT land cleanly on 153600
+#     (320x480) anywhere -- it goes from 153598 straight to 153602 at the
+#     token that should have closed out the frame, and the full content
+#     region decodes to 76800 tokens summing to 284924, far past one
+#     frame's worth of pixels. A "two independent back-to-back full-frame
+#     passes" hypothesis (e.g. a base layer plus a separate dither-mask
+#     layer, each its own complete raster scan) was tested directly and
+#     rejected: neither a first pass stopped at ~153600 nor a second pass
+#     starting there lands on a clean 153600-pixel sum either. The flat
+#     2-byte-token grammar confirmed for every single- or dual-slot-dither
+#     capture so far may not be the right model once a color needs the
+#     8-slot scheme -- worth testing with a hardware mutation experiment
+#     (the panel is connected as of this analysis) once a more specific
+#     hypothesis is formed, rather than guessing further from statics alone.
+#
 # save_to_gif_12/13's larger uploads also exposed and fixed a real modeling
 # bug, not just a documentation gap: CRC_INIT was keyed by the cmd byte from
 # final_chunk_cmd(), which seemed reasonable since cmd is derived from
@@ -744,11 +807,15 @@ GIF_FLASH_BASE = 0x04240000
 # after the fix, including both collision pairs.
 #
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
-# (confirmed NOT a color table, fixed-size up to 9 palette slots, and still
-# ~528 bytes by all indications in save_to_gif_13 too, though not fully
-# verified there given the content-length overflow above), the unidentified
-# sub-header byte [13], the exact byte layout when multiple colors dither
-# in the same frame, and gif_2's solid frames being encoded far less
+# (confirmed NOT a color table, fixed-size up to 11 palette slots, and still
+# 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
+# matches the (overflowing) content-length field exactly), the unidentified
+# sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
+# pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
+# per-channel grid (light gray here), the exact token/byte layout for
+# either dithering scheme (confirmed NOT a flat (length,flag) stream summing
+# cleanly to one frame's pixel count once an 8-slot color is involved), and
+# gif_2's solid frames being encoded far less
 # efficiently (4151 varied tokens for the same 153600-pixel solid red that
 # save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
 # gif_2's source image wasn't perfectly flat, not investigated. It is NOT

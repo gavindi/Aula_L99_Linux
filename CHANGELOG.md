@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-07-29
+
+**"Save to GIF": `save_to_gif_13`'s palette re-analyzed offline (no
+hardware) -- its two dithered colors use two DIFFERENT schemes, not a
+shared combinatorial one.** Follow-up to 0.6.5, working from the same
+capture rather than new hardware data.
+
+### Verified
+- `save_to_gif_13`'s frame 2 has 11 populated palette slots: 1 clean
+  (undithered) red reference stripe, 2 slots forming dark red's dither
+  pair (as expected from the established simple 2-slot pattern), and 8
+  slots for light gray -- confirmed to be the *exhaustive* set of all
+  2x2x2 combinations of three independently-quantized channels (R in
+  {156,206}, G in {170,215}, B in {156,206}), not a second 2-slot pair and
+  not combinations shared with dark red's pair.
+- Content region boundary re-confirmed algebraically for this frame too:
+  `size32 - 528` matches the (overflowing) 16-bit content-length field
+  exactly, consistent with every earlier capture's fixed 528-byte prefix.
+
+### Changed
+- Refines the 0.6.5 "combinations of the component brightness levels from
+  both dithered targets" guess: the two dithered colors don't share or mix
+  slots. Each gets its own independent scheme, and which scheme a color
+  gets (2-slot pair vs. 8-slot per-channel grid) is not yet understood --
+  dark red here and gray in `save_to_gif_10`/`11`/`12` both use the simple
+  2-slot form, so it isn't simply chromatic-vs-achromatic.
+
+### Known gaps
+- The token/byte grammar for either dither scheme is still undecoded.
+  Decoding flat `(length-1, flag)` pairs from content-start (528 bytes
+  into the frame) never lands the running pixel total on exactly 153600
+  (320x480) -- it jumps from 153598 to 153602 at the token that should
+  close the frame. A "two independent full-frame passes" hypothesis (base
+  layer + dither mask) was tested and ruled out the same way. The flat
+  2-byte-token grammar confirmed for every 2-slot-or-simpler capture may
+  not be the right model once an 8-slot color is involved.
+- Why light gray (200,200,200) needs the richer 8-slot scheme when a
+  coarser 2-slot pair sufficed for the earlier 128-gray is unexplained.
+- Same open items as 0.6.5: the 528-byte prefix's contents/purpose, one
+  unidentified sub-header byte, `save_to_gif_2`'s encoding inefficiency,
+  `0x04200000`, no `--target gif`.
+- The touchscreen panel is connected to this machine as of this analysis,
+  but no hardware mutation was attempted this round -- the next step needs
+  a sharper hypothesis about the token grammar before spending a physical
+  test on it.
+
 ## [0.6.5] - 2026-07-29
 
 **"Save to GIF": found the dithering trigger rule, and fixed a real bug in

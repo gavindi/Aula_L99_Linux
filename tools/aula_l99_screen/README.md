@@ -365,10 +365,24 @@ fundamentally representing "hue at full brightness, or black."
 `save_to_gif_13`'s precise byte-level token layout isn't fully decoded —
 its 16-bit content-length field overflows (true content is over 150 KB,
 several times any earlier capture, since dithering two colors at once
-inflates the entropy-coded section a lot), and two simultaneously-dithered
-colors produce extra palette entries — combinations of both targets'
-component brightness levels — not yet mapped to a specific rule. The
-qualitative finding (both colors dither) is solid; the exact layout isn't.
+inflates the entropy-coded section a lot). Offline re-analysis of the raw
+capture (no hardware) does refine the palette structure, though: the two
+dithered colors do **not** share slots or combine with each other. Dark
+red keeps the simple 2-slot pair pattern already known from gray in
+`save_to_gif_10`/`11`/`12` (slots decode to (99,0,0)/(156,0,0), averaging
+almost exactly to the 128,0,0 target). Light gray instead gets a new,
+richer scheme: 8 slots that are the *exhaustive* set of all 2×2×2
+combinations of three independently-quantized channels — R∈{156,206},
+G∈{170,215}, B∈{156,206} — rather than one shared pair. Why light gray
+needs the 8-slot scheme when a coarser 2-slot pair worked for the earlier
+128-gray is unexplained. The token stream itself still resists decoding:
+assuming content starts 528 bytes into the frame (consistent with every
+earlier capture) and reading flat `(length-1, flag)` pairs from there, the
+running pixel total overshoots 153600 (320×480) without ever landing on it
+exactly, and a "two independent full-frame passes" hypothesis (base layer
++ dither mask) was tested and ruled out the same way. The flat 2-byte-token
+grammar confirmed everywhere else may not be the right model once an
+8-slot color is involved.
 
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
@@ -382,10 +396,12 @@ instead, which is unambiguous. All 15 captures re-verified byte-for-byte
 after the fix.
 
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
-a color table, fixed-size up to 9 palette slots and dense single-color
-content, though not independently re-verified for the multi-dither case
-above), one unidentified sub-header byte, the exact byte layout when
-multiple colors dither in the same frame, and why `save_to_gif_2`'s solid
+a color table, fixed-size up to 11 palette slots, and confirmed still
+exactly 528 bytes in `save_to_gif_13`'s frame 2 by construction — size32 -
+528 matches the overflowing content-length field exactly), one
+unidentified sub-header byte, why a dithered color sometimes gets the
+simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
+token/byte layout for either scheme, and why `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).
