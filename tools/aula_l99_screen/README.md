@@ -597,14 +597,22 @@ genuinely differs. `CRC_INIT` is now keyed by the real payload length
 instead, which is unambiguous. All 15 captures re-verified byte-for-byte
 after the fix.
 
+**Correction:** "one unidentified sub-header byte" had been carried in
+this list across many rounds without being re-examined. It isn't a real
+mystery — both bytes that could plausibly be meant are already fully
+solved elsewhere: the TOC-entry's own byte 13 is the frame count (solved
+back in the `save_to_gif_3` round), and the per-frame sub-header's byte 13
+is simply the high byte of the content-length `u16` field, already solved
+and re-verified repeatedly this session. Removed from the list below.
+
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
 a color table, fixed-size up to 11 palette slots, still exactly 528 bytes
 in `save_to_gif_13`'s frame 2 by construction — size32 - 528 matches the
 overflowing content-length field exactly — and now known to tolerate
 exactly 8 non-zero bytes anywhere in the padding, a pure count threshold
 that holds identically in both RLE-mode and raw-bitmap-mode frames,
-mechanism behind the count still unknown), one unidentified sub-header
-byte, why a dithered color sometimes gets the
+mechanism behind the count still unknown), why a dithered color sometimes
+gets the
 simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
 per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),

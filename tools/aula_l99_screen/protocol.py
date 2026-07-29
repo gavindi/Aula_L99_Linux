@@ -1049,6 +1049,16 @@ GIF_FLASH_BASE = 0x04240000
 # unambiguous by construction. All 15 captures re-verified byte-for-byte
 # after the fix, including both collision pairs.
 #
+# CORRECTION: "the unidentified sub-header byte [13]" had been carried in
+# this list as an open item across many rounds without being re-examined.
+# It isn't a real mystery -- both bytes that could plausibly be meant are
+# already fully solved elsewhere: the TOC-entry's own byte [13] is the
+# frame count (solved back in the save_to_gif_3.pcapng round, see "TOC
+# frame-count ambiguity resolved" in the changelog), and the per-frame
+# sub-header's byte 13 is simply the high byte of the [12:14] content-length
+# u16 field (solved and re-verified repeatedly this session, including for
+# save_to_gif_13's overflowing case). Removed from the open list below.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1056,8 +1066,7 @@ GIF_FLASH_BASE = 0x04240000
 # to tolerate EXACTLY 8 non-zero bytes anywhere in the padding, confirmed a
 # pure count threshold (not a specific critical byte) that holds
 # identically in both RLE-mode and raw-bitmap-mode frames, mechanism
-# behind the count still unknown), the unidentified
-# sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
+# behind the count still unknown), why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
 # per-channel grid (light gray here), the exact per-channel dithering
 # algorithm behind the 8-slot scheme (measured duty cycles are in the

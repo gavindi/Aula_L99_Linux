@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.19] - 2026-07-30
+
+**"Save to GIF": "the unidentified sub-header byte [13]" was stale
+bookkeeping, not a real gap.** No hardware needed -- this was a
+documentation audit, prompted by the user asking to investigate it
+directly.
+
+### Changed
+- Traced "sub-header byte [13]" back through the changelog history. Both
+  bytes that could plausibly be meant are already fully solved elsewhere:
+  the TOC-entry's own byte 13 is the frame count, resolved explicitly back
+  in the `save_to_gif_3.pcapng` round ("TOC frame-count ambiguity
+  resolved"); the per-frame sub-header's byte 13 is simply the high byte
+  of the `[12:14]` content-length `u16` field, solved from the start and
+  re-verified repeatedly this session (including for `save_to_gif_13`'s
+  overflowing case). Neither is an open mystery. The item had been
+  mechanically carried forward in the "Known gaps" / "Still open" lists
+  across roughly a dozen rounds without anyone re-checking whether it was
+  still true.
+- Removed from `protocol.py`'s and `README.md`'s open-items lists, with a
+  short correction note explaining why, so it doesn't get silently
+  reintroduced.
+
+### Known gaps
+- None closed by hardware this round -- this was purely a documentation
+  correction. Real open items are otherwise unchanged: the 528-byte
+  prefix's contents/purpose (though its 8-byte tolerance is now known),
+  the dithering algorithm, `mode_flag`, the delay field's unit,
+  `save_to_gif_2`'s inefficiency.
+
 ## [0.6.18] - 2026-07-30
 
 **"Save to GIF": the 8-byte tolerance is not specific to frame 0 or the
