@@ -890,6 +890,33 @@ GIF_FLASH_BASE = 0x04240000
 #     edits fail at every size tested from 2 to 3200 bytes. Still
 #     untested: whether the boundary is truly per contiguous stripe or
 #     something finer/coarser that happens to align with these 3 stripes.
+#   - COMPLICATES the picture: testing that exact question found a
+#     counterexample. Swapping columns 105 (last gray pixel) and 106
+#     (first dark-red pixel) on row 0 -- a single-pixel-pair edit crossing
+#     the stripe boundary exactly -- passed. All 79 packets acked, panel
+#     rendered the real content, not the fallback. Every OTHER
+#     cross-region edit tested (6/6, at sizes from 1 to 1600 pixels/side,
+#     always at positions well inside a stripe's interior) failed. So the
+#     "every pixel's flag must belong to its column's stripe" reading is
+#     too strong as stated -- it predicted this should fail and it didn't.
+#     Whatever the real invariant is, edits exactly at a stripe transition
+#     behave differently from edits deep in a stripe's interior. Plausible
+#     but untested: the real check is about local transition/run
+#     structure (an interior edit creates a brand-new isolated anomaly
+#     with two new transitions where none existed; a boundary edit just
+#     adds a small wiggle at a transition that was already there) rather
+#     than a strict per-column palette membership rule. Not yet tested:
+#     whether nearby-but-not-exactly-at-the-boundary positions (e.g.
+#     column 100 vs. 106) behave like "boundary" or like "interior".
+#   - Human-verification caveat, going forward: distinguishing "correct
+#     content with a 1-2px change" from "correct content, unchanged" by
+#     eye is unreliable, since this GIF alternates between this frame and
+#     a full solid-red reference frame and the flicker defeats fine
+#     pixel-level inspection. Every pass/fail conclusion above actually
+#     rests on a coarser, reliable distinction instead: fallback animation
+#     (visibly different content) vs. real content (whichever frame,
+#     edited or not), which is easy to tell apart on sight regardless of
+#     the flicker.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -941,14 +968,15 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), the exact scope/mechanism of the content validator -- 9 data
+# far), the exact scope/mechanism of the content validator -- 10 data
 # points (3 within-region swaps at 2/2/3200 bytes, all OK; 6 cross-region
-# swaps from 2 to 3200 bytes, all fallback) fit "each stripe's pixels must
-# stay within that stripe's own established flag set," ruling out both
-# simple histogram preservation and any diff-size threshold across the
-# full range tested, but this is a pattern match across 9 tests, not a
-# decoded algorithm, and whether the true boundary is per-stripe or some
-# finer/coarser partition is untested -- and gif_2's
+# swaps well inside a stripe's interior, from 2 to 3200 bytes, all
+# fallback; 1 cross-region swap exactly AT a stripe boundary, which
+# unexpectedly passed) rule out both simple histogram preservation and any
+# diff-size threshold, and rule out "every pixel's flag must belong to its
+# column's stripe with zero exceptions" as too strong -- but no reading
+# yet explains all 10 points cleanly (a transition/run-structure account
+# is the leading untested idea) -- and gif_2's
 # solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image

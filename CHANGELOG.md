@@ -5,6 +5,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] - 2026-07-30
+
+**"Save to GIF": a swap exactly AT the stripe boundary passed, contradicting
+the strict per-region reading from 0.6.11/0.6.12.** Complicates, rather than
+confirms, last round's "clean" conclusion -- genuinely open again.
+
+### Verified
+- Swapped columns 105 (last light-gray pixel) and 106 (first dark-red
+  pixel) on row 0 -- a single-pixel-pair edit straddling the visual stripe
+  boundary exactly, moving a gray-family flag into the dark-red column and
+  vice versa. By every prior cross-region result (0.6.10, 0.6.11: 6/6
+  failures at various interior positions and sizes), this should fail.
+  Instead: all 79 packets acked and the panel rendered the normal content
+  (3-stripe frame alternating with the solid-red reference frame), not the
+  fallback.
+- Restoring the original blob after this test needed one retry (the usual
+  flaky-redraw behavior, not a new issue) -- confirmed back to normal
+  after the retry, including the expected solid-red/3-stripe alternation.
+
+### Changed
+- The strict "every pixel's flag must belong to its column's stripe, no
+  exceptions" reading from 0.6.11/0.6.12 is too strong: it predicted this
+  boundary swap should fail, and it didn't. Whatever the real invariant is,
+  it tolerates -- or doesn't apply the same way to -- edits exactly at a
+  stripe transition, unlike edits deep inside a stripe's interior (which
+  have failed 100% of the time, from 1 pixel to 1600 pixels/side). A
+  transition-count or run-structure explanation (the boundary swap adds a
+  small extra wiggle at an already-existing transition, vs. interior
+  edits which create a brand-new isolated anomaly with two new
+  transitions where none existed) is a plausible refinement, not yet
+  tested against a case designed to separate it from the simpler
+  "boundary pixels are special" reading.
+- Human-verification note for future rounds: distinguishing "correct
+  content with a 1-2px change" from "correct content, no change" by eye is
+  unreliable given the GIF alternates between this frame and a full solid-
+  red reference frame -- the flicker makes fine pixel-level confirmation
+  impractical. The reliable signal these experiments actually depend on is
+  coarser and unaffected by this: fallback animation (visibly different
+  content) vs. real content (whichever frame, modified or not) is easy to
+  tell apart on sight, and that's the distinction every pass/fail
+  conclusion in this investigation is actually built on.
+
+### Known gaps
+- Whether "boundary-adjacent" edits pass in general, or whether this
+  specific position was special, is untested -- worth trying a swap a few
+  columns off the boundary (e.g. column 100 <-> 106) to see if there's a
+  tolerance zone near transitions or a hard line right at column 105/106.
+  Also worth an OFF-boundary interior swap between two stripes' extreme
+  edges without crossing (e.g. column 104 <-> 105, both still gray) as a
+  control.
+- Same open items as 0.6.12 otherwise.
+
 ## [0.6.12] - 2026-07-30
 
 **"Save to GIF": a large within-region swap renders correctly, closing

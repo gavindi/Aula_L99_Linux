@@ -468,6 +468,32 @@ every size tested from 2 to 3200 bytes. Still untested: whether the
 boundary is truly per contiguous stripe or some finer/coarser partition
 that happens to align with these 3 stripes.
 
+**Testing that exact question found a counterexample that complicates the
+picture.** Swapping columns 105 (last light-gray pixel) and 106 (first
+dark-red pixel) on row 0 — a single-pixel-pair edit crossing the stripe
+boundary exactly — passed: all 79 packets acked, panel rendered real
+content, not the fallback. Every *other* cross-region edit tested (6 of 6,
+at sizes from 1 to 1600 pixels/side, always well inside a stripe's
+interior) failed. So "every pixel's flag must belong to its column's
+stripe, no exceptions" is too strong as stated — it predicted this should
+fail, and it didn't. Whatever the real invariant is, edits exactly at a
+stripe transition behave differently from edits deep in a stripe's
+interior. One plausible, untested explanation: the real check cares about
+local transition/run structure — an interior edit creates a brand-new
+isolated anomaly with two new transitions where none existed, while a
+boundary edit just adds a small wiggle at a transition that was already
+there. Not yet tested: whether near-but-not-exactly-at-the-boundary
+positions behave like "boundary" or "interior."
+
+*Human-verification note:* distinguishing "correct content with a 1–2px
+change" from "correct content, unchanged" by eye turned out to be
+unreliable — this GIF alternates between the 3-stripe frame and a full
+solid-red reference frame, and the flicker defeats fine pixel-level
+inspection. Every pass/fail conclusion above actually rests on a coarser,
+reliable distinction instead: fallback animation (visibly different
+content) vs. real content (whichever frame, edited or not), which is easy
+to tell apart on sight regardless of the flicker.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -489,12 +515,13 @@ per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
 example of each so far), the exact scope/mechanism of the content
-validator (9 data points fit "each stripe's pixels must stay within that
-stripe's own established flag set" — 3 within-region swaps at 2/2/3200
-bytes all pass, 6 cross-region swaps from 2 to 3200 bytes all fail — but
-this is a pattern match across 9 tests, not a decoded algorithm, and
-whether the true boundary is per-stripe or some finer/coarser partition is
-untested), and why
+validator (10 data points: 3 within-region swaps at 2/2/3200 bytes all
+pass; 6 cross-region swaps well inside a stripe's interior, from 2 to 3200
+bytes, all fail; 1 cross-region swap exactly at a stripe boundary
+unexpectedly passed — ruling out both histogram preservation and a
+diff-size threshold, and ruling out strict per-column flag membership as
+too strong, but no reading yet explains all 10 points; a transition/
+run-structure account is the leading untested idea), and why
 `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
