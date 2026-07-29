@@ -5,6 +5,84 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-07-30
+
+**"Save to GIF": `--upload` now accepts a single animated `.gif` or a
+video file directly, auto-generating frames -- and this immediately
+surfaced a real, previously-untested constraint: all frames in one
+upload must share the SAME delay value, not just any valid value.**
+
+### Added
+- `cli.py`'s `--upload` now accepts, for `--target gif`: one or more
+  images (unchanged), a single animated `.gif` (all frames used, each
+  keeping its own embedded delay by default), or a single video file
+  (`.mp4`/`.mov`/`.avi`/`.mkv`/`.webm`/`.m4v`, frames extracted via
+  ffmpeg, requiring `--fps` and/or `--max-frames` -- no silent default
+  frame count). New `--fps` and `--max-frames` flags. `--gif-delay`, when
+  explicitly given, now overrides every frame's delay uniformly
+  (including a source GIF's own embedded delays or a video's computed
+  one); its default changed from `50` to `None` so this override
+  distinction is possible.
+- `protocol.build_gif_blob()`'s `delay` parameter now accepts a list (one
+  value per frame) as well as a single int, matching the TOC's actual
+  per-entry field structure.
+
+### Verified
+- End-to-end real-CLI test (not a script bypassing it): a synthetic
+  2-frame GIF (solid red 300ms, solid blue 700ms) run through
+  `python3 -m aula_l99_screen.cli --upload test_anim.gif --target gif`
+  extracted both frames correctly (delays 30/70 centiseconds, matching
+  the 300ms/700ms source via the established ms/10 conversion) and
+  uploaded -- but the panel showed the FALLBACK animation, not the
+  intended content.
+- Isolated the cause directly: the identical red/blue content re-uploaded
+  with a uniform `delay=50` for both frames rendered correctly. The same
+  content again with a uniform `delay=30` (still not 50, but the same
+  value for every frame) ALSO rendered correctly. Only the non-uniform
+  `[30, 70]` case fell back. Confirms the constraint is about delay
+  values matching ACROSS frames within one upload, not about hitting any
+  particular value -- something never tested before, since every capture
+  and every hand-built test prior to this always used the same delay
+  (usually 50) for every frame.
+- The video-extraction path was verified mechanically (both `--fps` and
+  `--max-frames`-derives-fps modes correctly produce the right frame
+  count and per-frame delay), though not yet tested end-to-end on
+  hardware, since a real/synthetic video's colors failed the existing
+  safe-color check first (see Known gaps).
+
+### Changed
+- The delay field join a growing pattern: several TOC/sub-header fields
+  turn out to have real validation behind them beyond just "what does
+  this field mean" (the 528-byte prefix's 8-byte tolerance, the
+  transition/run-structure content check, and now delay uniformity).
+- This directly affects the new `.gif`-import feature's practical
+  usefulness: many real animated GIFs vary per-frame delay (e.g. holding
+  the last frame longer), and using each frame's own embedded delay by
+  default -- the behavior just added -- will silently produce a
+  non-working upload whenever those delays differ. Not yet fixed or
+  guarded against; see Known gaps.
+
+### Known gaps
+- `cli.py` does not yet warn or error when a source GIF's extracted
+  per-frame delays are non-uniform -- it will currently build and upload
+  a blob that's confirmed to fail on real hardware. Needs a decision:
+  hard error, automatic normalization (e.g. use the first/max/most-common
+  delay for all frames) with a clear warning, or something else.
+- Whether the constraint is "all frames exactly equal" or something
+  looser (e.g. "monotonic," "within some tolerance") is untested -- only
+  one non-uniform pair (30 vs. 70) and two uniform cases (30, 50) have
+  been tried.
+- Real compressed video (even a flat single-color source through
+  ffmpeg's default YUV handling) reliably fails the existing safe-color
+  check by 1-2 units (e.g. red renders as `(253,0,0)` instead of
+  `(255,0,0)`) -- an inherent property of how ffmpeg/most video codecs
+  represent color, not a bug in the new extraction code. Practically
+  limits video input to synthetic/exact-color sources under the current
+  encoder scope.
+- Same longstanding open items otherwise: the 528-byte prefix's true
+  purpose, the exact dithering diffusion algorithm, `save_to_gif_2`'s
+  inefficiency.
+
 ## [0.7.5] - 2026-07-30
 
 **"Save to GIF": `mode_flag` confirmed as a real, functional RLE-vs-raw-
@@ -15,7 +93,7 @@ of `mode_flag`'s role, in both directions, on `save_to_gif_13`.
 ### Verified
 - Frame 0 (solid red, real `mode_flag=0x0100`/RLE, content untouched)
   flipped to `mode_flag=0x0002`/raw-bitmap: all 79 packets acked. The
-  panel rendered a complex, clearly non-fallback pattern -- horizontal
+  panel rendered a complex, clearly non-fallback
   bands including a light-gray-like region, a red/black staticky "noise"
   band, and clean red regions, repeating a few times vertically. This is
   NOT the fallback animation and is NOT simply garbage -- the visible

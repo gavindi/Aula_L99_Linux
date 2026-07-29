@@ -35,6 +35,17 @@ python3 -m aula_l99_screen.cli --upload picture.png --target background
 python3 -m aula_l99_screen.cli --upload frame1.png frame2.png --target gif
 python3 -m aula_l99_screen.cli --upload frame1.png frame2.png --target gif --gif-delay 50
 
+# or upload an existing animated .gif directly (all its frames are used) --
+# --gif-delay is recommended here: the panel is confirmed to reject a
+# GIF whose frames have different delay values, and many real GIFs do
+# (e.g. holding the last frame longer), so forcing one uniform value is
+# the safe default rather than trusting the source file's own timing
+python3 -m aula_l99_screen.cli --upload animation.gif --target gif --gif-delay 50
+
+# or extract frames from a video (safe colors only -- most real, lossy
+# video will fail this; see below)
+python3 -m aula_l99_screen.cli --upload clip.mp4 --target gif --fps 2 --gif-delay 50
+
 # just build the .bin the panel expects, without touching hardware
 python3 -m aula_l99_screen.cli --convert picture.png -o picture.bin
 python3 -m aula_l99_screen.cli --describe picture.bin
@@ -653,7 +664,9 @@ validator (14 hardware data points now fit "a row's transition/run
 structure must stay locally valid" without exception — a strong pattern
 match, not yet a decoded algorithm; how far a transition can shift before
 failing is untested), the delay field's unit (likely centiseconds,
-unconfirmed), and why
+unconfirmed) and its uniformity constraint (confirmed all frames must
+share the same delay value, but whether "exactly equal" is the real rule
+or just the only thing tested is unconfirmed), and why
 `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
@@ -775,6 +788,32 @@ the bytes are fed to the wrong decoder entirely. Confirms `mode_flag` is
 genuinely functional, not a passive tag. Untested: exact overrun
 byte-mapping, why the RLE-misinterpretation stops at ~25%, and whether
 this generalizes beyond `save_to_gif_13`.
+
+**`--upload` now accepts a single animated `.gif` or video file directly
+— and this immediately surfaced a genuine, previously-untested constraint
+on the delay field.** `--target gif` can now take a single `.gif` (all
+frames used, each keeping its own embedded delay) or a single video file
+(`.mp4`/`.mov`/`.avi`/`.mkv`/`.webm`/`.m4v`, frames extracted via ffmpeg,
+requiring `--fps` and/or `--max-frames`). A synthetic 2-frame GIF (solid
+red 300ms, solid blue 700ms) uploaded through the real CLI command — all
+3 packets acked, but the panel showed the fallback. The same content
+re-uploaded with a uniform `delay=50` for both frames rendered correctly;
+the same content again with a uniform `delay=30` (still not 50, but equal
+across frames) also rendered correctly. Only the non-uniform `[30, 70]`
+case failed. So the constraint is that every frame's delay must match,
+not that any particular value is required — never tested before, since
+every capture and hand-built test prior to this always used the same
+delay for every frame. This directly affects the new feature's practical
+usefulness: many real animated GIFs vary per-frame delay (e.g. holding
+the last frame longer), and using each frame's own embedded delay by
+default will silently produce a non-working upload whenever those delays
+differ — not yet guarded against. Separately, the video-extraction path
+works mechanically but real compressed video reliably fails the existing
+safe-color check by 1-2 units even for a flat single-color source (e.g.
+red renders as `(253,0,0)`, an inherent property of how ffmpeg/most video
+codecs handle color, not a bug in the extraction code) — practically
+limiting video input to synthetic/exact-color sources under the current
+encoder scope.
 
 ## Image format
 

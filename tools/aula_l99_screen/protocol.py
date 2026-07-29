@@ -1217,6 +1217,21 @@ GIF_FLASH_BASE = 0x04240000
 # tag. Untested: exact overrun byte-mapping, why the RLE-misinterpretation
 # stops at ~25%, and whether this generalizes beyond save_to_gif_13.
 #
+# 0.7.6 found a genuine, previously-untested constraint on the delay
+# field while exercising build_gif_blob()'s new per-frame delay support
+# with real hardware: a from-scratch 2-frame blob (solid red 300ms, solid
+# blue 700ms, i.e. delay=[30,70] centiseconds) acked all 3 packets but
+# fell back. The SAME content re-uploaded with a uniform delay=50 for
+# both frames rendered correctly; the same content again with a uniform
+# delay=30 (still not 50, but equal across frames) ALSO rendered
+# correctly. Only the non-uniform [30,70] case failed. So the constraint
+# is that every frame's delay must match, not that any particular value
+# is required -- never tested before, since every capture and every
+# hand-built test prior to this always used the same delay (usually 50)
+# for every frame. Untested: whether the real rule is "exactly equal" or
+# something looser (monotonic, within some tolerance) -- only one
+# non-uniform pair and two uniform values have been tried.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1248,7 +1263,9 @@ GIF_FLASH_BASE = 0x04240000
 # a transition shift can go before failing is untested) -- a strong
 # pattern match, not yet a decoded
 # algorithm, and the delay field's unit (centiseconds is the leading
-# guess) -- and gif_2's
+# guess) plus its uniformity constraint (confirmed all frames must share
+# the same delay value, but not confirmed whether "exactly equal" is the
+# real rule or just the only thing tested) -- and gif_2's
 # solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image
@@ -1425,18 +1442,30 @@ def _gif_largest_run(frames_runs):
 
 def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
                     width: int = PANEL_WIDTH, height: int = PANEL_HEIGHT,
-                    delay: int = 50) -> bytes:
+                    delay: int | list[int] = 50) -> bytes:
     """Build a from-scratch GIF blob for GIF_FLASH_BASE.
 
     frames_pixels: one list of (r,g,b) tuples per frame, each width*height
     long, in raster order. Raises ValueError for any color needing
     dithering, or if no frame has a solid/uniform run large enough to
     tune the upload length onto an already-solved CRC_INIT entry.
+
+    delay: a single value applied to every frame, or one value per frame
+    (matching frames_pixels in length) -- the TOC's delay field is a
+    per-entry field structurally, though every capture seen so far used
+    the same value across all of one upload's frames.
     """
     n = width * height
     for i, px in enumerate(frames_pixels):
         if len(px) != n:
             raise ValueError(f"frame {i}: expected {n} pixels ({width}x{height}), got {len(px)}")
+
+    if isinstance(delay, int):
+        delays = [delay] * len(frames_pixels)
+    else:
+        delays = list(delay)
+        if len(delays) != len(frames_pixels):
+            raise ValueError(f"delay list has {len(delays)} entries, expected {len(frames_pixels)}")
 
     bad: dict[tuple[int, int, int], int] = {}
     for px in frames_pixels:
@@ -1506,7 +1535,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             toc[e + 12] = 3  # constant format/version tag, matches every capture
             toc[e + 13] = len(frame_bytes)
             struct.pack_into("<H", toc, e + 14, 0)
-            struct.pack_into("<H", toc, e + 16, delay)
+            struct.pack_into("<H", toc, e + 16, delays[i])
             struct.pack_into("<H", toc, e + 18, crc)
             offset += len(fb)
         return bytes(toc) + payload

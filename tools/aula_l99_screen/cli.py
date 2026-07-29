@@ -63,11 +63,105 @@ def _encode(path: str, width: int, height: int) -> bytes:
     return protocol.build_image_file(image.tobytes(), width, height)
 
 
-def _encode_gif_frame_pixels(path: str, width: int, height: int) -> list[tuple[int, int, int]]:
-    image = _load_image(path, width, height)
+def _pixels_from_image(image) -> list[tuple[int, int, int]]:
     if hasattr(image, "get_flattened_data"):
         return list(image.get_flattened_data())
     return list(image.getdata())  # Pillow < 12
+
+
+def _encode_gif_frame_pixels(path: str, width: int, height: int) -> list[tuple[int, int, int]]:
+    return _pixels_from_image(_load_image(path, width, height))
+
+
+GIF_EXTENSIONS = {".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+
+
+def _gif_source_frames(path: str, width: int, height: int):
+    """One (pixels, delay_centiseconds) pair per frame of an animated GIF.
+
+    Each frame's own embedded delay is used directly -- GIF's native delay
+    field is already in centiseconds, matching our best hypothesis for the
+    wire format's delay field unit (see protocol.py's GIF_FLASH_BASE notes).
+    """
+    try:
+        from PIL import Image, ImageSequence
+    except ImportError:
+        raise SystemExit("error: Pillow is required to read GIF frames (pip install pillow)")
+
+    frames = []
+    delays = []
+    with Image.open(path) as im:
+        for frame in ImageSequence.Iterator(im):
+            rgb = frame.convert("RGB")
+            if rgb.size != (width, height):
+                rgb = rgb.resize((width, height), Image.LANCZOS)
+            frames.append(_pixels_from_image(rgb))
+            delay_ms = frame.info.get("duration", 500)
+            delays.append(max(1, round(delay_ms / 10)))
+    if not frames:
+        raise SystemExit(f"error: {path} has no frames")
+    return frames, delays
+
+
+def _video_source_frames(path: str, width: int, height: int,
+                          fps: float | None, max_frames: int | None):
+    """One (pixels, delay_centiseconds) pair per extracted video frame.
+
+    Shells out to ffmpeg (no new Python dependency). fps and/or max_frames
+    must be given by the caller -- there's no established safe default
+    frame count for this panel, so we refuse to guess one silently.
+    """
+    import pathlib
+    import shutil
+    import subprocess
+    import tempfile
+
+    from PIL import Image
+
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("error: ffmpeg is required to extract frames from a video (not found on PATH)")
+
+    if fps is None:
+        if shutil.which("ffprobe") is None:
+            raise SystemExit("error: ffprobe is required to derive --fps from --max-frames (not found on PATH)")
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(f"error: ffprobe failed on {path}:\n{exc.stderr}")
+        try:
+            duration = float(result.stdout.strip())
+        except ValueError:
+            raise SystemExit(f"error: ffprobe didn't report a usable duration for {path}")
+        if duration <= 0:
+            raise SystemExit(f"error: ffprobe reported a non-positive duration for {path}")
+        fps = max_frames / duration
+        print(f"deriving --fps {fps:.3f} from --max-frames {max_frames} and duration {duration:.2f}s")
+
+    with tempfile.TemporaryDirectory(prefix="aula_l99_video_") as tmpdir:
+        pattern = str(pathlib.Path(tmpdir) / "frame_%05d.png")
+        cmd = ["ffmpeg", "-y", "-i", path, "-vf", f"fps={fps},scale={width}:{height}", pattern]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(f"error: ffmpeg failed on {path}:\n{exc.stderr}")
+
+        frame_paths = sorted(pathlib.Path(tmpdir).glob("frame_*.png"))
+        if max_frames is not None:
+            frame_paths = frame_paths[:max_frames]
+        if not frame_paths:
+            raise SystemExit(f"error: ffmpeg produced no frames from {path} at fps={fps}")
+
+        delay_cs = max(1, round(100 / fps))
+        frames = []
+        for frame_path in frame_paths:
+            with Image.open(frame_path) as im:
+                frames.append(_pixels_from_image(im.convert("RGB")))
+    return frames, [delay_cs] * len(frames)
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
@@ -99,9 +193,42 @@ def cmd_upload(args: argparse.Namespace) -> int:
     address = args.address if args.address is not None else TARGET_ADDRESSES[args.target]
 
     if args.target == "gif":
-        frames = [_encode_gif_frame_pixels(path, args.width, args.height) for path in args.upload]
-        blob = protocol.build_gif_blob(frames, args.width, args.height, delay=args.gif_delay)
-        print(f"payload: {len(frames)} frame(s), {args.gif_delay} delay units  ({len(blob)} bytes)")
+        import pathlib
+
+        if len(args.upload) == 1:
+            ext = pathlib.Path(args.upload[0]).suffix.lower()
+        else:
+            ext = None
+
+        if ext in GIF_EXTENSIONS:
+            frames, source_delays = _gif_source_frames(args.upload[0], args.width, args.height)
+        elif ext in VIDEO_EXTENSIONS:
+            if args.fps is None and args.max_frames is None:
+                raise SystemExit(
+                    "error: extracting frames from a video requires --fps or --max-frames "
+                    "(no safe default frame count is established for this panel)"
+                )
+            frames, source_delays = _video_source_frames(
+                args.upload[0], args.width, args.height, args.fps, args.max_frames
+            )
+        else:
+            frames = [_encode_gif_frame_pixels(path, args.width, args.height) for path in args.upload]
+            source_delays = [50] * len(frames)
+
+        if args.gif_delay is not None:
+            delays = [args.gif_delay] * len(frames)
+        else:
+            delays = source_delays
+            if len(set(delays)) > 1:
+                raise SystemExit(
+                    f"error: extracted per-frame delays aren't uniform ({delays}) -- the "
+                    f"panel is confirmed to reject a GIF whose frames have different delay "
+                    f"values (it plays the fallback animation instead of the upload). Pass "
+                    f"--gif-delay N to force one uniform value for every frame."
+                )
+
+        blob = protocol.build_gif_blob(frames, args.width, args.height, delay=delays)
+        print(f"payload: {len(frames)} frame(s), delays={delays}  ({len(blob)} bytes)")
     else:
         if len(args.upload) != 1:
             raise SystemExit(
@@ -146,17 +273,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--convert", metavar="IMAGE", help="convert an image to the panel's .bin")
     parser.add_argument("-o", "--output", metavar="FILE", help="output path for --convert")
     parser.add_argument("--describe", metavar="FILE", help="decode a .bin header and check its CRC")
-    parser.add_argument("--upload", metavar="IMAGE", nargs="+",
+    parser.add_argument("--upload", metavar="PATH", nargs="+",
                         help="convert and upload to the panel's flash (the real path). "
-                             "One image for --target photo-frame/background; one or more "
-                             "images (one per frame) for --target gif")
+                             "One image for --target photo-frame/background. For --target "
+                             "gif: one or more images (one per frame), OR a single animated "
+                             ".gif (all its frames are used, each keeping its own embedded "
+                             "delay), OR a single video file (requires --fps or --max-frames)")
     parser.add_argument("--target", choices=sorted(TARGET_ADDRESSES), default="photo-frame",
                         help="upload destination for --upload (default %(default)s)")
     parser.add_argument("--address", type=lambda v: int(v, 0), default=None,
                         help="flash address for --upload; overrides --target")
-    parser.add_argument("--gif-delay", type=int, default=50,
-                        help="inter-frame delay for --target gif, unit unconfirmed "
-                             "(default %(default)s, matching every capture seen so far)")
+    parser.add_argument("--gif-delay", type=int, default=None,
+                        help="inter-frame delay for --target gif, unit unconfirmed. "
+                             "Overrides every frame's delay uniformly, including a source "
+                             "GIF's own embedded per-frame delays or a video's computed "
+                             "delay. Default: 50 for plain images, the source GIF's own "
+                             "delays for a .gif input, or derived from --fps for a video")
+    parser.add_argument("--fps", type=float, default=None,
+                        help="frames per second to sample when --upload is a video file")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="cap the number of frames extracted from a video file "
+                             "(also derives --fps from the video's duration if --fps isn't given)")
     parser.add_argument("--gap", type=float, default=0.005,
                         help="seconds between packets (default %(default)s)")
     parser.add_argument("--ignore-nak", action="store_true",
