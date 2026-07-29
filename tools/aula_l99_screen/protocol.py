@@ -1140,6 +1140,27 @@ GIF_FLASH_BASE = 0x04240000
 # still just a hypothesis, now with much richer data to eventually
 # re-check it against).
 #
+# save_to_gif_15.pcapng (the same hue sweep as save_to_gif_14, but at 95%
+# brightness instead of 70% -- targets up to 242, much closer to 255)
+# closes that "higher rungs" question: two new top rungs appear that the
+# dimmer test never triggered -- R/B index 31 (=255) and G index 63
+# (=255). The full ramps are: R and B, 6 levels -- {0,6,12,19,25,31}
+# (8-bit 0,49,99,156,206,255); G, 7 levels -- {0,10,21,32,42,53,63}
+# (8-bit 0,40,85,130,170,215,255). The R/B ramp is an EXACT even 6-way
+# split of the full 0-31 native range (round(i*31/5) for i=0..5
+# reproduces it precisely). The G ramp is very close to but not quite an
+# exact even 7-way split of 0-63 -- differs from naive rounding of
+# i*63/6 by exactly 1 at a single point (53 vs. an evenly-rounded 52);
+# every other level matches exactly -- reported honestly as "very close,
+# not exact" rather than forcing a formula that doesn't quite fit.
+# Weighted-average color per column again matches the intended target
+# closely at this brighter setting (mean error ~3.8/255, max ~10.5/255),
+# consistent with save_to_gif_14's dimmer test. The ramp is now fully
+# characterized end-to-end: it spans each channel's ENTIRE native range,
+# not capped below the maximum as it appeared to be before this capture
+# -- that apparent cap was purely because neither earlier test image's
+# targets were bright enough to need the top rung.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1148,14 +1169,14 @@ GIF_FLASH_BASE = 0x04240000
 # pure count threshold (not a specific critical byte) that holds
 # identically in both RLE-mode and raw-bitmap-mode frames, mechanism
 # behind the count still unknown), the exact snap-vs-dither selection rule
-# and duty-cycle algorithm for the now-confirmed fixed dither ramp
-# ({0,6,12,19,25} for R/B, {0,10,21,32,42,53} for G -- save_to_gif_14),
-# whether the ramp extends higher than the rungs observed so far (no test
-# image has needed anything brighter yet), the per-row variation's exact
-# mechanism (error diffusion is still just a hypothesis; per-row
-# burstiness fits it better than a fixed Bayer matrix, but the real
-# algorithm -- diffusion coefficients, direction, whatever it actually is
-# -- isn't identified), whether mode_flag genuinely selects
+# and duty-cycle algorithm for the now fully-characterized fixed dither
+# ramp ({0,6,12,19,25,31} for R/B, {0,10,21,32,42,53,63} for G -- spanning
+# each channel's entire native range, confirmed by save_to_gif_14/15), the
+# G ramp's single unexplained off-by-one deviation from an exact even
+# split, the per-row variation's exact mechanism (error diffusion is still
+# just a hypothesis; per-row burstiness fits it better than a fixed Bayer
+# matrix, but the real algorithm -- diffusion coefficients, direction,
+# whatever it actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
 # far), the exact scope/mechanism of the content validator -- 14 hardware
 # data points now fit "a row's transition/run structure must stay locally

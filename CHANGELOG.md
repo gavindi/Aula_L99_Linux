@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-07-30
+
+**"Save to GIF": the dither ramp extends all the way to each channel's
+native maximum -- closing 0.7.2's open question about higher rungs.**
+`save_to_gif_15.pcapng` -- the same hue sweep as `save_to_gif_14`, but at
+95% brightness instead of 70% (targets up to 242, much closer to the
+255 ceiling) -- was captured specifically to probe for rungs above the
+ones seen before.
+
+### Verified
+- Two new top rungs appear that 0.7.2's dimmer test never triggered: R/B
+  index 31 (= 255) and G index 63 (= 255). Combined with the previously
+  known rungs, the full ramps are now: R and B, 6 levels -- `{0, 6, 12,
+  19, 25, 31}` (8-bit: 0, 49, 99, 156, 206, 255); G, 7 levels -- `{0, 10,
+  21, 32, 42, 53, 63}` (8-bit: 0, 40, 85, 130, 170, 215, 255).
+- The R/B ramp is an *exact* even 6-way split of the full 0-31 native
+  range (`round(i*31/5)` for i=0..5 reproduces `{0,6,12,19,25,31}`
+  precisely). The G ramp is very close to but not quite an exact even
+  7-way split of 0-63 -- it differs from the naive rounding of `i*63/6`
+  by exactly 1 at a single point (53 vs. an evenly-rounded 52); every
+  other level matches exactly. Reported honestly as "very close, not
+  exact" rather than forcing a clean formula that doesn't quite fit.
+- Weighted-average color per column again matches the intended target
+  hue closely across all 320 columns at this brighter setting: mean error
+  ~3.8/255, max ~10.5/255 -- consistent with 0.7.2's dimmer test, now
+  confirmed at a second, much brighter setting.
+- Both frames again `mode_flag=0x0002` raw-bitmap, byte-identical to each
+  other, content exactly 153600 bytes -- same structural confirmations as
+  every prior raw-bitmap capture.
+
+### Changed
+- The dither ramp is now fully characterized end-to-end: it spans each
+  channel's ENTIRE native range (0 to 31 for 5-bit R/B, 0 to 63 for 6-bit
+  G), not capped below the maximum as 0.7.2 left open. The apparent "cap"
+  in that round was purely because neither test image's targets were
+  bright enough to need the top rung -- not a real property of the ramp.
+
+### Known gaps
+- The G ramp's single off-by-one deviation from a naive even split is
+  unexplained -- worth keeping in mind if it recurs or resolves with more
+  data.
+- Same open items as 0.7.2 otherwise: the exact snap-vs-dither selection
+  rule and duty-cycle algorithm, the per-row variation's mechanism, the
+  528-byte prefix's true purpose, `mode_flag`'s general meaning,
+  `save_to_gif_2`'s inefficiency.
+
 ## [0.7.2] - 2026-07-30
 
 **"Save to GIF": found the dithering ramp -- a FIXED, shared set of RGB565
