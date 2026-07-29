@@ -817,6 +817,29 @@ GIF_FLASH_BASE = 0x04240000
 #     this raw-bitmap frame has mode_flag=0x0002 -- a plausible format
 #     selector (RLE vs. raw), though with only one example of each this
 #     isn't proven, just consistent.
+#   - The 8 combo flags decompose into 3 independent per-channel bits: R is
+#     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
+#     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
+#     and lo(170) for {1,6,7,10}. Measured over all 50880 gray-stripe
+#     pixels: R is lo 8.56% of the time, B is lo 8.50%, G is lo 31.25% --
+#     in the same ballpark as (a little under) the naive linear-interpolation
+#     duty cycle each channel would need to hit 200 from its own two
+#     candidate values (12.0% for R/B between 156/206, 33.3% for G between
+#     170/215). This supports reading the 8-slot palette as nothing more
+#     than a precomputed enumeration of all 8 outcomes of 3 SEPARATE,
+#     independent single-channel ditherers (R, G, and B each deciding
+#     hi/lo on their own, low-rate for R/B, higher-rate for G) -- the
+#     8 RGB565 corners exist only because RGB565 can't express "this
+#     channel is dithered" as anything other than a fully-specified color,
+#     not because the dithering logic itself is 3-dimensional.
+#   - The per-row minor-flag count is bursty, not periodic: rows 0-2 have
+#     zero minor-flag pixels, row 3 has 25, row 4 has 1, row 6 has 31, and
+#     so on with no obvious fixed period (checked the first 40 rows).  A
+#     fixed spatial Bayer/ordered-dither matrix would be expected to
+#     distribute corrections roughly evenly across rows; this clustering
+#     is a better fit for error diffusion or some other history-dependent
+#     scheme, where the exact algorithm (diffusion direction/coefficients)
+#     is still unidentified.
 #
 # save_to_gif_12/13's larger uploads also exposed and fixed a real modeling
 # bug, not just a documentation gap: CRC_INIT was keyed by the cmd byte from
@@ -838,10 +861,12 @@ GIF_FLASH_BASE = 0x04240000
 # matches the (overflowing) content-length field exactly), the unidentified
 # sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
-# per-channel grid (light gray here), the precise 2D substitution rule for
-# the 8-slot scheme's minor flags (5,6,7,8,9,10 appear at scattered
-# positions on 475 of 480 rows, likely a real Bayer-style ordered-dither
-# matrix, not yet mapped row-by-row), whether mode_flag genuinely selects
+# per-channel grid (light gray here), the exact per-channel dithering
+# algorithm behind the 8-slot scheme (measured duty cycles are in the
+# right ballpark for simple linear interpolation, and the per-row
+# burstiness argues for error diffusion over a fixed Bayer matrix, but the
+# real algorithm -- diffusion coefficients, direction, whatever it
+# actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
 # far), and gif_2's solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5

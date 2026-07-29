@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-07-30
+
+**"Save to GIF": the 8-slot dither palette decomposes into 3 independent
+per-channel ditherers, and the pattern looks like error diffusion, not a
+fixed matrix.** Follow-up to 0.6.7, same capture, no new hardware.
+
+### Verified
+- The 8 combo flags split cleanly along 3 independent per-channel bits: R
+  is hi(206) for flags {0,1,8,10}, lo(156) for {5,6,7,9}; B is hi(206) for
+  {0,1,7,9}, lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}, lo(170)
+  for {1,6,7,10}.
+- Measured over all 50880 gray-stripe pixels: R is lo 8.56% of the time, B
+  is lo 8.50%, G is lo 31.25% -- in the same range as the duty cycle each
+  channel alone would need under naive linear interpolation to average to
+  the 200 target (12.0% for R/B, 33.3% for G).
+- Per-row minor-flag counts are bursty, not periodic: rows 0-2 have zero,
+  row 3 has 25, row 4 has 1, row 6 has 31 (checked the first 40 of 480
+  rows) -- no fixed spacing.
+
+### Changed
+- The 8-slot palette is better understood as a precomputed enumeration of
+  all 8 outcomes of 3 separate, independent single-channel ditherers (each
+  choosing hi/lo on its own), not evidence of an inherently 3-dimensional
+  dithering algorithm -- the 8 RGB565 corners exist because RGB565 can't
+  express "this channel alone is dithered" as anything but a fully
+  specified color.
+- The burstiness argues for error diffusion (or another history-dependent
+  scheme) over a fixed spatial Bayer/ordered-dither matrix, which would be
+  expected to spread corrections evenly across rows.
+
+### Known gaps
+- The actual per-channel algorithm (error diffusion direction/coefficients,
+  or something else entirely) is not identified -- duty cycles and
+  burstiness are consistent with error diffusion, not proof of it.
+- Same open items as 0.6.7 otherwise: the 528-byte prefix, one
+  unidentified sub-header byte, whether `mode_flag` generally selects
+  RLE-vs-raw, `save_to_gif_2`'s inefficiency, `0x04200000`, no
+  `--target gif`.
+- Still no hardware mutation this round -- static re-analysis only.
+
 ## [0.6.7] - 2026-07-30
 
 **"Save to GIF": `save_to_gif_13`'s complex dithered frame is NOT

@@ -386,8 +386,18 @@ pixel, and the light-gray stripe dominated by a repeating
 `(flag0,flag0,flag0,flag1)` 4-pixel tile — a 3:1 duty-cycle dither on the G
 channel alone, since those two slots share the same R and B. Most rows (475
 of 480) also substitute one of the other 6 combo flags at scattered
-positions, hinting at a full 2D ordered-dither (Bayer-style) matrix beyond
-the basic 4-pixel repeat — not yet mapped row-by-row. This also explains
+positions. The 8 flags decompose cleanly into 3 independent per-channel
+bits (R hi/lo, G hi/lo, B hi/lo), and measured over all 50880 gray-stripe
+pixels, R and B sit at their "lo" value 8.5% of the time each and G 31.25%
+— in the same range as the naive linear-interpolation duty cycle each
+channel alone would need to average to 200 (12.0% for R/B, 33.3% for G).
+That fits the 8-slot palette being nothing more than a precomputed
+enumeration of all 8 outcomes of 3 separate single-channel ditherers, not
+evidence of a genuinely 3D dithering algorithm. The per-row minor-flag
+count is bursty rather than periodic (rows 0–2 have none, row 3 has 25,
+row 4 has 1, row 6 has 31, ...), which fits error diffusion better than a
+fixed spatial Bayer matrix — the exact algorithm isn't identified. This
+also explains
 *why* the 8-slot scheme exists: an independent per-channel ordered dither
 needs far more achievable colors than a single alternating pair, and doing
 that via RLE tokens would be pathological (nearly every run 1 pixel,
@@ -413,9 +423,9 @@ a color table, fixed-size up to 11 palette slots, and confirmed still
 exactly 528 bytes in `save_to_gif_13`'s frame 2 by construction — size32 -
 528 matches the overflowing content-length field exactly), one
 unidentified sub-header byte, why a dithered color sometimes gets the
-simple 2-slot pair and sometimes the 8-slot per-channel grid, the precise
-2D substitution rule for the 8-slot scheme's minor flags (present on 475
-of 480 rows at scattered positions, likely a real Bayer-style matrix),
+simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
+per-channel dithering algorithm (duty cycles are roughly right for linear
+interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
 example of each so far), and why `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
