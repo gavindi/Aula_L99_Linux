@@ -635,10 +635,13 @@ overflowing content-length field exactly — and now known to tolerate
 exactly 8 non-zero bytes anywhere in the padding, a pure count threshold
 that holds identically in both RLE-mode and raw-bitmap-mode frames,
 mechanism behind the count still unknown), the exact snap-vs-dither
-selection rule and duty-cycle algorithm for the now fully-characterized
+selection rule and diffusion algorithm for the now fully-characterized
 fixed dither ramp (`{0,6,12,19,25,31}` for R/B, `{0,10,21,32,42,53,63}`
 for G — spanning each channel's entire native range, confirmed by
-`save_to_gif_14`/`15`), the G ramp's single unexplained off-by-one
+`save_to_gif_14`/`15`; linear interpolation between bracketing rungs is a
+good but not exact model of the duty cycle, mean deviation 3.4 points
+with no systematic bias, more consistent with error diffusion than a
+closed-form formula), the G ramp's single unexplained off-by-one
 deviation from an exact even split, the per-row variation's exact
 mechanism (error diffusion is still just a hypothesis), whether
 `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
@@ -719,8 +722,23 @@ matches the intended target closely at this brighter setting (mean error
 now fully characterized end-to-end: it spans each channel's entire
 native range, not capped below the maximum as it first appeared — that
 apparent cap was purely because neither earlier test image's targets
-were bright enough to need the top rung. Still open: the exact
-snap-vs-dither selection rule and duty-cycle algorithm, the G ramp's
+were bright enough to need the top rung.
+
+**Does the observed duty cycle match naive linear interpolation between
+bracket rungs?** Close, but not exactly. Offline re-analysis of
+`save_to_gif_14` (no new hardware, only possible now that the exact ramp
+is known) across 960 column/channel data points needing two-rung
+dithering: mean absolute deviation from the linear-interpolation
+prediction is 3.4 percentage points, but the mean *signed* deviation is
+essentially zero (0.002) — no bias toward either rung. That's the right
+first-order model for what duty cycle each channel is aiming for, but the
+real per-column result isn't an exact closed-form computation: the
+variance is well above simple integer-rounding noise at 480 samples
+(which would be under 0.3 points), more consistent with an
+error-diffusion-style algorithm approximating the correct long-run ratio
+than an exact ordered-dither formula. Worst mismatches (up to 26 points)
+cluster near ramp segments close to 0. Still open: the exact
+snap-vs-dither selection rule and diffusion algorithm, the G ramp's
 single unexplained off-by-one deviation, and the per-row variation's
 exact mechanism (error diffusion is still just a hypothesis).
 

@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-07-30
+
+**"Save to GIF": linear interpolation between bracket rungs is a good
+approximation of the per-channel duty cycle, but not an exact formula --
+consistent with error diffusion, not a precise closed-form computation.**
+Offline re-analysis of `save_to_gif_14.pcapng` (no new hardware), now
+possible because 0.7.2/0.7.3 nailed down the exact ramp.
+
+### Verified
+- For every column/channel needing two-rung dithering (960 data points
+  across the 320-column rainbow), computed the naive "linear
+  interpolation between the two bracketing ramp rungs" predicted duty
+  cycle and compared it to the actual observed duty cycle (from real
+  pixel counts). Mean absolute deviation: 3.4 percentage points. Mean
+  *signed* deviation: 0.002 -- effectively zero, meaning there's no
+  systematic bias toward either rung; deviations are roughly balanced
+  (357 columns observed-high, 212 observed-low, 391 close enough to call
+  exact).
+- The worst individual mismatches (up to 26 percentage points) cluster
+  near ramp segments close to 0 (e.g. the `{0,40}` G bracket), not
+  uniformly across the whole range.
+
+### Changed
+- Confirms linear interpolation is the right first-order model for
+  *what* duty cycle each dithered channel is aiming for, but the actual
+  per-column result isn't a precise closed-form computation -- it has
+  real, non-negligible variance (well above simple integer-rounding noise
+  at 480 samples, which would be under 0.3 percentage points). This is
+  more consistent with an error-diffusion-style algorithm, which
+  approximates the correct long-run ratio well but doesn't hit it exactly
+  in a finite sample, than with an exact ordered-dither formula.
+
+### Known gaps
+- The actual diffusion algorithm (coefficients, propagation direction,
+  whether it resets per column/row or runs continuously across the whole
+  raster) is still not decoded -- this round confirms the *character* of
+  the deviation (unbiased, real variance, concentrated near certain
+  bracket segments) without identifying the mechanism.
+- Same open items otherwise: the G ramp's off-by-one, the 528-byte
+  prefix's true purpose, `mode_flag`'s general meaning, `save_to_gif_2`'s
+  inefficiency.
+
 ## [0.7.3] - 2026-07-30
 
 **"Save to GIF": the dither ramp extends all the way to each channel's

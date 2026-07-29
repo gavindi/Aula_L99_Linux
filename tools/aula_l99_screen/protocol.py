@@ -1161,6 +1161,25 @@ GIF_FLASH_BASE = 0x04240000
 # -- that apparent cap was purely because neither earlier test image's
 # targets were bright enough to need the top rung.
 #
+# Offline re-analysis of save_to_gif_14 (no new hardware, made possible
+# now that the exact ramp is known): does the observed per-channel duty
+# cycle match naive linear interpolation between the two bracketing
+# rungs? Across 960 column/channel data points needing two-rung
+# dithering: mean absolute deviation 3.4 percentage points, mean SIGNED
+# deviation ~0 (0.002) -- no systematic bias toward either rung (357
+# columns observed-high, 212 observed-low, 391 close enough to call
+# exact). So linear interpolation is the right first-order model for what
+# duty cycle each channel is aiming for, but the actual per-column result
+# isn't an exact closed-form computation -- real, non-negligible variance
+# (well above simple integer-rounding noise at 480 samples, which would
+# be under 0.3 points) more consistent with an error-diffusion-style
+# algorithm approximating the right long-run ratio than an exact ordered-
+# dither formula. Worst mismatches (up to 26 points) cluster near ramp
+# segments close to 0 (e.g. the {0,40} G bracket), not uniformly spread.
+# Still doesn't identify the actual diffusion algorithm (coefficients,
+# direction, whether it resets per row/column or runs continuously) --
+# only confirms the deviation's character (unbiased, real, uneven).
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1169,10 +1188,13 @@ GIF_FLASH_BASE = 0x04240000
 # pure count threshold (not a specific critical byte) that holds
 # identically in both RLE-mode and raw-bitmap-mode frames, mechanism
 # behind the count still unknown), the exact snap-vs-dither selection rule
-# and duty-cycle algorithm for the now fully-characterized fixed dither
+# and diffusion algorithm for the now fully-characterized fixed dither
 # ramp ({0,6,12,19,25,31} for R/B, {0,10,21,32,42,53,63} for G -- spanning
-# each channel's entire native range, confirmed by save_to_gif_14/15), the
-# G ramp's single unexplained off-by-one deviation from an exact even
+# each channel's entire native range, confirmed by save_to_gif_14/15;
+# linear interpolation between bracketing rungs is a good but not exact
+# model of the duty cycle, mean deviation 3.4 points with no systematic
+# bias, more consistent with error diffusion than a closed-form formula),
+# the G ramp's single unexplained off-by-one deviation from an exact even
 # split, the per-row variation's exact mechanism (error diffusion is still
 # just a hypothesis; per-row burstiness fits it better than a fixed Bayer
 # matrix, but the real algorithm -- diffusion coefficients, direction,
