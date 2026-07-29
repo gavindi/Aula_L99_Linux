@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-07-29
+
+**"Save to GIF": found the dithering trigger rule, and fixed a real bug in
+how `CRC_INIT` is keyed.** Two more captures -- black/orange (`gif_12`) and
+light gray/dark red (`gif_13`) -- refute the earlier "corner" theory and
+nail down when a color dithers instead of getting a direct palette slot.
+Regression-checking these against all prior captures also exposed a
+length-collision bug in `CRC_INIT` that had been silently wrong for two
+existing entries.
+
+### Verified
+- `save_to_gif_12.pcapng` (solid black background, orange stripe): both
+  colors get clean direct palette slots -- refutes the earlier "colors at
+  the 8 RGB565 gamut corners dither" theory, since orange is nowhere near a
+  corner and still didn't dither.
+- `save_to_gif_13.pcapng` (light gray, dark red): light gray dithers, dark
+  red does not. Combined with all prior data, 12/12 tested colors are now
+  exceptionless under a single rule: a color gets a direct palette slot iff
+  `max(R, G, B)` is exactly 0 or 255; anything whose brightest channel is
+  strictly between 0 and 255 dithers, regardless of the other channels.
+- Rendered correctly on the physical panel, confirmed by the user.
+
+### Fixed
+- **`CRC_INIT` was keyed by the `cmd` byte from `final_chunk_cmd()`, which
+  is wrong: `cmd = (CMD_WRITE + payload_len) % 256` is many-to-one, so two
+  different lengths can collide on the same `cmd` and legitimately need
+  different CRC inits.** The standard regression check caught this directly:
+  `gif_12`'s 1080-byte final chunk collides on `cmd=0x3F` with `gif_10`/`11`'s
+  312-byte chunk (inits `0x9E2E` vs. `0x922E`), and `gif_13`'s 248-byte final
+  chunk collides on `cmd=0xFF` with `gif_8`'s 2040-byte chunk (inits
+  `0x522F` vs. `0xD9D1`). A cmd-keyed dict silently returned the wrong init
+  for the second capture in each pair. Fixed by re-keying `CRC_INIT` by the
+  actual payload length instead, and changing `crc16_packet()` to derive
+  `payload_len` from the body's own size rather than trusting a
+  caller-supplied `cmd`. All 15 known captures re-verified byte-for-byte
+  after the fix, including both collision pairs.
+
+### Known gaps
+- The exact byte layout when multiple colors dither simultaneously in one
+  frame (`gif_13`'s case) isn't mapped to a specific rule yet.
+- The 528-byte prefix's actual contents/purpose are still unknown.
+- One sub-header byte ([13]) remains unidentified.
+- `save_to_gif_2`'s solid frames still encode far less efficiently than
+  `save_to_gif_3`/`4`/`5`'s, unexplained.
+- `0x04200000`, the remaining unidentified flash slot the vendor binary
+  references, is still unaccounted for.
+- Still no `--target gif`.
+
 ## [0.6.4] - 2026-07-29
 
 **"Save to GIF": dithering confirmed color-specific, not a slot-order

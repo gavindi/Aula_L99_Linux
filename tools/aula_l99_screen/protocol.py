@@ -137,46 +137,54 @@ def final_chunk_cmd(payload_len: int) -> int:
     """cmd byte for a non-full write chunk, as a function of its payload length.
 
     Not a fixed opcode: cmd = CMD_WRITE + (payload_len % 256), wrapping at a
-    byte. Confirmed against 12 independent samples across 10 capture files:
+    byte. Confirmed against 14 independent samples across 12 capture files:
     2048-byte chunks (len%256=0 -> cmd=0x07=CMD_WRITE), commits (always a
     4-byte payload -> cmd=0x0B=CMD_COMMIT), the photo-frame/background final
     chunk (11 bytes -> cmd=0x12=CMD_FINAL), and wireshark_dumps/
-    save_to_gif_1/2/3/5/6/7/8/9/10.pcapng final chunks (1386 bytes -> 0x71,
-    1582 bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540 bytes ->
-    0x23, 122 bytes -> 0x81, 2040 bytes -> 0xFF, 1492 bytes -> 0xDB, 312
-    bytes -> 0x3F -- every one predicted exactly by this formula before
-    being checked; save_to_gif_4.pcapng repeats save_to_gif_3's
-    1450-byte/0xB1 case rather than adding a new one).
+    save_to_gif_1/2/3/5/6/7/8/9/10/12/13.pcapng final chunks (1386 bytes ->
+    0x71, 1582 bytes -> 0x35, 1450 bytes -> 0xB1, 120 bytes -> 0x7F, 540
+    bytes -> 0x23, 122 bytes -> 0x81, 2040 bytes -> 0xFF, 1492 bytes -> 0xDB,
+    312 bytes -> 0x3F, 1080 bytes -> 0x3F, 248 bytes -> 0xFF -- every one
+    predicted exactly by this formula before being checked; save_to_gif_4
+    .pcapng repeats save_to_gif_3's 1450-byte/0xB1 case rather than adding a
+    new one).
 
-    This only gives you the cmd byte. There is no known general formula for
-    the matching CRC_INIT entry (two hypotheses -- init as a function of just
-    this cmd byte, or of the magic+lenfield+cmd prefix -- were brute-forced
-    against all 12 known (cmd, init) pairs and neither held), so calling this
-    with a payload length outside CRC_INIT will raise in crc16_packet().
+    IMPORTANT: cmd = (CMD_WRITE + payload_len) % 256 is many-to-one -- many
+    different lengths share a cmd byte (e.g. 312 and 1080 both give 0x3F;
+    248 and 2040 both give 0xFF, confirmed by save_to_gif_10 vs. 12 and
+    save_to_gif_8 vs. 13 respectively). CRC_INIT is keyed by the actual
+    payload length, NOT by this cmd byte, for exactly this reason -- see
+    CRC_INIT below.
     """
     return (CMD_WRITE + payload_len) % 256
 
 
-# Each command uses its own CRC init; see final_chunk_cmd() above for why
-# CMD_COMMIT/CMD_FINAL need their own entries despite not being independent
-# opcodes. Verified against all 308 packets in both upstream photo-frame
-# captures. 0x71/0x35/0xB1/0x7F/0x23/0x81/0xFF/0xDB/0x3F are solved for
-# exactly the lengths they were observed at (wireshark_dumps/save_to_gif_1/2
-# /3/5/6/7/8/9/10.pcapng's final chunks) -- not a general result, since no
-# formula for CRC_INIT vs. length was found (see final_chunk_cmd()).
+# Each length uses its own CRC init. Originally modeled as being keyed by
+# the cmd byte (a natural first guess, since cmd IS a function of length),
+# but save_to_gif_12/13.pcapng proved that wrong: their final chunks (1080
+# and 248 bytes) collide with save_to_gif_10's (312 bytes) and
+# save_to_gif_8's (2040 bytes) on cmd (0x3F and 0xFF respectively, since
+# cmd only depends on length % 256) but need DIFFERENT inits. So this is
+# keyed by the real payload length; crc16_packet() derives that from the
+# body it's given rather than trusting the caller's cmd. Verified against
+# all 308 packets in both upstream photo-frame captures, plus every GIF
+# capture's write/commit/final chunks -- not a general formula, since no
+# relationship between length and init was found (see final_chunk_cmd()).
 CRC_INIT = {
-    CMD_WRITE: 0xF104,
-    CMD_COMMIT: 0xEEC4,
-    CMD_FINAL: 0xD141,
-    0x71: 0x1CB0,   # save_to_gif_1.pcapng final chunk (1386-byte payload)
-    0x35: 0xD9F1,   # save_to_gif_2.pcapng final chunk (1582-byte payload)
-    0xB1: 0x9F4E,   # save_to_gif_3/4.pcapng final chunk (1450-byte payload)
-    0x7F: 0x6F7A,   # save_to_gif_5.pcapng final chunk (120-byte payload)
-    0x23: 0xA9BB,   # save_to_gif_6.pcapng final chunk (540-byte payload)
-    0x81: 0x13B0,   # save_to_gif_7.pcapng final chunk (122-byte payload)
-    0xDB: 0x1E90,   # save_to_gif_9.pcapng final chunk (1492-byte payload)
-    0x3F: 0x922E,   # save_to_gif_10.pcapng final chunk (312-byte payload)
-    0xFF: 0xD9D1,   # save_to_gif_8.pcapng final chunk (2040-byte payload)
+    2048: 0xF104,   # CMD_WRITE, full chunks -- every photo-frame/bkg/GIF capture
+    4: 0xEEC4,      # CMD_COMMIT, always a 4-byte region-count payload
+    11: 0xD141,     # CMD_FINAL, the photo-frame/background final chunk
+    1386: 0x1CB0,   # save_to_gif_1.pcapng final chunk
+    1582: 0xD9F1,   # save_to_gif_2.pcapng final chunk
+    1450: 0x9F4E,   # save_to_gif_3/4.pcapng final chunk
+    120: 0x6F7A,    # save_to_gif_5.pcapng final chunk
+    540: 0xA9BB,    # save_to_gif_6.pcapng final chunk
+    122: 0x13B0,    # save_to_gif_7.pcapng final chunk
+    2040: 0xD9D1,   # save_to_gif_8.pcapng final chunk
+    1492: 0x1E90,   # save_to_gif_9.pcapng final chunk
+    312: 0x922E,    # save_to_gif_10/11.pcapng final chunk
+    1080: 0x9E2E,   # save_to_gif_12.pcapng final chunk -- same cmd (0x3F) as 312, different init
+    248: 0x522F,    # save_to_gif_13.pcapng final chunk -- same cmd (0xFF) as 2040, different init
 }
 
 CHUNK_SIZE = 2048
@@ -687,16 +695,63 @@ GIF_FLASH_BASE = 0x04240000
 # and the encoder maps this specific gray to this specific dither pair
 # deterministically, independent of what else is in the frame.
 #
+# save_to_gif_12.pcapng tests the "which colors dither" boundary directly:
+# black (0,0,0, the missing 8th RGB-cube corner), orange (255,128,0, NOT a
+# corner -- G is mid-value), and red (reference), 3 stripes. Result: NEITHER
+# black NOR orange dithers -- both get clean, exact palette slots ([16:18]
+# =0x0000 black, [18:20]=0xFC00 orange, [20:22]=0xF800 red). This refutes
+# the "8 RGB-cube corners only" theory from directly after 0.6.3/0.6.4: a
+# clearly non-corner color (orange) is represented exactly, no dithering.
+#
+# save_to_gif_13.pcapng follows up with light gray (200,200,200, a
+# different achromatic mid-tone than the original gray) and dark red
+# (128,0,0, chromatic, one mid-value channel like orange but not paired
+# with a maxed-out channel). Confirmed correct on the panel. Result: BOTH
+# dither -- refuting "achromatic-only" too. Testing every color used so far
+# against its own maximum channel value gives a clean, so-far-exceptionless
+# rule: a color gets a direct palette slot only if max(R,G,B) is exactly 0
+# (black) or 255 (any hue at full intensity in at least one channel); any
+# color whose brightest channel lands strictly between 0 and 255 --
+# regardless of how many other channels are already at an extreme --
+# dithers. 12 for 12 tested colors fit this rule, including the two
+# "should dither" and one "shouldn't" predictions made before checking.
+# Consistent with the palette fundamentally representing "hue at full
+# brightness, or black" and dithering to approximate anything else.
+#
+# save_to_gif_13.pcapng's exact byte-level structure is NOT fully decoded,
+# unlike every earlier capture: its sub-header's 16-bit content-length field
+# overflows (true content is >150 KB, several times any previous capture,
+# since dithering two colors at once inflates the entropy-coded section a
+# lot), and with two colors dithering simultaneously the palette shows
+# additional entries beyond simple 2-color pairs -- combinations of the
+# component brightness levels from both dithered targets, not yet mapped to
+# a specific encoding rule. The qualitative finding (dark red and light gray
+# both dither) is solid; the precise token layout for multi-color dithering
+# isn't.
+#
+# save_to_gif_12/13's larger uploads also exposed and fixed a real modeling
+# bug, not just a documentation gap: CRC_INIT was keyed by the cmd byte from
+# final_chunk_cmd(), which seemed reasonable since cmd is derived from
+# length -- but cmd = (CMD_WRITE + length % 256) % 256 is many-to-one.
+# save_to_gif_12's 1080-byte final chunk collides on cmd (0x3F) with
+# save_to_gif_10/11's 312-byte one, and save_to_gif_13's 248-byte one
+# collides (0xFF) with save_to_gif_8's 2040-byte one -- and in both cases
+# the correct init genuinely differs. A cmd-keyed dict silently gave the
+# wrong answer for the second capture in each collision. CRC_INIT is now
+# keyed by the actual payload length (crc16_packet() derives it from the
+# body's own size rather than trusting a caller-supplied cmd), which is
+# unambiguous by construction. All 15 captures re-verified byte-for-byte
+# after the fix, including both collision pairs.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
-# (confirmed NOT a color table, and confirmed fixed-size up to 9 palette
-# slots and far denser content), the unidentified sub-header byte [13],
-# exactly which OTHER colors (besides this one gray) trigger dithering --
-# confirmed color-specific and deterministic, but the actual boundary
-# (luminance? saturation? something else?) is still unmapped -- and gif_2's
-# solid frames being encoded far less efficiently (4151 varied tokens for
-# the same 153600-pixel solid red that save_to_gif_3/4/5 encode in exactly
-# 600 uniform tokens) -- possibly gif_2's source image wasn't perfectly
-# flat, not investigated. It is NOT
+# (confirmed NOT a color table, fixed-size up to 9 palette slots, and still
+# ~528 bytes by all indications in save_to_gif_13 too, though not fully
+# verified there given the content-length overflow above), the unidentified
+# sub-header byte [13], the exact byte layout when multiple colors dither
+# in the same frame, and gif_2's solid frames being encoded far less
+# efficiently (4151 varied tokens for the same 153600-pixel solid red that
+# save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
+# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
 # raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 
@@ -717,11 +772,19 @@ def is_ack(cmd: int, reply: bytes) -> bool:
     return ACK in reply
 
 
-def crc16_packet(cmd: int, body: bytes) -> int:
-    """Packet checksum: reflected poly 0xA001 with a per-command init."""
-    if cmd not in CRC_INIT:
-        raise ValueError(f"unknown command 0x{cmd:02x}")
-    crc = CRC_INIT[cmd]
+HEADER_SIZE_WIRE = 10  # magic(2) + lenfield(2) + cmd(1) + const(1) + address(4)
+
+
+def crc16_packet(body: bytes) -> int:
+    """Packet checksum: reflected poly 0xA001, init keyed by payload length.
+
+    Keyed by length, not by the cmd byte in `body` -- see CRC_INIT for why
+    (cmd is a many-to-one function of length, so it can't disambiguate).
+    """
+    payload_len = len(body) - HEADER_SIZE_WIRE
+    if payload_len not in CRC_INIT:
+        raise ValueError(f"unknown payload length {payload_len}")
+    crc = CRC_INIT[payload_len]
     for byte in body:
         crc ^= byte
         for _ in range(8):
@@ -737,7 +800,7 @@ def build_packet(cmd: int, const: int, address: int, payload: bytes) -> bytes:
     body.append(const)
     body += struct.pack(">I", address)
     body += payload
-    return bytes(body) + struct.pack("<H", crc16_packet(cmd, bytes(body)))
+    return bytes(body) + struct.pack("<H", crc16_packet(bytes(body)))
 
 
 def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]:

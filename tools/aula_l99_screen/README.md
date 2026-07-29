@@ -50,7 +50,7 @@ the vendor binary references, `0x04200000`, is still unidentified.
 ### Save to GIF (unimplemented)
 
 `0x04240000` is confirmed as the "Save to GIF" flash address — independently,
-from eleven captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
+from thirteen captures: `wireshark_dumps/save_to_gif_1.pcapng` (a real photo
 GIF), `save_to_gif_2.pcapng` (3 solid red/green/blue frames),
 `save_to_gif_3.pcapng` (2 frames, both solid red except one white pixel at
 `(0,0)` — top-left), `save_to_gif_4.pcapng` (the same pair, white pixel moved
@@ -61,19 +61,23 @@ where the split frame repeats unchanged), `save_to_gif_7.pcapng` (a
 red/blue/red vertical triple stripe), `save_to_gif_8.pcapng` (four
 distinct-colored vertical stripes), `save_to_gif_9.pcapng` (a black/white
 grid, shifted one pixel in frame 2), `save_to_gif_10.pcapng` (eight
-distinct-colored vertical stripes, including gray), and `save_to_gif_11.pcapng`
-(the same eight colors, reordered so gray is first). There is still no
-`--target gif`, because the pixel payload format isn't understood well
-enough to safely construct one, but the core row-grammar is now solved
-(see below). What's known:
+distinct-colored vertical stripes, including gray), `save_to_gif_11.pcapng`
+(the same eight colors, reordered so gray is first), `save_to_gif_12.pcapng`
+(black and orange, testing the dithering boundary), and `save_to_gif_13.pcapng`
+(light gray and dark red, following up). There is still no `--target gif`,
+because the pixel payload format isn't understood well enough to safely
+construct one, but the core row-grammar is now solved (see below). What's
+known:
 
 - Same wire protocol/framing as the other two targets. The final short data
   chunk's `cmd` byte, previously a mystery, is solved: `cmd = CMD_WRITE +
-  (payload_len % 256)`, not a fixed opcode — confirmed against 10 distinct
-  GIF final-chunk lengths (`0x71`, `0x35`, `0xB1` twice, `0x7F`, `0x23`,
-  `0x81`, `0xFF`, `0xDB`, `0x3F`) plus the three previously-known values.
-  There's no known general formula for the matching CRC init, though, so
-  this doesn't unlock arbitrary upload sizes — see `final_chunk_cmd()` in
+  (payload_len % 256)`, not a fixed opcode. This mapping is many-to-one,
+  though — different lengths can share a `cmd` byte — so the matching CRC
+  init is keyed by the actual payload length, not by `cmd`; two collisions
+  (312 vs. 1080 bytes both giving `cmd=0x3F`, 248 vs. 2040 bytes both giving
+  `cmd=0xFF`) confirmed this needed fixing, not just documenting. There's no
+  known general formula relating length to its CRC init, so this doesn't
+  unlock arbitrary upload sizes — see `final_chunk_cmd()` and `CRC_INIT` in
   `protocol.py`.
 - The blob is a small table-of-contents header (20 bytes per frame). Its
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
@@ -339,14 +343,52 @@ first served" — it was never about position. The encoder maps this
 specific gray to this specific dither pair deterministically, regardless
 of what else is in the frame.
 
+**`save_to_gif_12.pcapng`** tests the dithering boundary directly: black
+(the missing 8th RGB-cube corner) and orange (255,128,0 — clearly not a
+corner, its G channel is mid-value). Neither dithers — both get clean,
+exact slots (`0x0000` black, `0xFC00` orange). That refutes "8 corners
+only": a non-corner color can be represented exactly.
+
+**`save_to_gif_13.pcapng`** follows up with light gray (200,200,200, a
+different achromatic mid-tone) and dark red (128,0,0, chromatic, one
+mid-value channel like orange — but not paired with a maxed-out channel).
+Confirmed correct on the panel. Both dither, refuting "achromatic-only"
+too. Checking every color tested so far against its own **maximum channel
+value** gives a clean, exceptionless rule: a color gets a direct palette
+slot only if `max(R,G,B)` is exactly 0 (black) or 255 (any hue at full
+intensity in at least one channel); anything whose brightest channel lands
+strictly in between dithers, regardless of how many other channels are
+already at an extreme. 12 for 12 colors tested fit this, including
+predictions made *before* checking. Consistent with the palette
+fundamentally representing "hue at full brightness, or black."
+
+`save_to_gif_13`'s precise byte-level token layout isn't fully decoded —
+its 16-bit content-length field overflows (true content is over 150 KB,
+several times any earlier capture, since dithering two colors at once
+inflates the entropy-coded section a lot), and two simultaneously-dithered
+colors produce extra palette entries — combinations of both targets'
+component brightness levels — not yet mapped to a specific rule. The
+qualitative finding (both colors dither) is solid; the exact layout isn't.
+
+These two captures also caught and fixed a real bug, not just a
+documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
+reasonable since `cmd` is derived from length — but that mapping is
+many-to-one (two different lengths can share a `cmd` byte). `save_to_gif_12`'s
+1080-byte final chunk collides with `save_to_gif_10`'s 312-byte one on
+`cmd=0x3F`; `save_to_gif_13`'s 248-byte one collides with `save_to_gif_8`'s
+2040-byte one on `cmd=0xFF` — and in both cases the correct CRC init
+genuinely differs. `CRC_INIT` is now keyed by the real payload length
+instead, which is unambiguous. All 15 captures re-verified byte-for-byte
+after the fix.
+
 Still open: the 528-byte prefix's actual contents/purpose (confirmed *not*
-a color table, and fixed-size up to 9 palette slots and far denser
-content), one unidentified sub-header byte, exactly which *other* colors
-(besides this one gray) trigger dithering — confirmed color-specific and
-deterministic, but the real boundary (luminance? saturation? something
-else?) is still unmapped — and why `save_to_gif_2`'s solid frames encode
-far less efficiently (4151 varied tokens vs. `save_to_gif_3`/`4`/`5`'s
-clean 600 — possibly that source image wasn't perfectly flat).
+a color table, fixed-size up to 9 palette slots and dense single-color
+content, though not independently re-verified for the multi-dither case
+above), one unidentified sub-header byte, the exact byte layout when
+multiple colors dither in the same frame, and why `save_to_gif_2`'s solid
+frames encode far less efficiently (4151 varied tokens vs.
+`save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
+perfectly flat).
 
 ## Image format
 
