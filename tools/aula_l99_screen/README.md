@@ -83,7 +83,13 @@ known:
   per-entry checksum field is **solved**: `crc16_modbus()`, the same function
   already used for the single-image header, confirmed byte-exact in nine of
   the ten captures. `save_to_gif_3` resolved an earlier ambiguity: byte 12
-  is a constant format/version tag, byte 13 is the real frame count.
+  is a constant format/version tag, byte 13 is the real frame count. Bytes
+  16-17 are the inter-frame delay — every capture so far reads 50, which
+  looked like it could just be the vendor UI's shared default until the
+  user confirmed they explicitly set the frame speed to 50 when generating
+  `save_to_gif_13`, matching the wire value exactly. The unit (likely
+  centiseconds, GIF's own convention) is still unconfirmed — no capture
+  with a different speed setting exists yet.
 - Each frame has its own ~24-byte sub-header, including the self-referential
   frame byte length and a pair of RGB565 color fields: one holds the color of
   the frame's first pixel in raster order, the other holds the "other" color
@@ -494,6 +500,33 @@ reliable distinction instead: fallback animation (visibly different
 content) vs. real content (whichever frame, edited or not), which is easy
 to tell apart on sight regardless of the flicker.
 
+**Two more tests settle it.** A swap 5 columns into the gray interior
+(column 100) with the dark-red boundary pixel (column 106) — crossing
+regions, NOT adjacent — fell back, same as every other non-adjacent
+cross-region test. A swap at the *other* stripe boundary (columns 211/212,
+dark-red/red, adjacent) rendered correctly — ruling out "something specific
+to the gray/dark-red transition" as the explanation for the first boundary
+success. The full picture (2 adjacent cross-region successes at both
+boundaries, 7 non-adjacent cross-region failures, 3 within-region
+successes at various sizes — 13 hardware data points total) fits one clean
+account: what fails is creating a brand-new isolated anomaly — a
+foreign-colored pixel with mismatched neighbors on both sides, which is
+what every non-adjacent cross-region edit does. An adjacent swap across a
+boundary just shifts an *already-existing* transition by one pixel instead
+of creating a new one; a within-region edit of any size never introduces a
+foreign value at all. Reading this as a check on each row's
+transition/run structure, not raw per-column palette membership, explains
+all 13 data points without exception — still a pattern match, not a
+decoded algorithm, but a strong one.
+
+Also confirmed: the TOC-level delay field (previously "50 in every
+capture, plausibly a delay, unit unconfirmed") is genuinely a delay, not a
+coincidental shared UI default — the user explicitly set the frame speed
+to 50 in the Windows app when generating `save_to_gif_13`, and the wire
+value is literally 50. The unit (likely centiseconds, GIF's own
+convention) is still unconfirmed, since every capture so far used the
+same speed setting.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -515,13 +548,10 @@ per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
 example of each so far), the exact scope/mechanism of the content
-validator (10 data points: 3 within-region swaps at 2/2/3200 bytes all
-pass; 6 cross-region swaps well inside a stripe's interior, from 2 to 3200
-bytes, all fail; 1 cross-region swap exactly at a stripe boundary
-unexpectedly passed — ruling out both histogram preservation and a
-diff-size threshold, and ruling out strict per-column flag membership as
-too strong, but no reading yet explains all 10 points; a transition/
-run-structure account is the leading untested idea), and why
+validator (13 hardware data points now fit "a row's transition/run
+structure must stay locally valid" without exception — a strong pattern
+match, not yet a decoded algorithm), the delay field's unit (likely
+centiseconds, unconfirmed), and why
 `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't

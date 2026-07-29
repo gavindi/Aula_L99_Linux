@@ -240,10 +240,18 @@ GIF_FLASH_BASE = 0x04240000
 #                       each capture exactly (save_to_gif_3.pcapng is what
 #                       distinguished this from [12], which stayed 3)
 #     [14:16] u16      0x0000, unidentified/reserved
-#     [16:18] u16      50 in all three captures -- plausibly a delay, unit
-#                       unconfirmed (likely centiseconds, matching GIF's own
-#                       convention); all three test/photo animations may just
-#                       share the vendor UI's default
+#     [16:18] u16      SOLVED: the inter-frame delay. 50 in every capture
+#                       taken so far (all 15), which looked like it could
+#                       just be the vendor UI's shared default -- confirmed
+#                       otherwise: the user explicitly set the frame speed
+#                       to 50 in the Windows app when generating
+#                       save_to_gif_13.pcapng, and the wire value is
+#                       literally 50, so this is a real, user-controlled
+#                       field, not a coincidental constant. Unit still
+#                       unconfirmed (likely centiseconds, matching GIF's
+#                       own convention, i.e. 50 = 0.5s) -- no capture with
+#                       a different speed setting exists yet to nail down
+#                       the scale factor.
 #     [18:20] u16      SOLVED: crc16_modbus() -- the same CRC16/MODBUS
 #                       function already used for the single-image header
 #                       above -- computed over the payload following this
@@ -917,6 +925,34 @@ GIF_FLASH_BASE = 0x04240000
 #     (visibly different content) vs. real content (whichever frame,
 #     edited or not), which is easy to tell apart on sight regardless of
 #     the flicker.
+#   - Two more tests settle it (13 data points total, no exceptions). A
+#     swap 5 columns into the gray interior (column 100) with the
+#     dark-red boundary pixel (column 106) -- crossing regions, NOT
+#     adjacent -- fell back, same as every other non-adjacent cross-region
+#     test. A swap at the OTHER stripe boundary (columns 211/212,
+#     dark-red/red, adjacent) rendered correctly -- ruling out "something
+#     specific to the gray/dark-red transition" as the explanation for the
+#     first boundary success. The full picture (2 adjacent cross-region
+#     successes at both boundaries, 7 non-adjacent cross-region failures,
+#     3 within-region successes at various sizes) fits one clean account:
+#     what fails is creating a brand-new isolated anomaly -- a
+#     foreign-colored pixel with mismatched neighbors on both sides, which
+#     is what every non-adjacent cross-region edit does. An adjacent swap
+#     across a boundary just shifts an ALREADY-EXISTING transition by one
+#     pixel instead of creating a new one; a within-region edit of any
+#     size never introduces a foreign value at all. Reading this as a
+#     check on each row's transition/run structure, not raw per-column
+#     palette membership, explains all 13 hardware data points without
+#     exception -- still a pattern match, not a decoded algorithm, but a
+#     strong one now.
+#   - The TOC-level delay field (`[16:18]`, previously "50 in every
+#     capture, plausibly a delay, unit unconfirmed") is now genuinely
+#     confirmed rather than just plausible: the user explicitly set the
+#     frame speed to 50 in the Windows app when generating this capture,
+#     and the wire value is literally 50 -- a real, user-controlled field,
+#     not a coincidental shared UI default. Unit (likely centiseconds,
+#     GIF's own convention) still unconfirmed; every capture so far used
+#     the same speed setting.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -968,15 +1004,14 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), the exact scope/mechanism of the content validator -- 10 data
-# points (3 within-region swaps at 2/2/3200 bytes, all OK; 6 cross-region
-# swaps well inside a stripe's interior, from 2 to 3200 bytes, all
-# fallback; 1 cross-region swap exactly AT a stripe boundary, which
-# unexpectedly passed) rule out both simple histogram preservation and any
-# diff-size threshold, and rule out "every pixel's flag must belong to its
-# column's stripe with zero exceptions" as too strong -- but no reading
-# yet explains all 10 points cleanly (a transition/run-structure account
-# is the leading untested idea) -- and gif_2's
+# far), the exact scope/mechanism of the content validator -- 13 hardware
+# data points now fit "a row's transition/run structure must stay locally
+# valid" without exception (3 within-region swaps of any size pass; 2
+# adjacent cross-region swaps, one at each stripe boundary, pass; 7
+# non-adjacent cross-region swaps, which each create a brand-new isolated
+# anomaly, all fail) -- a strong pattern match, not yet a decoded
+# algorithm, and the delay field's unit (centiseconds is the leading
+# guess) -- and gif_2's
 # solid frames being encoded far less efficiently (4151
 # varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
 # encode in exactly 600 uniform tokens) -- possibly gif_2's source image

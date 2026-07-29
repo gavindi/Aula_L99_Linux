@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] - 2026-07-30
+
+**"Save to GIF": both stripe boundaries tolerate adjacent-pixel swaps,
+pointing at a transition/run-structure check rather than raw region
+membership; the TOC delay field is confirmed, not just plausible.**
+
+### Verified
+- A swap 5 columns into the gray stripe's interior (column 100) with the
+  dark-red boundary pixel (column 106) -- crossing regions but NOT
+  adjacent -- fell back, same as every other non-adjacent cross-region
+  test so far.
+- A swap of the OTHER stripe boundary -- columns 211 (last dark-red pixel)
+  and 212 (first red pixel), adjacent -- rendered correctly, not the
+  fallback. Second independent boundary-swap success, ruling out
+  "something specific to the gray/dark-red transition" as the explanation
+  for 0.6.13's result.
+- The TOC-level delay field (`[16:18]`, previously "50 in every capture,
+  plausibly a delay, unit unconfirmed") is now genuinely confirmed: the
+  user explicitly set the frame speed to 50 in the Windows app when
+  generating `save_to_gif_13.pcapng`, and the wire value is literally 50.
+  Not a coincidental shared default -- a real, user-controlled field.
+
+### Changed
+- The full boundary-swap picture (2 adjacent cross-region successes at
+  both stripe transitions, 1 non-adjacent cross-region failure just past
+  one of them, 6 earlier non-adjacent cross-region failures, 3 within-region
+  successes at various sizes) now fits a single clean account: what fails
+  is creating a brand-new isolated anomaly -- a foreign-colored pixel with
+  mismatched neighbors on both sides, which is what every non-adjacent
+  cross-region edit does. An adjacent swap across a boundary just shifts
+  an ALREADY-EXISTING transition by one pixel rather than creating a new
+  one, and a within-region edit of any size never introduces a foreign
+  value at all. Reading this as a check on each row's transition/run
+  structure (not raw per-column palette membership) now explains all 13
+  hardware data points from this investigation without exception.
+- Unit for the delay field still not pinned down (likely centiseconds by
+  GIF convention, i.e. 50 = 0.5s), since every capture used the same
+  speed setting so far -- would need a capture with a different value to
+  confirm the scale factor.
+
+### Known gaps
+- The transition/run-structure reading is now well-supported (13/13 data
+  points) but still not a decoded algorithm -- what exactly counts as an
+  acceptable transition, and whether there's a limit on transitions per
+  row in general (independent of these experiments), is unknown.
+- Same open items otherwise: the 528-byte prefix, sub-header byte [13],
+  the dithering algorithm, `mode_flag`, delay field's unit,
+  `save_to_gif_2`'s inefficiency.
+
 ## [0.6.13] - 2026-07-30
 
 **"Save to GIF": a swap exactly AT the stripe boundary passed, contradicting
