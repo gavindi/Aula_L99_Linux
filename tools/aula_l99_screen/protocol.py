@@ -771,26 +771,52 @@ GIF_FLASH_BASE = 0x04240000
 #     scheme when a coarser 2-slot pair, in principle, could approximate it
 #     too (e.g. the same kind of pair used for the original 128-gray).
 #
-#   - The token grammar itself remains unsolved for this frame, and a
-#     concrete new data point narrows the puzzle: assuming frame 2's
-#     content starts exactly 528 bytes into the frame (confirmed via
-#     size32 - 528 == the 16-bit content-length field's value modulo
-#     65536, i.e. the fixed-528-byte-prefix rule from every earlier capture
-#     still holds structurally) and decoding flat (length-1, flag) pairs
-#     from there, the running pixel total does NOT land cleanly on 153600
-#     (320x480) anywhere -- it goes from 153598 straight to 153602 at the
-#     token that should have closed out the frame, and the full content
-#     region decodes to 76800 tokens summing to 284924, far past one
-#     frame's worth of pixels. A "two independent back-to-back full-frame
-#     passes" hypothesis (e.g. a base layer plus a separate dither-mask
-#     layer, each its own complete raster scan) was tested directly and
-#     rejected: neither a first pass stopped at ~153600 nor a second pass
-#     starting there lands on a clean 153600-pixel sum either. The flat
-#     2-byte-token grammar confirmed for every single- or dual-slot-dither
-#     capture so far may not be the right model once a color needs the
-#     8-slot scheme -- worth testing with a hardware mutation experiment
-#     (the panel is connected as of this analysis) once a more specific
-#     hypothesis is formed, rather than guessing further from statics alone.
+#   - RESOLVED: the token grammar wasn't wrong, the whole RLE MODEL was.
+#     Frame 2's content region is exactly 153600 bytes -- not incidentally
+#     close to 320x480, but EXACTLY equal to it -- and every single byte in
+#     that region is confined to 0-10 (the 11-entry palette range, verified
+#     across all 153600 bytes with zero exceptions). This is a raw,
+#     uncompressed, ONE-BYTE-PER-PIXEL palette-indexed bitmap in plain
+#     raster order, not a stream of (length, flag) RLE tokens at all. The
+#     earlier "flat 2-byte-token" decode attempts failed because they were
+#     applying the wrong model, not because of an off-by-one or a missing
+#     second pass -- once read as 1 byte = 1 pixel, the frame decodes
+#     perfectly with no leftover bytes and no overshoot.
+#   - Confirmed spatially: every row (checked at row 0, 100, 240, 479, and
+#     others) has the identical 3-stripe boundary, columns [0:106) light
+#     gray, [106:212) dark red, [212:320) red -- 106/106/108 px, matching
+#     the 3-stripe test image. The red stripe is uniformly flag 4 (no
+#     dithering, as expected). The dark-red stripe is a perfect
+#     1-pixel-alternating (2,3)(2,3)... pattern -- the same simple 2-slot
+#     dither already established for single-color cases, just now
+#     confirmed to literally be "alternate every pixel," not merely
+#     "alternate at some coarser granularity."
+#   - The light-gray stripe's dominant pattern is (flag0,flag0,flag0,flag1)
+#     repeating every 4 pixels -- a 3:1 duty-cycle ordered dither. flag0
+#     (0xceb9 = 206,215,206) and flag1 (0xcd59 = 206,170,206) share the
+#     same R and B (206,206); only G differs (215 vs. 170). So this
+#     dominant 4-pixel tile dithers ONLY the G channel (weighted average
+#     ~204, vs. the 200 target), while R and B sit fixed at 206 (vs. 200)
+#     -- both reasonably close given only two discrete options 156/206 to
+#     choose from. Most rows (475 of 480) also substitute one of the other
+#     6 combo flags (5,6,7,8,9,10) in place of flag1 at scattered positions
+#     -- e.g. row 3 uses flag5/flag6 alternately at the tile's 4th position
+#     instead of flag1 -- adding a second, slower-varying axis to the
+#     dither (likely a real 2D ordered/Bayer matrix, not just a 1D
+#     per-row repeat.) The exact row-to-row substitution rule isn't mapped
+#     yet, but the core mechanism (a per-pixel raw bitmap, not RLE) is.
+#   - This also explains WHY the 8-slot scheme exists at all where the
+#     simpler 2-slot pair (used for gray in gif_10/11 and dark red here)
+#     doesn't: a per-channel independent ordered dither needs many more
+#     achievable output colors than a single alternating pair, and doing
+#     that through RLE tokens would be pathological (nearly every run
+#     would be 1 pixel, doubling the byte cost vs. just storing the index
+#     directly) -- so past some complexity threshold the encoder appears to
+#     switch from RLE to a flat indexed bitmap instead. Frame 1 (the solid
+#     red reference, content_len 1200, still RLE) has mode_flag=0x0100;
+#     this raw-bitmap frame has mode_flag=0x0002 -- a plausible format
+#     selector (RLE vs. raw), though with only one example of each this
+#     isn't proven, just consistent.
 #
 # save_to_gif_12/13's larger uploads also exposed and fixed a real modeling
 # bug, not just a documentation gap: CRC_INIT was keyed by the cmd byte from
@@ -812,14 +838,16 @@ GIF_FLASH_BASE = 0x04240000
 # matches the (overflowing) content-length field exactly), the unidentified
 # sub-header byte [13], why a dithered color sometimes gets a simple 2-slot
 # pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
-# per-channel grid (light gray here), the exact token/byte layout for
-# either dithering scheme (confirmed NOT a flat (length,flag) stream summing
-# cleanly to one frame's pixel count once an 8-slot color is involved), and
-# gif_2's solid frames being encoded far less
-# efficiently (4151 varied tokens for the same 153600-pixel solid red that
-# save_to_gif_3/4/5 encode in exactly 600 uniform tokens) -- possibly
-# gif_2's source image wasn't perfectly flat, not investigated. It is NOT
-# raw RGB565 (frames are well under width*height*2 bytes), not zlib, not
+# per-channel grid (light gray here), the precise 2D substitution rule for
+# the 8-slot scheme's minor flags (5,6,7,8,9,10 appear at scattered
+# positions on 475 of 480 rows, likely a real Bayer-style ordered-dither
+# matrix, not yet mapped row-by-row), whether mode_flag genuinely selects
+# RLE-vs-raw-bitmap encoding in general (only one example of each seen so
+# far), and gif_2's solid frames being encoded far less efficiently (4151
+# varied tokens for the same 153600-pixel solid red that save_to_gif_3/4/5
+# encode in exactly 600 uniform tokens) -- possibly gif_2's source image
+# wasn't perfectly flat, not investigated. It is NOT raw RGB565 for the
+# RLE-mode frames (well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".

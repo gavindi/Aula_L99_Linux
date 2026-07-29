@@ -5,6 +5,57 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-07-30
+
+**"Save to GIF": `save_to_gif_13`'s complex dithered frame is NOT
+RLE-encoded -- it's a raw, uncompressed 1-byte-per-pixel palette-indexed
+bitmap.** Resolves the 0.6.5/0.6.6 "token layout unmapped" gap: the flat
+`(length, flag)` RLE model wasn't slightly off, it was the wrong model
+entirely for this frame.
+
+### Verified
+- Frame 2's content region is exactly 153600 bytes == 320x480, and every
+  byte in it is one of only 11 distinct values (0-10, the palette range),
+  with zero exceptions across the full region. Read as 1 byte = 1 pixel in
+  raster order, it decodes perfectly: no leftover bytes, no overshoot.
+- Row structure confirmed identical at every row checked: 3 vertical
+  stripes at columns [0:106) light gray, [106:212) dark red, [212:320)
+  red (106/106/108 px). Red stripe is uniformly one flag (undithered).
+  Dark-red stripe is a perfect alternating 2-slot pattern, literally every
+  pixel -- the simple pair dither confirmed at pixel granularity for the
+  first time (previously only inferred from aggregate pixel/token counts).
+  Light-gray stripe's dominant pattern is a repeating 4-pixel
+  `(flag0,flag0,flag0,flag1)` tile -- flag0 and flag1 share R and B
+  (both 206), differing only in G (215 vs. 170), so this tile is a 3:1
+  duty-cycle dither on the G channel alone.
+
+### Changed
+- Explains why the 8-slot per-channel scheme exists where a 2-slot pair
+  (used for dark red here, and gray in `save_to_gif_10`/`11`/`12`) doesn't:
+  a true per-channel independent ordered dither needs many more than 2
+  achievable colors, and representing that via RLE tokens would be
+  pathological (runs collapsing to 1 pixel, doubling the byte cost vs. a
+  raw index) -- so past some complexity threshold the encoder appears to
+  switch formats rather than emit degenerate RLE.
+- The solid-red reference frame in the same capture (still RLE,
+  `mode_flag=0x0100`) vs. this raw-bitmap frame (`mode_flag=0x0002`) is a
+  plausible RLE-vs-raw format selector, consistent but not yet proven with
+  only one example of each.
+
+### Known gaps
+- 475 of 480 rows substitute one of the other 6 combo flags
+  (5,6,7,8,9,10) at scattered positions in the light-gray stripe, on top
+  of the base 4-pixel tile -- a real 2D ordered/Bayer dither matrix looks
+  likely, but the row-to-row substitution rule isn't mapped.
+- Whether `mode_flag` generally selects RLE vs. raw bitmap (vs. some other
+  meaning) needs more than one data point per mode to confirm.
+- Same open items as before: the 528-byte prefix's contents/purpose, one
+  unidentified sub-header byte, `save_to_gif_2`'s encoding inefficiency,
+  `0x04200000`, no `--target gif`.
+- No hardware mutation was attempted -- this round was static
+  re-analysis of the existing capture, even though the panel is currently
+  connected.
+
 ## [0.6.6] - 2026-07-29
 
 **"Save to GIF": `save_to_gif_13`'s palette re-analyzed offline (no

@@ -362,27 +362,40 @@ already at an extreme. 12 for 12 colors tested fit this, including
 predictions made *before* checking. Consistent with the palette
 fundamentally representing "hue at full brightness, or black."
 
-`save_to_gif_13`'s precise byte-level token layout isn't fully decoded —
-its 16-bit content-length field overflows (true content is over 150 KB,
-several times any earlier capture, since dithering two colors at once
-inflates the entropy-coded section a lot). Offline re-analysis of the raw
-capture (no hardware) does refine the palette structure, though: the two
-dithered colors do **not** share slots or combine with each other. Dark
-red keeps the simple 2-slot pair pattern already known from gray in
-`save_to_gif_10`/`11`/`12` (slots decode to (99,0,0)/(156,0,0), averaging
-almost exactly to the 128,0,0 target). Light gray instead gets a new,
-richer scheme: 8 slots that are the *exhaustive* set of all 2×2×2
-combinations of three independently-quantized channels — R∈{156,206},
-G∈{170,215}, B∈{156,206} — rather than one shared pair. Why light gray
-needs the 8-slot scheme when a coarser 2-slot pair worked for the earlier
-128-gray is unexplained. The token stream itself still resists decoding:
-assuming content starts 528 bytes into the frame (consistent with every
-earlier capture) and reading flat `(length-1, flag)` pairs from there, the
-running pixel total overshoots 153600 (320×480) without ever landing on it
-exactly, and a "two independent full-frame passes" hypothesis (base layer
-+ dither mask) was tested and ruled out the same way. The flat 2-byte-token
-grammar confirmed everywhere else may not be the right model once an
-8-slot color is involved.
+`save_to_gif_13`'s byte-level layout is now decoded. Offline re-analysis of
+the raw capture (no hardware) found the two dithered colors do **not**
+share slots or combine with each other. Dark red keeps the simple 2-slot
+pair pattern already known from gray in `save_to_gif_10`/`11`/`12` (slots
+decode to (99,0,0)/(156,0,0), averaging almost exactly to the 128,0,0
+target). Light gray instead gets a new, richer scheme: 8 slots that are the
+*exhaustive* set of all 2×2×2 combinations of three independently-quantized
+channels — R∈{156,206}, G∈{170,215}, B∈{156,206} — rather than one shared
+pair.
+
+That richer palette turned out to need a different content format
+entirely, which is what had blocked decoding: **this frame's content isn't
+RLE tokens at all — it's a raw, uncompressed 1-byte-per-pixel
+palette-indexed bitmap.** The content region is exactly 153600 bytes
+(320×480, no more, no less), and every one of those bytes is confined to
+0–10, the 11-slot palette range, with zero exceptions. Read as 1
+byte = 1 pixel in raster order, it decodes perfectly: three clean vertical
+stripes (columns 0–105 light gray, 106–211 dark red, 212–319 red,
+identical on every row checked), the red stripe uniformly one flag (no
+dithering), the dark-red stripe alternating its 2-slot pair every single
+pixel, and the light-gray stripe dominated by a repeating
+`(flag0,flag0,flag0,flag1)` 4-pixel tile — a 3:1 duty-cycle dither on the G
+channel alone, since those two slots share the same R and B. Most rows (475
+of 480) also substitute one of the other 6 combo flags at scattered
+positions, hinting at a full 2D ordered-dither (Bayer-style) matrix beyond
+the basic 4-pixel repeat — not yet mapped row-by-row. This also explains
+*why* the 8-slot scheme exists: an independent per-channel ordered dither
+needs far more achievable colors than a single alternating pair, and doing
+that via RLE tokens would be pathological (nearly every run 1 pixel,
+doubling the byte cost) — so past some complexity threshold the encoder
+appears to switch from RLE to a flat indexed bitmap. The solid-red
+reference frame in the same capture (still RLE, `mode_flag=0x0100`) vs.
+this raw-bitmap frame (`mode_flag=0x0002`) is a plausible format selector,
+though with only one example of each it isn't proven.
 
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
@@ -400,8 +413,11 @@ a color table, fixed-size up to 11 palette slots, and confirmed still
 exactly 528 bytes in `save_to_gif_13`'s frame 2 by construction — size32 -
 528 matches the overflowing content-length field exactly), one
 unidentified sub-header byte, why a dithered color sometimes gets the
-simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
-token/byte layout for either scheme, and why `save_to_gif_2`'s solid
+simple 2-slot pair and sometimes the 8-slot per-channel grid, the precise
+2D substitution rule for the 8-slot scheme's minor flags (present on 475
+of 480 rows at scattered positions, likely a real Bayer-style matrix),
+whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
+example of each so far), and why `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't
 perfectly flat).
