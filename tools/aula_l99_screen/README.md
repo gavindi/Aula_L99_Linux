@@ -527,6 +527,14 @@ value is literally 50. The unit (likely centiseconds, GIF's own
 convention) is still unconfirmed, since every capture so far used the
 same speed setting.
 
+**A further stress test confirms the tolerance isn't limited to exactly-
+adjacent 1-pixel swaps.** A symmetric 3-pixel-wide block swap centered on
+the gray/dark-red boundary (columns 103–105 swapped with 106–108 — moving
+the transition point by 3 columns as a single clean shift, not scattered
+anomalies) also rendered correctly. 14 hardware data points now fit the
+transition/run-structure reading without exception. How far a transition
+shift can go before it starts failing is untested.
+
 These two captures also caught and fixed a real bug, not just a
 documentation gap: `CRC_INIT` was keyed by the `cmd` byte, which seemed
 reasonable since `cmd` is derived from length — but that mapping is
@@ -548,10 +556,11 @@ per-channel dithering algorithm (duty cycles are roughly right for linear
 interpolation, burstiness suggests error diffusion, neither confirmed),
 whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
 example of each so far), the exact scope/mechanism of the content
-validator (13 hardware data points now fit "a row's transition/run
+validator (14 hardware data points now fit "a row's transition/run
 structure must stay locally valid" without exception — a strong pattern
-match, not yet a decoded algorithm), the delay field's unit (likely
-centiseconds, unconfirmed), and why
+match, not yet a decoded algorithm; how far a transition can shift before
+failing is untested), the delay field's unit (likely centiseconds,
+unconfirmed), and why
 `save_to_gif_2`'s solid
 frames encode far less efficiently (4151 varied tokens vs.
 `save_to_gif_3`/`4`/`5`'s clean 600 — possibly that source image wasn't

@@ -953,6 +953,15 @@ GIF_FLASH_BASE = 0x04240000
 #     not a coincidental shared UI default. Unit (likely centiseconds,
 #     GIF's own convention) still unconfirmed; every capture so far used
 #     the same speed setting.
+#   - Stress-tested the transition/run-structure reading one step further:
+#     a symmetric 3-pixel-wide block swap centered on the gray/dark-red
+#     boundary (columns 103-105 <-> 106-108 on row 0 -- moving the
+#     transition point by 3 columns as a single clean shift, not scattered
+#     anomalies) also rendered correctly. So the tolerance isn't limited
+#     to exactly-adjacent 1-pixel swaps; a small symmetric shift of an
+#     existing transition works too. 14 hardware data points now fit
+#     without exception. How far a shift can go before it starts failing
+#     is untested.
 #   - The 8 combo flags decompose into 3 independent per-channel bits: R is
 #     hi(206) for flags {0,1,8,10} and lo(156) for {5,6,7,9}; B is hi(206)
 #     for {0,1,7,9} and lo(156) for {5,6,8,10}; G is hi(215) for {0,5,8,9}
@@ -1004,12 +1013,14 @@ GIF_FLASH_BASE = 0x04240000
 # real algorithm -- diffusion coefficients, direction, whatever it
 # actually is -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
-# far), the exact scope/mechanism of the content validator -- 13 hardware
+# far), the exact scope/mechanism of the content validator -- 14 hardware
 # data points now fit "a row's transition/run structure must stay locally
-# valid" without exception (3 within-region swaps of any size pass; 2
-# adjacent cross-region swaps, one at each stripe boundary, pass; 7
-# non-adjacent cross-region swaps, which each create a brand-new isolated
-# anomaly, all fail) -- a strong pattern match, not yet a decoded
+# valid" without exception (3 within-region swaps of any size pass; 3
+# transition-preserving cross-region edits -- 2 adjacent single-pixel
+# swaps and 1 symmetric 3-pixel shift -- pass; 7 non-adjacent cross-region
+# swaps, which each create a brand-new isolated anomaly, all fail; how far
+# a transition shift can go before failing is untested) -- a strong
+# pattern match, not yet a decoded
 # algorithm, and the delay field's unit (centiseconds is the leading
 # guess) -- and gif_2's
 # solid frames being encoded far less efficiently (4151

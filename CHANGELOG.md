@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] - 2026-07-30
+
+**"Save to GIF": a 3-pixel-wide boundary shift also passes, further
+confirming the transition/run-structure reading over "only exactly
+1-pixel adjacent swaps work."**
+
+### Verified
+- A symmetric 3-pixel-wide block swap centered on the gray/dark-red
+  boundary (columns 103-105 swapped with 106-108 on row 0 -- moving the
+  transition point by 3 columns as a single clean shift, not scattered
+  anomalies) rendered correctly, not the fallback. All 79 packets acked.
+- Restore acked cleanly and took immediately, no retry needed this time.
+
+### Changed
+- Extends the boundary tolerance beyond exactly-adjacent 1-pixel swaps:
+  a small symmetric shift of the transition point is also accepted. 14
+  hardware data points now fit the transition/run-structure reading
+  without exception: edits that move an existing transition by a small
+  amount, or that stay entirely within one region regardless of size,
+  pass; edits that create a brand-new isolated anomaly with mismatched
+  neighbors on both sides fail, regardless of how few bytes are touched.
+
+### Known gaps
+- How far a boundary shift can move before it starts failing (3 columns
+  passes; unknown upper bound) is untested.
+- Same open items as 0.6.14 otherwise (528-byte prefix, sub-header byte
+  [13], dithering algorithm, `mode_flag`, delay field's unit, `save_to_gif_2`
+  inefficiency).
+
 ## [0.6.14] - 2026-07-30
 
 **"Save to GIF": both stripe boundaries tolerate adjacent-pixel swaps,
