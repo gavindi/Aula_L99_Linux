@@ -634,12 +634,13 @@ in `save_to_gif_13`'s frame 2 by construction — size32 - 528 matches the
 overflowing content-length field exactly — and now known to tolerate
 exactly 8 non-zero bytes anywhere in the padding, a pure count threshold
 that holds identically in both RLE-mode and raw-bitmap-mode frames,
-mechanism behind the count still unknown), why a dithered color sometimes
-gets the
-simple 2-slot pair and sometimes the 8-slot per-channel grid, the exact
-per-channel dithering algorithm (duty cycles are roughly right for linear
-interpolation, burstiness suggests error diffusion, neither confirmed),
-whether `mode_flag` genuinely selects RLE-vs-raw-bitmap in general (one
+mechanism behind the count still unknown), the exact snap-vs-dither
+selection rule and duty-cycle algorithm for the now-confirmed fixed
+dither ramp (`{0,6,12,19,25}` for R/B, `{0,10,21,32,42,53}` for G —
+`save_to_gif_14`), whether the ramp extends higher than the rungs
+observed so far, the per-row variation's exact mechanism (error diffusion
+is still just a hypothesis), whether `mode_flag` genuinely selects
+RLE-vs-raw-bitmap in general (one
 example of each so far), the exact scope/mechanism of the content
 validator (14 hardware data points now fit "a row's transition/run
 structure must stay locally valid" without exception — a strong pattern
@@ -671,6 +672,39 @@ with no external padding and no new `CRC_INIT` value needed. This only
 works if some frame has a region large enough to absorb the needed
 adjustment; `build_gif_blob()` raises a clear `ValueError` naming the
 largest run found and the capacity needed if none does.
+
+**Found the dithering ramp: a fixed, shared set of quantization levels,
+not something computed per image.** `save_to_gif_14.pcapng` — a dimmed
+rainbow (full hue sweep at ~70% brightness, so every one of 320 columns
+needs dithering, two identical frames) is by far the richest dithering
+dataset yet. Weighted-average color per column (from actual pixel flag
+frequencies) matches the intended target hue closely across all 320
+columns — mean error ~4/255, max ~11.5/255 — the broadest confirmation
+yet that dithering reconstructs the intended color on average. The
+palette (46 entries) decomposes, in RGB565's native per-channel index
+terms, into two small **fixed** sets: R and B indices are only ever one
+of `{0,6,12,19,25}` (of 0–31 possible); G indices are only ever one of
+`{0,10,21,32,42,53}` (of 0–63 possible) — a 5-level ramp for the two
+5-bit channels, a 6-level ramp for the 6-bit one. Cross-checked directly
+against `save_to_gif_13`'s completely different image: every one of its
+dithered palette entries' per-channel indices falls within this *same*
+ramp (the one exception, R index 31 = 255, is the clean undithered
+reference red, not part of the dither ramp at all). The same exact rung
+values appearing byte-for-byte in two unrelated captures is strong
+evidence this is a genuine, image-independent hardware/firmware lookup
+table. Refines the model: each channel snaps independently to the
+nearest rung(s) of this shared ramp, dithering between two adjacent
+rungs when the target falls between them and using a single rung
+directly when it's already close enough — different pixels use 2 to 4
+distinct palette entries depending on how many channels actually need
+bracketing, not always the full 8-corner scheme seen for
+`save_to_gif_13`'s one richly-dithered color. Also reconfirmed rows are
+*not* identical within a column — the per-row variation seen in
+`save_to_gif_13` is pervasive across this whole image, not a minor
+addendum. Still open: whether the ramp has higher rungs than observed
+(neither test image got bright enough to need them), the exact
+snap-vs-dither selection rule and duty-cycle algorithm, and the per-row
+variation's exact mechanism (error diffusion is still just a hypothesis).
 
 ## Image format
 

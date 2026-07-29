@@ -1098,6 +1098,48 @@ GIF_FLASH_BASE = 0x04240000
 # non-dithered content only -- photos and the raw-bitmap format are out
 # of reach for an encoder until the dithering algorithm is solved.
 #
+# save_to_gif_14.pcapng (a dimmed rainbow -- full hue sweep at ~70%
+# brightness, so EVERY one of 320 columns needs dithering, two identical
+# frames) is by far the richest dithering dataset yet, and it answers the
+# open question of whether dither-pair colors are computed per-image or
+# drawn from something fixed: THEY'RE FIXED. Both frames are
+# mode_flag=0x0002 raw-bitmap, byte-identical to each other (deterministic
+# encoding, as established). Per-column weighted-average color (from
+# actual pixel flag frequencies) matches the intended target hue closely
+# across all 320 columns -- mean error ~4/255, max ~11.5/255 -- the
+# broadest confirmation yet that dithering reconstructs the intended color
+# on average. The palette (46 entries) decomposes, in RGB565's native
+# per-channel N-bit index terms, into two small FIXED sets: R and B
+# indices are only ever one of {0,6,12,19,25} (of 0-31 possible); G
+# indices are only ever one of {0,10,21,32,42,53} (of 0-63 possible) -- a
+# 5-level ramp for the two 5-bit channels, a 6-level ramp for the 6-bit
+# one, each roughly evenly spaced from 0 up to their top rung (206/255 for
+# R/B, 215/255 for G). Cross-checked directly against save_to_gif_13's
+# completely different image: every one of its dithered palette entries'
+# per-channel indices falls within this SAME ramp -- the one exception
+# (R index 31, i.e. 255) is the clean undithered reference red, not part
+# of the dither ramp at all (255 is already a direct-slot "safe" value).
+# The same exact rung values appearing byte-for-byte in two unrelated
+# captures is strong evidence this is a genuine, image-independent
+# hardware/firmware lookup table, not something computed fresh per
+# upload. Refines the model: each channel snaps independently to the
+# nearest rung(s) of this shared ramp, dithering between two adjacent
+# rungs when the target falls between them and using a single rung
+# directly (no dithering for that channel) when it's already close
+# enough -- different pixels use 2 to 4 distinct palette entries
+# depending on how many of the 3 channels actually need bracketing, not
+# always the full 8-corner scheme seen for save_to_gif_13's one richly-
+# dithered color. Also reconfirmed rows are NOT identical within a column
+# (row 0 != row 240 != row 479 for the same target) -- the per-row
+# variation seen in save_to_gif_13's light-gray stripe is pervasive across
+# this whole image, not a minor addendum to an otherwise-static pattern.
+# Open: whether the ramp has more/higher rungs than observed (neither test
+# image's targets reached bright enough to need anything above n=25/53);
+# the exact snap-vs-dither selection rule and duty-cycle algorithm between
+# two rungs; the per-row variation's exact mechanism (error diffusion is
+# still just a hypothesis, now with much richer data to eventually
+# re-check it against).
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1105,14 +1147,15 @@ GIF_FLASH_BASE = 0x04240000
 # to tolerate EXACTLY 8 non-zero bytes anywhere in the padding, confirmed a
 # pure count threshold (not a specific critical byte) that holds
 # identically in both RLE-mode and raw-bitmap-mode frames, mechanism
-# behind the count still unknown), why a dithered color sometimes gets a simple 2-slot
-# pair (dark red here, gray in gif_10/11/12) and sometimes an 8-slot
-# per-channel grid (light gray here), the exact per-channel dithering
-# algorithm behind the 8-slot scheme (measured duty cycles are in the
-# right ballpark for simple linear interpolation, and the per-row
-# burstiness argues for error diffusion over a fixed Bayer matrix, but the
-# real algorithm -- diffusion coefficients, direction, whatever it
-# actually is -- isn't identified), whether mode_flag genuinely selects
+# behind the count still unknown), the exact snap-vs-dither selection rule
+# and duty-cycle algorithm for the now-confirmed fixed dither ramp
+# ({0,6,12,19,25} for R/B, {0,10,21,32,42,53} for G -- save_to_gif_14),
+# whether the ramp extends higher than the rungs observed so far (no test
+# image has needed anything brighter yet), the per-row variation's exact
+# mechanism (error diffusion is still just a hypothesis; per-row
+# burstiness fits it better than a fixed Bayer matrix, but the real
+# algorithm -- diffusion coefficients, direction, whatever it actually is
+# -- isn't identified), whether mode_flag genuinely selects
 # RLE-vs-raw-bitmap encoding in general (only one example of each seen so
 # far), the exact scope/mechanism of the content validator -- 14 hardware
 # data points now fit "a row's transition/run structure must stay locally

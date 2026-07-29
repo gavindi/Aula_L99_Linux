@@ -5,6 +5,76 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-30
+
+**"Save to GIF": found the dithering ramp -- a FIXED, shared set of RGB565
+quantization levels, reused verbatim across totally different images.**
+`save_to_gif_14.pcapng` -- a dimmed rainbow (full hue sweep, ~70%
+brightness, so every one of 320 columns needs dithering) -- gives by far
+the richest dithering dataset yet, and it resolves the open question of
+whether dither-pair colors are computed per-image or drawn from something
+fixed.
+
+### Verified
+- Both frames (identical source images, as designed) are `mode_flag=0x0002`
+  raw-bitmap, byte-for-byte identical to each other -- consistent with
+  every prior finding (deterministic, content-driven encoding; raw bitmap
+  for busy/richly-dithered content).
+- Weighted-average color per column (using actual per-pixel flag
+  frequencies and the real palette) matches the intended target hue
+  closely across all 320 columns: mean error ~4/255, max ~11.5/255. This
+  is the broadest confirmation yet that the dithering genuinely
+  reconstructs the intended color on average, not just for the 1-2 colors
+  tested before.
+- The palette (46 entries) decomposes, in RGB565's native per-channel
+  index terms, into two small FIXED sets: R and B indices are only ever
+  one of {0, 6, 12, 19, 25} (of 0-31 possible); G indices are only ever
+  one of {0, 10, 21, 32, 42, 53} (of 0-63 possible) -- a 5-level ramp for
+  the 5-bit channels and a 6-level ramp for the 6-bit channel, each
+  roughly evenly spaced from 0 up to their top rung (206/255 for R and B,
+  215/255 for G).
+- Cross-checked directly against `save_to_gif_13`'s completely different
+  image (light gray + dark red stripes): every one of its dithered
+  palette entries' per-channel indices falls within this SAME ramp. The
+  one exception (R index 31, i.e. 255) is the clean, undithered reference
+  red -- not part of the dither ramp at all, consistent with 255 already
+  being a direct-slot "safe" value needing no dithering.
+- Confirmed rows are NOT identical within a column (row 0 != row 240 !=
+  row 479 for the same target color) -- the per-row variation seen in
+  `save_to_gif_13`'s light-gray stripe is pervasive across this whole
+  image, not a minor addendum to an otherwise-static pattern.
+
+### Changed
+- Refines the model significantly: dithering doesn't compute a bespoke
+  pair of nearby colors per target -- it snaps each channel independently
+  to the nearest rung(s) of this SAME fixed 5-level/6-level ramp,
+  dithering between two adjacent rungs when the target falls between them
+  and just using a single rung directly (no dithering for that channel)
+  when it's already close enough. Different pixels use anywhere from 2 to
+  4 distinct palette entries depending on how many of the 3 channels
+  actually need bracketing for that specific target -- not always the
+  full 8-corner combinatorial scheme seen for `save_to_gif_13`'s one
+  richly-dithered color.
+- This is very likely a genuine, image-independent hardware/firmware
+  lookup table, not something computed fresh per upload -- the same exact
+  rung values appearing byte-for-byte in two unrelated captures is strong
+  evidence against per-image computation.
+
+### Known gaps
+- Whether the ramp has MORE/higher rungs than observed (n=25/53 might just
+  be the highest rung our two test images ever needed, since neither
+  reached the very top of the brightness range) is untested -- would need
+  a brighter test image (targets approaching 255) to check for rungs above
+  the ones seen so far.
+- The exact rule for choosing single-rung-snap vs. two-rung-dither per
+  channel, and the exact duty-cycle-selection algorithm between two rungs,
+  is still not decoded -- only the SET of available rungs is now known.
+- The per-row variation's exact mechanism (still hypothesized as error
+  diffusion, not confirmed) has much richer data to work with now but
+  hasn't been re-analyzed against this larger dataset yet.
+- Same longstanding open items otherwise: the 528-byte prefix's true
+  purpose, `mode_flag`'s general meaning, `save_to_gif_2`'s inefficiency.
+
 ## [0.7.1] - 2026-07-30
 
 **"Save to GIF": `--target gif` is now a real CLI feature, confirmed
