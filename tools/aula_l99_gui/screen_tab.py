@@ -106,9 +106,11 @@ class ScreenTab(QWidget):
         layout.addLayout(row)
 
         self.image_preview = QLabel("(no image selected)")
+        # Styled as a panel by theme.py rather than a bare QFrame box, so the
+        # background image doesn't show through behind the preview.
+        self.image_preview.setObjectName("ImagePreview")
         self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_preview.setFixedHeight(160)
-        self.image_preview.setFrameShape(QLabel.Shape.Box)
         layout.addWidget(self.image_preview)
 
         upload_button = QPushButton("Upload")

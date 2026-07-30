@@ -88,3 +88,28 @@ can freeze the panel.
   UI stays responsive during a handshake or upload
 - `device_utils.py` — device enumeration and permission-error hint text shared by
   both tabs
+- `theme.py` / `slice_skin.py` / `assets/` — the vendor skin, see below
+
+## The skin
+
+The GUI wears the vendor's own artwork, extracted from the Windows package:
+`assets/skins/theme1/main_bkg.png` behind the window, and its button, checkbox,
+radio, combo, progress and scrollbar sprites driving a Qt stylesheet in
+`theme.py`. The accent is the vendor's orange (`#EF6C00` hover, `#CF4D00`
+pressed).
+
+The vendor ships each widget as a single strip of equally sized frames — four
+for most (`normal, hover, pressed, disabled`), eight for the check and radio
+boxes (an unchecked and a checked set, interleaved). A Qt stylesheet can only
+point `url()` at a whole file, never a sub-rectangle, so `slice_skin.py` splits
+the strips into per-state PNGs under `assets/skins/theme1/slices/`. Those are
+committed, so a normal run never needs the script — re-run it only after
+changing something under `assets/skins/theme1/`:
+
+```bash
+cd tools && python3 -m aula_l99_gui.slice_skin
+```
+
+The background is cover-scaled (aspect ratio preserved, overflow cropped) and
+anchored to the bottom of the window, which keeps the blue grid — the only part
+of an otherwise near-black image with any detail — visible at any window size.

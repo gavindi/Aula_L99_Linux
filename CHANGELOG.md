@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] - 2026-07-30
+
+**GUI: skinned with the vendor's own artwork, extracted from the Windows
+package.** `main_bkg.png` behind the window plus a stylesheet driven by
+the vendor's button/checkbox/radio/combo/scrollbar sprite art, so the tool
+looks like the thing it replaces instead of stock Qt.
+
+### Added
+- `tools/aula_l99_gui/assets/`: the vendor's `skins/theme1` tree (plus
+  `device/`, `gif/`) lifted out of `Windows/AULA L99`.
+- `tools/aula_l99_gui/theme.py`: the Qt stylesheet and the background
+  painter. `background_pixmap()` cover-scales `main_bkg.png` with
+  `KeepAspectRatioByExpanding` and anchors it to the bottom -- the image
+  is 16:9 and the window is not, and the blue grid in the lower third is
+  the only part with any detail, so anchoring low keeps it on screen.
+  Verified to return an exactly window-sized pixmap from 1x1 up to
+  2560x1440, and a null pixmap if the image is missing.
+- `tools/aula_l99_gui/slice_skin.py`: splits the vendor sprite sheets into
+  the per-state PNGs under `assets/skins/theme1/slices/` (45 of them, all
+  committed). Qt stylesheets can only reference a whole file, never a
+  sub-rectangle, so each state the QSS names has to exist on its own.
+- Tab icons from the vendor's own `tab_config`/`tab_customkey`/`tab_tft`
+  strips, swapped between the plain and orange frames on tab change --
+  QIcon has no "selected tab" state Qt applies by itself.
+
+### Changed
+- Frame order in the sprite sheets was determined empirically rather than
+  guessed: every 4-frame strip is `[normal, hover, pressed, disabled]`
+  with hover `#EF6C00` and pressed `#CF4D00`; the 8-frame check/radio
+  strips interleave an unchecked and a checked set, with frames 4 and 6
+  duplicating the art of 2 and 1 (documented in `slice_skin.py`'s
+  `CHECK_FRAMES`).
+- Buttons and combo boxes use `border-image` with fixed side slices, so
+  the rounded pill caps and the combo's built-in drop-down arrow stay
+  undistorted while the middle stretches to the layout's width.
+- Group boxes are translucent cards so the starfield reads through them,
+  but the log, frame list, spin boxes and image preview are fully opaque
+  -- the background image is brightest exactly where those sit, and any
+  translucency there cost real legibility.
+- `screen_tab.py`'s image preview is a styled `QLabel#ImagePreview` panel
+  instead of a bare `QFrame.Shape.Box`.
+
 ## [0.8.8] - 2026-07-30
 
 **GUI: device selection moved out of the two control tabs and into a

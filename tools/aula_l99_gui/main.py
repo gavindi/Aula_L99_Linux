@@ -10,11 +10,13 @@ if str(_TOOLS_DIR) not in sys.path:
 
 from PySide6.QtWidgets import QApplication
 
+from aula_l99_gui import theme
 from aula_l99_gui.main_window import MainWindow
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setStyleSheet(theme.stylesheet())
     window = MainWindow()
     window.show()
     return app.exec()
