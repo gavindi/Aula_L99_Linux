@@ -1232,6 +1232,54 @@ GIF_FLASH_BASE = 0x04240000
 # something looser (monotonic, within some tolerance) -- only one
 # non-uniform pair and two uniform values have been tried.
 #
+# A real methodology shift: identified the underlying display chip and
+# disassembled key functions in the vendor's own encoder DLL, rather than
+# more hardware experiments. pic_scan.dll exports Gif_to_data AND
+# Gif_to_data_LT7689 -- the panel is built on Levetop's LT7689, a
+# Cortex-M4 serial UART TFT graphics controller. Its public datasheet and
+# application notes document only a generic serial playback command
+# (Display GIF, opcode 0x88 -- "start playing file N," not a format
+# spec) and a companion tool, LT_IMAGE_TOOL.exe, whose own output format
+# is confirmed plain, uncompressed 16bpp/24bpp RGB -- no palette, no RLE.
+# So the entire RLE/8-slot-dithering/528-byte-prefix scheme is AULA's own
+# bespoke compression layer, not a documented chip-vendor format -- it
+# exists nowhere except inside this DLL and our own reverse-engineering.
+#
+# pic_scan.dll isn't fully stripped -- recovered full demangled C++ export
+# names and disassembled the GIF-relevant ones (32-bit x86, RVAs resolved
+# via the PE export table, image base 0x6a9c0000):
+#   - Scan_aRGB8565: plain bit-truncation ARGB->RGB565 (R>>3-style
+#     masking, no rounding, no dithering at all). Almost certainly the
+#     simple photo-frame/background converter, not the GIF path.
+#   - Scan_ColorTB_Data: divides a frame's pixels into up to 255 chunks,
+#     each a 0x204-byte (516-byte) substructure -- matching the same
+#     "0x204 bytes per iteration" stride independently inferred from
+#     Image_u16Data_to_colorTBu8Data's loop structure.
+#   - Scan_ColorTB_from_image_data: builds each chunk's local palette via
+#     exact-match, first-appearance-order deduplication -- directly
+#     matching our own reverse-engineered palette model.
+#   - Image_u16Data_to_colorTBu8Data: converts pixels to palette indices
+#     via a simple linear search (up to 256 entries) for an EXACT match
+#     against the chunk's table. If no exact match is found, no output
+#     byte is written at all -- no fallback, no on-the-fly quantization.
+#   - The zero-initialized table Scan_ColorTB_from_image_data builds (516
+#     bytes / 258 u16 entries, struct offsets 0x430-0x634) is
+#     structurally very close to the 528-byte prefix (same role:
+#     fixed-size, mostly-zero, holds RGB565 palette entries) -- not
+#     proven byte-for-byte identical, but strong circumstantial support
+#     for what that region fundamentally is.
+# Critical implication: since an unmatched pixel is silently skipped (not
+# quantized in place), whatever decides WHICH colors need dithering and
+# rewrites source pixels into the correct alternating ramp-representable
+# sequence must run BEFORE all four of these functions -- it isn't in any
+# of the GIF-related exports checked. Most likely inlined inside
+# Gif_to_data_LT7689 (a large orchestrator handling file I/O and memory
+# allocation, only partially traced) or in a private, unexported helper
+# with no symbol name to search for. Finding it would mean methodically
+# stepping through that function's full call graph rather than checking
+# named exports -- banked here as a larger effort for later, not pursued
+# further this round.
+#
 # What's still open: the fixed 528-byte prefix's actual contents/purpose
 # (confirmed NOT a color table, fixed-size up to 11 palette slots, still
 # 528 bytes by construction in save_to_gif_13's frame 2 too -- size32 - 528
@@ -1245,7 +1293,12 @@ GIF_FLASH_BASE = 0x04240000
 # each channel's entire native range, confirmed by save_to_gif_14/15;
 # linear interpolation between bracketing rungs is a good but not exact
 # model of the duty cycle, mean deviation 3.4 points with no systematic
-# bias, more consistent with error diffusion than a closed-form formula),
+# bias, more consistent with error diffusion than a closed-form formula;
+# disassembly narrowed WHERE this logic must live -- before
+# Scan_ColorTB_Data/Scan_ColorTB_from_image_data/Image_u16Data_to_
+# colorTBu8Data, none of which contain it -- but didn't find the actual
+# code, most likely inlined in Gif_to_data_LT7689 or an unexported
+# helper),
 # the G ramp's single unexplained off-by-one deviation from an exact even
 # split, the per-row variation's exact mechanism (error diffusion is still
 # just a hypothesis; per-row burstiness fits it better than a fixed Bayer

@@ -652,7 +652,11 @@ for G — spanning each channel's entire native range, confirmed by
 `save_to_gif_14`/`15`; linear interpolation between bracketing rungs is a
 good but not exact model of the duty cycle, mean deviation 3.4 points
 with no systematic bias, more consistent with error diffusion than a
-closed-form formula), the G ramp's single unexplained off-by-one
+closed-form formula; disassembly narrowed WHERE this logic must live —
+before any of `Scan_ColorTB_Data`/`Scan_ColorTB_from_image_data`/
+`Image_u16Data_to_colorTBu8Data`, none of which contain it — but didn't
+find the actual code, most likely inlined in `Gif_to_data_LT7689` or an
+unexported helper), the G ramp's single unexplained off-by-one
 deviation from an exact even split, the per-row variation's exact
 mechanism (error diffusion is still just a hypothesis), the exact
 byte-level mechanics of what happens when `mode_flag` is forced to
@@ -814,6 +818,45 @@ red renders as `(253,0,0)`, an inherent property of how ffmpeg/most video
 codecs handle color, not a bug in the extraction code) — practically
 limiting video input to synthetic/exact-color sources under the current
 encoder scope.
+
+**Identified the underlying display chip, and disassembled the vendor's
+own encoder DLL to trace the real dithering pipeline — a methodology
+shift from hardware experiments, banked partway through.** `pic_scan.dll`
+exports both `Gif_to_data` and `Gif_to_data_LT7689`: the panel is built
+on Levetop's **LT7689**, a Cortex-M4 serial UART TFT graphics controller.
+Its public datasheet/app notes document only a generic serial playback
+command (`Display GIF`, opcode `0x88` — "start playing file N," not a
+format spec) and confirm the companion `LT_IMAGE_TOOL.exe`'s own output
+is plain, uncompressed 16bpp/24bpp RGB — no palette, no RLE. So our
+entire RLE/8-slot-dithering/528-byte-prefix scheme is **AULA's own
+bespoke compression layer**, undocumented anywhere except this DLL and
+our own reverse-engineering.
+
+`pic_scan.dll` isn't fully stripped, so its C++ export names were
+recoverable. Disassembling the GIF-relevant ones traced the real
+pipeline: `Scan_aRGB8565` is plain bit-truncation ARGB→RGB565 (no
+dithering — almost certainly the simple photo-frame/background
+converter, not the GIF path); `Scan_ColorTB_Data` splits a frame's
+pixels into up to 255 chunks (each a 516-byte substructure, matching the
+same stride independently inferred earlier); `Scan_ColorTB_from_image_data`
+builds each chunk's local palette via exact-match, first-appearance-order
+deduplication (matching our own model); `Image_u16Data_to_colorTBu8Data`
+converts pixels to indices via a simple linear search for an *exact*
+match — if none is found, nothing gets written, no fallback. The
+zero-initialized table this builds (516 bytes / 258 entries) is
+structurally very close to our mystery 528-byte prefix, strong
+circumstantial support for what that region fundamentally is (not proven
+byte-for-byte).
+
+The critical implication: since an unmatched pixel is silently skipped,
+whatever decides *which* colors need dithering and rewrites pixels into
+the correct ramp-representable sequence must run before all four of
+these functions — and it isn't in any of them. Most likely inlined
+inside `Gif_to_data_LT7689` (a large file-I/O/memory-management
+orchestrator, only partially traced) or in an unexported helper with no
+symbol to search for. Finding it would mean methodically stepping
+through that function's full call graph — banked here as a larger effort
+for later.
 
 ## Image format
 

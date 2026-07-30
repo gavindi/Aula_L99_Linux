@@ -5,6 +5,79 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-07-30
+
+**"Save to GIF": identified the underlying display chip and confirmed the
+compression/dithering format is AULA's own bespoke engineering, then
+disassembled key functions in `pic_scan.dll` (the vendor's own encoder)
+to trace the real pipeline -- a real methodology shift (static binary
+analysis instead of hardware experiments), banked partway through.**
+
+### Verified
+- **Chip identified**: `pic_scan.dll` exports two GIF encoder functions,
+  `Gif_to_data` and `Gif_to_data_LT7689` -- the panel is built on
+  Levetop's **LT7689**, a Cortex-M4 serial UART TFT graphics controller.
+  Its public datasheet and application notes were checked in detail and
+  document only a generic serial playback command (`Display GIF`, opcode
+  `0x88` -- "start playing file N," not a format spec) and a companion
+  tool (`LT_IMAGE_TOOL.exe`) whose own output format is confirmed to be
+  plain, uncompressed 16bpp/24bpp RGB with no palette and no RLE.
+  Confirms our entire RLE/8-slot-dithering/528-byte-prefix scheme is
+  AULA's own bespoke compression layer, not a documented chip-vendor
+  format -- it exists nowhere except inside this DLL and our own
+  reverse-engineering.
+- Recovered full demangled C++ export names from `pic_scan.dll` (not
+  fully stripped) and disassembled the GIF-relevant ones (32-bit x86,
+  `objdump -d -M intel`, RVAs resolved via the PE export table, image
+  base `0x6a9c0000`):
+  - `Scan_aRGB8565`: confirmed to be **plain bit-truncation** ARGB->RGB565
+    (`R>>3`-style masking, no rounding, no dithering whatsoever). Almost
+    certainly the simple photo-frame/background converter, not the GIF
+    path -- consistent with that format's already-confirmed simplicity.
+  - `Scan_ColorTB_Data`: divides a frame's pixels into up to 255 chunks,
+    each a 0x204-byte (516-byte) substructure -- matching the same
+    "0x204 bytes per iteration" stride independently inferred from
+    `Image_u16Data_to_colorTBu8Data`'s loop structure.
+  - `Scan_ColorTB_from_image_data`: builds each chunk's local palette via
+    **exact-match, first-appearance-order deduplication** -- directly
+    matching our own reverse-engineered "palette in first-appearance
+    order" model.
+  - `Image_u16Data_to_colorTBu8Data`: converts pixels to palette indices
+    via a **simple linear search** (up to 256 entries) for an EXACT
+    match against the chunk's table. If no exact match is found, no
+    output byte is written at all -- no fallback, no on-the-fly
+    quantization.
+  - The zero-initialized table `Scan_ColorTB_from_image_data` builds
+    (516 bytes / 258 u16 entries, at struct offsets `0x430`-`0x634`) is
+    structurally very close to our long-mysterious 528-byte prefix
+    (same role: fixed-size, mostly-zero, holds RGB565 palette entries).
+    Not proven byte-for-byte identical (off by a small, plausibly
+    explainable amount), but strong circumstantial support for what that
+    region fundamentally is.
+
+### Changed
+- The critical implication of point 4 above: since an unmatched pixel is
+  silently skipped (not quantized in place), whatever decides *which*
+  colors need dithering and rewrites source pixels into the correct
+  alternating ramp-representable sequence must run **before** any of
+  these four functions -- it isn't in any of the GIF-related exports
+  checked. Most likely inlined inside `Gif_to_data_LT7689` (a large
+  orchestrator function handling file I/O and memory allocation, only
+  partially traced) or in a private, unexported helper with no symbol
+  name to search for.
+
+### Known gaps
+- The actual dithering decision algorithm (which ramp levels, what
+  spatial/duty-cycle pattern) was NOT located. Finding it would mean
+  methodically stepping through `Gif_to_data_LT7689`'s full call graph
+  rather than checking named exports -- a genuinely larger effort than
+  this round, banked here rather than pursued further for now.
+- The 528-byte-prefix/table correspondence is suggestive, not proven
+  exact.
+- Same longstanding open items otherwise: the exact dithering diffusion
+  algorithm, `mode_flag`'s exact overrun mechanics, `save_to_gif_2`'s
+  inefficiency.
+
 ## [0.7.6] - 2026-07-30
 
 **"Save to GIF": `--upload` now accepts a single animated `.gif` or a
