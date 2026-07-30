@@ -31,9 +31,9 @@ except ImportError:  # pragma: no cover - Pillow is a declared dependency
     ImageSequence = None
 
 from aula_l99_screen import protocol as screen_protocol
-from aula_l99_screen.device import find_screen
 
-from .device_utils import SCREEN_PERMISSION_HINT, describe_screen, list_screen_devices
+from .device_tab import DeviceSelector
+from .device_utils import SCREEN_PERMISSION_HINT
 from .workers import ScreenUploadWorker, start_worker
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
@@ -49,12 +49,13 @@ def _pillow_missing_message() -> str:
 
 
 class ScreenTab(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
-        self._devices: list = []
+        self._selector = selector
         self._thread = None
         self._worker = None
         self._busy = False
+        self._device_ready = False
         self._action_buttons: list[QPushButton] = []
 
         self._image_path: str | None = None
@@ -63,14 +64,19 @@ class ScreenTab(QWidget):
         self._gif_animated_path: str | None = None
 
         self._build_ui()
-        self.refresh_devices()
+        selector.changed.connect(self._on_device_changed)
 
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        layout.addWidget(self._build_device_group())
+        # Read-only mirror of the Device tab's status line -- see the same
+        # comment in keyboard_tab.py.
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
         layout.addWidget(self._build_single_image_group())
         layout.addWidget(self._build_gif_group())
 
@@ -81,23 +87,6 @@ class ScreenTab(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
         layout.addWidget(self.log)
-
-    def _build_device_group(self) -> QGroupBox:
-        group = QGroupBox("Device")
-        layout = QVBoxLayout(group)
-
-        row = QHBoxLayout()
-        self.device_combo = QComboBox()
-        row.addWidget(self.device_combo, stretch=1)
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.refresh_devices)
-        row.addWidget(refresh_button)
-        layout.addLayout(row)
-
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-        return group
 
     def _build_single_image_group(self) -> QGroupBox:
         group = QGroupBox("Upload Image")
@@ -195,35 +184,16 @@ class ScreenTab(QWidget):
 
     # -- device handling --------------------------------------------------
 
-    def refresh_devices(self) -> None:
-        self._devices = list_screen_devices()
-        self.device_combo.clear()
-        for device in self._devices:
-            self.device_combo.addItem(describe_screen(device))
+    def _on_device_changed(self, status: str, enabled: bool) -> None:
+        self.status_label.setText(status)
+        self._device_ready = enabled
+        self._sync_actions()
 
-        try:
-            found = find_screen()
-        except FileNotFoundError:
-            self.status_label.setText(
-                "No AULA L99 touchscreen found. Plug it in and click Refresh."
-            )
-            self._set_actions_enabled(False)
-            return
-
-        index = next((i for i, d in enumerate(self._devices) if d.path == found.path), -1)
-        if index >= 0:
-            self.device_combo.setCurrentIndex(index)
-
-        self.status_label.setText(f"Using {found.path}")
-        self._set_actions_enabled(True)
-
-    def _current_device_path(self) -> str | None:
-        index = self.device_combo.currentIndex()
-        if 0 <= index < len(self._devices):
-            return self._devices[index].path
-        return None
-
-    def _set_actions_enabled(self, enabled: bool) -> None:
+    def _sync_actions(self) -> None:
+        # Gating on `_busy` as well as device availability matters because the
+        # Device tab's Refresh stays clickable during an upload -- without it,
+        # a mid-upload refresh would re-arm these buttons.
+        enabled = self._device_ready and not self._busy
         for button in self._action_buttons:
             button.setEnabled(enabled)
 
@@ -279,7 +249,7 @@ class ScreenTab(QWidget):
         if self._image_path is None:
             QMessageBox.warning(self, "Screen", "No image selected.")
             return
-        device_path = self._current_device_path()
+        device_path = self._selector.current_path()
         if device_path is None:
             QMessageBox.warning(self, "Screen", "No device selected.")
             return
@@ -372,7 +342,7 @@ class ScreenTab(QWidget):
         if Image is None:
             QMessageBox.critical(self, "Screen", _pillow_missing_message())
             return
-        device_path = self._current_device_path()
+        device_path = self._selector.current_path()
         if device_path is None:
             QMessageBox.warning(self, "Screen", "No device selected.")
             return
@@ -421,7 +391,7 @@ class ScreenTab(QWidget):
 
     def _start_upload(self, device_path: str, packets: list[bytes]) -> None:
         self._busy = True
-        self._set_actions_enabled(False)
+        self._sync_actions()
         self.progress_bar.setMaximum(max(len(packets), 1))
         self.progress_bar.setValue(0)
 
@@ -453,7 +423,7 @@ class ScreenTab(QWidget):
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
         self._busy = False
-        self._set_actions_enabled(True)
+        self._sync_actions()
 
     def _on_finished(self, success: bool, message: str) -> None:
         self.log.appendPlainText(f"-- {message}")

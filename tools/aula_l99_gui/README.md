@@ -39,15 +39,20 @@ first) will fail with `ModuleNotFoundError: No module named 'aula_l99_gui'`.
 
 ## Using it
 
-Two tabs, one per device. Each has its own "Refresh" button and status line — if a
-device isn't found, plug it in and click Refresh; no root is needed as long as the
-same permissions the CLIs need are already set up (a udev rule for the keyboard's
-hidraw node, membership in the `dialout` group for the touchscreen's serial port —
-see the permission-error dialogs, or each tool's own README, for details).
+Three tabs: **Device**, then one per device. No root is needed as long as the same
+permissions the CLIs need are already set up (a udev rule for the keyboard's hidraw
+node, membership in the `dialout` group for the touchscreen's serial port — see the
+permission-error dialogs, or each tool's own README, for details).
 
-**Keyboard tab** — cable path only (`0C45:800A`); the 2.4G dongle path is
-unimplemented here same as in the CLI, and the tab disables itself if only a dongle
-is found.
+**Device tab** — picks which hidraw node and which serial port the other two tabs
+act on. One selector each, with a "Refresh" button and a status line; if a device
+isn't found, plug it in and click Refresh. Both control tabs mirror the relevant
+status line read-only at the top of the tab and disable their buttons while no
+usable device is selected, so a greyed-out tab always says why. The keyboard is
+cable-only (`0C45:800A`) — the 2.4G dongle path is unimplemented here same as in
+the CLI, and finding only a dongle is reported here as an unsupported device.
+
+**Keyboard tab**
 - **Test Connection**: opens and closes a session, proving the channel works.
 - **Color**: pick a color, apply it to every key.
 - **Effect**: pick one of the 20 built-in effects (tagged confirmed/untested — see
@@ -75,8 +80,10 @@ can freeze the panel.
 ## Files
 
 - `main.py` — entry point (`sys.path` bootstrap + `QApplication`)
-- `main_window.py` — top-level window, hosts the two tabs
-- `keyboard_tab.py` / `screen_tab.py` — the two tabs
+- `main_window.py` — top-level window, hosts the three tabs
+- `device_tab.py` — the Device tab and the `DeviceSelector` widget both control
+  tabs are wired to; owns all enumeration, selection and auto-detect logic
+- `keyboard_tab.py` / `screen_tab.py` — the two control tabs
 - `workers.py` — background `QThread` workers that do the actual device I/O, so the
   UI stays responsive during a handshake or upload
 - `device_utils.py` — device enumeration and permission-error hint text shared by

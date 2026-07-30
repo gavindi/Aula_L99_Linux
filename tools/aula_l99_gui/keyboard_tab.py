@@ -21,36 +21,38 @@ from PySide6.QtWidgets import (
 )
 
 from aula_l99_hacky import protocol as kb_protocol
-from aula_l99_hacky.device import find_l99
 
-from .device_utils import KEYBOARD_PERMISSION_HINT, describe_keyboard, list_keyboard_candidates
+from .device_tab import DeviceSelector
+from .device_utils import KEYBOARD_PERMISSION_HINT
 from .workers import KeyboardWorker, start_worker
-
-DONGLE_UNSUPPORTED_MESSAGE = (
-    "This tool only implements the wired 0C45:800A path; "
-    "the dongle's packet format has never been captured."
-)
 
 
 class KeyboardTab(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
-        self._devices: list = []
+        self._selector = selector
         self._thread = None
         self._worker = None
         self._busy = False
+        self._device_ready = False
         self._color = QColor(255, 0, 0)
         self._action_buttons: list[QPushButton] = []
 
         self._build_ui()
-        self.refresh_devices()
+        selector.changed.connect(self._on_device_changed)
 
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        layout.addWidget(self._build_device_group())
+        # Read-only mirror of the Device tab's status line: the picker lives
+        # there now, but the user still needs to see which node an action will
+        # hit, and why the buttons below are greyed out when none is found.
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
         layout.addWidget(self._build_handshake_group())
         layout.addWidget(self._build_color_group())
         layout.addWidget(self._build_effect_group())
@@ -63,23 +65,6 @@ class KeyboardTab(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
         layout.addWidget(self.log)
-
-    def _build_device_group(self) -> QGroupBox:
-        group = QGroupBox("Device")
-        layout = QVBoxLayout(group)
-
-        row = QHBoxLayout()
-        self.device_combo = QComboBox()
-        row.addWidget(self.device_combo, stretch=1)
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.refresh_devices)
-        row.addWidget(refresh_button)
-        layout.addLayout(row)
-
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-        return group
 
     def _build_handshake_group(self) -> QGroupBox:
         group = QGroupBox("Connection")
@@ -160,40 +145,16 @@ class KeyboardTab(QWidget):
 
     # -- device handling --------------------------------------------------
 
-    def refresh_devices(self) -> None:
-        self._devices = list_keyboard_candidates()
-        self.device_combo.clear()
-        for device in self._devices:
-            self.device_combo.addItem(describe_keyboard(device))
+    def _on_device_changed(self, status: str, enabled: bool) -> None:
+        self.status_label.setText(status)
+        self._device_ready = enabled
+        self._sync_actions()
 
-        try:
-            found = find_l99()
-        except FileNotFoundError:
-            self.status_label.setText(
-                "No AULA L99 keyboard found. Plug it in and click Refresh."
-            )
-            self._set_actions_enabled(False)
-            return
-
-        index = next((i for i, d in enumerate(self._devices) if d.path == found.path), -1)
-        if index >= 0:
-            self.device_combo.setCurrentIndex(index)
-
-        if found.is_dongle:
-            self.status_label.setText(DONGLE_UNSUPPORTED_MESSAGE)
-            self._set_actions_enabled(False)
-            return
-
-        self.status_label.setText(f"Using {found.path} (cable)")
-        self._set_actions_enabled(True)
-
-    def _current_device_path(self) -> str | None:
-        index = self.device_combo.currentIndex()
-        if 0 <= index < len(self._devices):
-            return self._devices[index].path
-        return None
-
-    def _set_actions_enabled(self, enabled: bool) -> None:
+    def _sync_actions(self) -> None:
+        # Gating on `_busy` as well as device availability matters because the
+        # Device tab's Refresh stays clickable during an operation -- without
+        # it, a mid-transaction refresh would re-arm these buttons.
+        enabled = self._device_ready and not self._busy
         for button in self._action_buttons:
             button.setEnabled(enabled)
 
@@ -240,13 +201,13 @@ class KeyboardTab(QWidget):
     def _run_transactions(self, transactions: list) -> None:
         if self._busy:
             return
-        device_path = self._current_device_path()
+        device_path = self._selector.current_path()
         if device_path is None:
             QMessageBox.warning(self, "Keyboard", "No device selected.")
             return
 
         self._busy = True
-        self._set_actions_enabled(False)
+        self._sync_actions()
         self.progress_bar.setMaximum(max(len(transactions), 1))
         self.progress_bar.setValue(0)
         self.log.clear()
@@ -287,4 +248,4 @@ class KeyboardTab(QWidget):
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
         self._busy = False
-        self._set_actions_enabled(True)
+        self._sync_actions()

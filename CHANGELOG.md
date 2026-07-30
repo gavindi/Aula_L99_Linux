@@ -5,7 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.7] - 2026-07-30
+## [0.8.8] - 2026-07-30
+
+**GUI: device selection moved out of the two control tabs and into a
+`Device` tab of its own.** Both tabs carried a near-identical `Device`
+group box -- combo, Refresh button, status line -- backed by duplicated
+`refresh_devices`/`_current_device_path`/`_set_actions_enabled` methods
+that differed only in which enumerate/describe/find functions they called.
+That's now one shared widget, and all device concerns live in one place.
+
+### Changed
+- New `tools/aula_l99_gui/device_tab.py`: a `DeviceSelector` group box
+  (combo + Refresh + status line) parameterised by list/describe/resolve
+  callables, and a `DeviceTab` hosting one for the keyboard and one for
+  the touchscreen. The per-device auto-detect logic lifted out of both
+  tabs lives in `_resolve_keyboard`/`_resolve_screen`, including the
+  `find_l99()`/`find_screen()` not-found paths and the dongle check
+  (`DONGLE_UNSUPPORTED_MESSAGE` moved here from `keyboard_tab.py`).
+  `device_utils.py` is reused unchanged for enumeration and formatting.
+- `keyboard_tab.py`/`screen_tab.py` take their `DeviceSelector` by
+  constructor injection and learn about the current device only through
+  its `changed(status, enabled)` signal. Each keeps a read-only status
+  label at the top of the tab mirroring the selector's, so a tab whose
+  buttons are greyed out still says which node it would act on and why it
+  can't -- the picker itself is no longer duplicated.
+- `main_window.py` hosts three tabs (`Device` first) and calls
+  `refresh_all()` *after* constructing both control tabs, since they'd
+  otherwise miss the initial `changed` emission and start blank and
+  disabled.
+
+### Fixed
+- Action buttons could be re-armed mid-operation: `Refresh` was never
+  added to `_action_buttons`, so clicking it during a transfer ran
+  `_set_actions_enabled(True)` while a worker was still running. The
+  replacement `_sync_actions()` enables buttons only when
+  `_device_ready and not _busy`, which matters more now that Refresh
+  lives on a separate, always-clickable tab. The `QThread` lifetime
+  handling itself is untouched.
 
 **"Save to GIF": 0.8.6's raw-bitmap self-padding fix confirmed working on
 real hardware by the user.** Closes out the two biggest open "unvalidated

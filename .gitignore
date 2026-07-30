@@ -6,6 +6,7 @@ build/
 
 # Temporary Directories
 tmp/
+extracted_assets/
 
 # Python
 __pycache__/

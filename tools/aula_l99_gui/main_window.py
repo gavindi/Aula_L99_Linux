@@ -1,8 +1,9 @@
-"""Top-level window hosting the keyboard and screen control tabs."""
+"""Top-level window hosting the device, keyboard and screen tabs."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
+from .device_tab import DeviceTab
 from .keyboard_tab import KeyboardTab
 from .screen_tab import ScreenTab
 
@@ -11,14 +12,22 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AULA L99 Control")
-        self.resize(640, 720)
+        self.resize(800, 720)
 
-        self._keyboard_tab = KeyboardTab()
-        self._screen_tab = ScreenTab()
+        self._device_tab = DeviceTab()
+        self._keyboard_tab = KeyboardTab(self._device_tab.keyboard)
+        self._screen_tab = ScreenTab(self._device_tab.screen)
+
         tabs = QTabWidget()
+        tabs.addTab(self._device_tab, "Device")
         tabs.addTab(self._keyboard_tab, "Keyboard")
         tabs.addTab(self._screen_tab, "Touchscreen")
         self.setCentralWidget(tabs)
+
+        # Only after both control tabs have connected to their selector's
+        # `changed` signal -- refreshing any earlier means they never receive
+        # the initial status and sit disabled with a blank status line.
+        self._device_tab.refresh_all()
 
     def closeEvent(self, event) -> None:
         # An interrupted screen upload can freeze the panel (see
