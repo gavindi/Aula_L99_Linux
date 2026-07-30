@@ -34,9 +34,11 @@ HORIZONTAL = {
     "img_edit.png": (".", STATES4),
     "main_sysbtn_close.png": (".", STATES4),
     "main_sysbtn_min.png": (".", STATES4),
+    "img_thumb.png": (".", STATES4),
     "icon/tab_home.png": ("icon", STATES4),
     "icon/tab_customkey.png": ("icon", STATES4),
     "icon/tab_light.png": ("icon", STATES4),
+    "icon/tab_userlight.png": ("icon", STATES4),
     "icon/tab_tft.png": ("icon", STATES4),
 }
 

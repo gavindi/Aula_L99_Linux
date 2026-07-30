@@ -30,6 +30,7 @@ PANEL_BORDER = "rgba(150, 150, 160, 90)"
 BACKGROUND_IMAGE = THEME / "main_bkg.png"
 LOGO_IMAGE = THEME / "logo" / "logo.png"
 USB_MODE_ICON = ICONS / "usb_mode.png"
+COLOR_WHEEL_IMAGE = THEME / "img_circlepalette.png"
 
 TITLE_BAR_HEIGHT = 40
 TITLE_BAR_BG = "rgba(10, 10, 12, 235)"
@@ -41,6 +42,7 @@ TAB_ICONS = {
     "Device": "tab_home",
     "Keyboard": "tab_customkey",
     "Lighting": "tab_light",
+    "User Lighting": "tab_userlight",
     "Touchscreen": "tab_tft",
 }
 # The strip frames are 36x36, so 40px upscales them by ~11% -- close enough to
@@ -229,6 +231,10 @@ QSpinBox, QPlainTextEdit, QListWidget, QLabel#ImagePreview {{
 QLabel#ImagePreview {{
     color: {TEXT_DISABLED};
 }}
+QListWidget {{
+    background: transparent;
+    border: none;
+}}
 QSpinBox {{
     min-height: 24px;
     padding: 0 4px;
@@ -295,6 +301,35 @@ QProgressBar::chunk {{
     border-image: {_slice("img_slider_back", "chunk")} 0 10 0 10 stretch stretch;
     border-left: 10px transparent;
     border-right: 10px transparent;
+}}
+
+/* Sliders (lighting brightness/speed, RGB channels) reuse the same groove/
+   chunk art as the progress bar, with the vendor's round thumb over it. */
+QSlider::groove:horizontal {{
+    border-image: {_slice("img_slider_back", "groove")} 0 10 0 10 stretch stretch;
+    height: 10px;
+}}
+QSlider::sub-page:horizontal {{
+    border-image: {_slice("img_slider_back", "chunk")} 0 10 0 10 stretch stretch;
+    height: 10px;
+}}
+QSlider::add-page:horizontal {{
+    background: transparent;
+}}
+QSlider::handle:horizontal {{
+    image: {_slice("img_thumb", "normal")};
+    width: 20px;
+    height: 20px;
+    margin: -5px 0;
+}}
+QSlider::handle:horizontal:hover {{
+    image: {_slice("img_thumb", "hover")};
+}}
+QSlider::handle:horizontal:pressed {{
+    image: {_slice("img_thumb", "pressed")};
+}}
+QSlider::handle:horizontal:disabled {{
+    image: {_slice("img_thumb", "disabled")};
 }}
 
 QScrollBar:vertical {{

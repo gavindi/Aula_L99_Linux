@@ -10,7 +10,6 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -44,12 +43,6 @@ class KeyboardTab(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # Read-only mirror of the Device tab's status line -- see the same
-        # comment in lighting_tab.py.
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
         layout.addWidget(self._build_rtc_group())
 
         self.progress_bar = QProgressBar()
@@ -61,7 +54,7 @@ class KeyboardTab(QWidget):
         layout.addWidget(self.log)
 
     def _build_rtc_group(self) -> QGroupBox:
-        group = QGroupBox("Clock")
+        group = QGroupBox()
         row = QHBoxLayout(group)
         button = QPushButton("Set Clock to Now")
         button.clicked.connect(self._on_set_rtc)
@@ -73,7 +66,6 @@ class KeyboardTab(QWidget):
     # -- device handling --------------------------------------------------
 
     def _on_device_changed(self, status: str, enabled: bool) -> None:
-        self.status_label.setText(status)
         self._device_ready = enabled
         self._sync_actions()
 

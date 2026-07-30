@@ -1,10 +1,9 @@
-"""Lighting (aula_l99_hacky) control tab: built-in effect selection, with
-its own color controls (wheel/RGB/presets) for whatever effect is running.
+"""User Lighting tab: per-key color picking (wheel/RGB/presets) and the
+"Apply to All Keys" static-color action.
 
-Entirely self-contained -- this tab's color state and Colorful checkbox
-affect only its own Run Effect action, not the User Lighting tab's Apply
-action (which has its own separate copy of the same controls in
-user_lighting_tab.py).
+Entirely self-contained -- its color state and Colorful checkbox affect only
+this tab's own Apply action, not the Lighting tab's Run Effect (which has
+its own separate copy of the same controls in lighting_tab.py).
 """
 from __future__ import annotations
 
@@ -16,8 +15,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -52,7 +49,7 @@ PRESET_COLORS = [
 COLORFUL_EFFECT_ID = 0x06
 
 
-class LightingTab(QWidget):
+class UserLightingTab(QWidget):
     def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
         self._selector = selector
@@ -63,7 +60,6 @@ class LightingTab(QWidget):
         self._color = QColor(255, 0, 0)
         self._action_buttons: list[QPushButton] = []
         self._color_pickers: list[QWidget] = []
-        self._pre_colorful_index: int | None = None
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
@@ -73,10 +69,7 @@ class LightingTab(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        main_row = QHBoxLayout()
-        main_row.addWidget(self._build_effect_list_group())
-        main_row.addLayout(self._build_controls_column(), stretch=1)
-        layout.addLayout(main_row)
+        layout.addWidget(self._build_color_group())
 
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
@@ -85,66 +78,6 @@ class LightingTab(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
         layout.addWidget(self.log)
-
-    def _build_effect_list_group(self) -> QGroupBox:
-        group = QGroupBox()
-        layout = QVBoxLayout(group)
-
-        self.effect_list = QListWidget()
-        self.effect_list.setMinimumWidth(220)
-        for effect_id, name in sorted(kb_protocol.EFFECT_NAMES.items()):
-            item = QListWidgetItem(name)
-            item.setData(Qt.ItemDataRole.UserRole, effect_id)
-            self.effect_list.addItem(item)
-        self.effect_list.setCurrentRow(0)
-        self.effect_list.itemDoubleClicked.connect(self._on_run_effect)
-        # Sized to fit every row with no scrollbar -- sizeHintForRow reads
-        # actual row height (font metrics + the QSS item padding), so this
-        # stays correct if either changes.
-        row_height = self.effect_list.sizeHintForRow(0)
-        frame = 2 * self.effect_list.frameWidth()
-        self.effect_list.setMinimumHeight(row_height * self.effect_list.count() + frame)
-        layout.addWidget(self.effect_list)
-
-        return group
-
-    def _build_controls_column(self) -> QVBoxLayout:
-        column = QVBoxLayout()
-
-        self.brightness_slider = self._build_labeled_slider(
-            column, "Lighting Brightness", 1, kb_protocol.EFFECT_BRIGHTNESS_MAX,
-            kb_protocol.EFFECT_BRIGHTNESS_MAX,
-        )
-        self.speed_slider = self._build_labeled_slider(
-            column, "Lighting Speed", kb_protocol.EFFECT_SPEED_MIN,
-            kb_protocol.EFFECT_SPEED_MAX, kb_protocol.EFFECT_SPEED_DEFAULT,
-        )
-
-        column.addWidget(self._build_color_group())
-
-        run_button = QPushButton("Run Effect")
-        run_button.clicked.connect(self._on_run_effect)
-        column.addWidget(run_button)
-        self._action_buttons.append(run_button)
-
-        return column
-
-    def _build_labeled_slider(
-        self, parent_layout, title: str, minimum: int, maximum: int, default: int
-    ) -> QSlider:
-        parent_layout.addWidget(QLabel(title))
-
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(minimum, maximum)
-        slider.setValue(default)
-        parent_layout.addWidget(slider)
-
-        value_label = QLabel(str(default))
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        slider.valueChanged.connect(lambda value: value_label.setText(str(value)))
-        parent_layout.addWidget(value_label)
-
-        return slider
 
     def _build_color_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -158,6 +91,11 @@ class LightingTab(QWidget):
         picker_row.addLayout(self._build_palette_column())
         picker_row.addLayout(self._build_channel_column(), stretch=1)
         outer.addLayout(picker_row)
+
+        apply_button = QPushButton("Apply to All Keys")
+        apply_button.clicked.connect(self._on_apply_color)
+        outer.addWidget(apply_button)
+        self._action_buttons.append(apply_button)
 
         return group
 
@@ -267,48 +205,38 @@ class LightingTab(QWidget):
     def _on_channel_changed(self, _value: int) -> None:
         self._set_color(QColor(self.r_slider.value(), self.g_slider.value(), self.b_slider.value()))
 
-    def _find_effect_row(self, effect_id: int) -> int:
-        for row in range(self.effect_list.count()):
-            if self.effect_list.item(row).data(Qt.ItemDataRole.UserRole) == effect_id:
-                return row
-        return -1
-
     def _on_colorful_toggled(self, checked: bool) -> None:
         # "Colorful" (kb_protocol's confirmed 0x06 "colourful" effect) cycles
-        # its own colors, so the pickers here don't apply to it -- forcing
-        # the Effect selection instead of adding a second control that does
-        # the same thing as the list.
+        # its own colors, so the pickers here don't apply to it.
         for widget in self._color_pickers:
             widget.setEnabled(not checked)
-        if checked:
-            self._pre_colorful_index = self.effect_list.currentRow()
-            colorful_row = self._find_effect_row(COLORFUL_EFFECT_ID)
-            if colorful_row >= 0:
-                self.effect_list.setCurrentRow(colorful_row)
-            self.effect_list.setEnabled(False)
-        else:
-            self.effect_list.setEnabled(True)
-            if self._pre_colorful_index is not None:
-                self.effect_list.setCurrentRow(self._pre_colorful_index)
-                self._pre_colorful_index = None
 
-    def _rgb(self) -> tuple[int, int, int]:
+    def rgb(self) -> tuple[int, int, int]:
         return (self._color.red(), self._color.green(), self._color.blue())
 
     # -- actions ------------------------------------------------------------
 
-    def _on_run_effect(self) -> None:
-        item = self.effect_list.currentItem()
-        if item is None:
-            QMessageBox.warning(self, "Keyboard", "No effect selected.")
-            return
-        effect_id = item.data(Qt.ItemDataRole.UserRole)
-        transactions = kb_protocol.build_effect_transfer(
-            effect_id,
-            rgb=self._rgb(),
-            speed=self.speed_slider.value(),
-            brightness=self.brightness_slider.value(),
-        )
+    def _on_apply_color(self) -> None:
+        if self.colorful_checkbox.isChecked():
+            # Colorful cycles its own colors and ignores a custom per-key
+            # upload (that's why the pickers are disabled while it's
+            # checked) -- Apply just selects it, with no color_transfer.
+            transactions = kb_protocol.build_effect_transfer(
+                COLORFUL_EFFECT_ID, rgb=self.rgb(),
+                speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
+            )
+        else:
+            # Per protocol.py's own note on EFFECT_CUSTOM: the vendor app
+            # always selects custom (per-key) mode alongside a colour
+            # upload, seen whenever its per-key editor was open. Without it
+            # the keyboard can still be mid-built-in-effect and ignore the
+            # colour write.
+            custom_mode = kb_protocol.build_effect_transfer(
+                kb_protocol.EFFECT_CUSTOM, rgb=self.rgb(),
+                speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
+            )
+            colors = kb_protocol.build_uniform_colors(self.rgb())
+            transactions = custom_mode + kb_protocol.build_color_transfer(colors)
         self._run_transactions(transactions)
 
     @property
@@ -329,17 +257,9 @@ class LightingTab(QWidget):
         self.progress_bar.setValue(0)
         self.log.clear()
 
-        # `self._worker`/`self._thread` are reassigned (not cleared) here on
-        # every run: they must stay referenced for as long as the previous
-        # operation's QThread might still be alive. Both objects use
-        # deleteLater() (see workers.start_worker) so the C++ side is
-        # already torn down safely by the time this reassignment drops the
-        # old Python reference -- explicitly nulling them from a slot
-        # connected to their own finished signal raced with that deferred
-        # deletion and crashed (double free). Reassignment itself is only
-        # safe once the *old* QThread has actually stopped, which is why
-        # `self._busy` (guarding re-entry into this method) is cleared from
-        # `thread.finished`, not `worker.finished` -- see _on_thread_stopped.
+        # See lighting_tab.py's _run_transactions for why `_worker`/`_thread`
+        # are kept referenced until `thread.finished` (not `worker.finished`)
+        # and why `_busy` is only cleared there.
         self._worker = KeyboardWorker(device_path, transactions)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)

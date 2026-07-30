@@ -5,6 +5,66 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-07-30
+
+**GUI: Lighting split into Lighting (built-in effects) and a new User
+Lighting tab (per-key color), the effect picker became a full-height list
+instead of a dropdown, and the Device tab now polls on its own instead of
+waiting for a manual Refresh.**
+
+### Added
+- New `User Lighting` tab (`user_lighting_tab.py`/`UserLightingTab`, using
+  `tab_userlight.png`), holding the color wheel/RGB/preset-swatch picker and
+  "Apply to All Keys" -- pulled out of the Lighting tab so picking a static
+  per-key color and picking/running a built-in effect aren't bundled under
+  one icon. Entirely self-contained: its Colorful checkbox and color state
+  affect only its own Apply action. The Lighting tab keeps its own separate
+  copy of the same picker (wheel/RGB/presets/Colorful) for whatever color
+  Run Effect sends -- the two were briefly wired together via a shared
+  color source and a cross-tab signal, but that made "the controls on one
+  tab affect the other" the norm rather than the exception, so each tab
+  went back to owning its own state independently.
+- `color_wheel.py`'s `ColorWheel`: click/drag color picker rendered from the
+  vendor's `img_circlepalette.png`. Picks by sampling the actual pixel under
+  the cursor rather than computing RGB from the clicked angle -- checked
+  empirically that the art's hue isn't evenly spread by angle (red-to-yellow
+  sweeps ~120 degrees, yellow-to-green only ~30), so a formula would drift
+  visibly out of sync with what's drawn.
+- "Apply to All Keys" now selects `EFFECT_CUSTOM` (0x80) before the per-key
+  colour upload, matching `protocol.py`'s own note that the vendor app
+  always pairs custom mode with a colour write (otherwise the keyboard can
+  still be mid-built-in-effect and ignore it) -- unless Colorful is
+  checked, in which case Apply just selects the confirmed 0x06 "colourful"
+  effect instead, since that effect ignores a custom color anyway.
+- Device tab polls its own selectors every 5 seconds (`DeviceTab`'s
+  `POLL_INTERVAL_MS` timer in `device_tab.py`) so a plug/unplug shows up
+  without hitting Refresh, plus an immediate refresh the moment the tab
+  becomes current -- so switching to it doesn't wait out the rest of a tick.
+
+### Changed
+- Lighting tab's effect picker is a `QListWidget` (one row per effect, sized
+  by `sizeHintForRow` to fit every row with no scrollbar) instead of a
+  `QComboBox`, laid out on the left with Brightness/Speed/Color/Run Effect
+  on the right. Rows show just the effect name -- the `0x..` id and
+  confirmed/untested tag were dropped as clutter once the id/tag no longer
+  had to fit inside one dropdown line. Double-clicking a row runs it
+  immediately (`itemDoubleClicked` wired to the same handler as Run Effect).
+- Speed/Brightness are labeled sliders (value shown below each) instead of
+  spin boxes, reusing the vendor's slider groove/chunk art plus a newly
+  sliced `img_thumb.png` handle (4 states via `slice_skin.py`).
+- The "Effect"/"Color"/"Clock" group-box titles were removed -- each was the
+  only section in its tab, so the title just repeated context the tab icon
+  already gave. "Connection" (Device tab) and "Upload Image"/"Upload GIF"
+  (Touchscreen tab) keep their titles since those tabs hold multiple
+  sections that still need distinguishing.
+- `QListWidget` lost its border and background (now transparent), matching
+  the group-box/tab-rail treatment from 0.9.0.
+- The per-tab "Using /dev/hidrawN (cable)"-style status line -- mirrored
+  from the Device tab's selectors into every control tab -- is gone.
+  Replaced by a tooltip on the title bar's USB-mode icon, combining both
+  the keyboard and touchscreen status strings, since one shared icon now
+  speaks for both devices instead of four duplicate labels.
+
 ## [0.9.0] - 2026-07-30
 
 **GUI: split into a four-tab layout (Device, Keyboard, Lighting,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -41,6 +41,11 @@ DONGLE_UNSUPPORTED_MESSAGE = (
 )
 
 KEYBOARD_LAYOUT_IMAGE = theme.THEME / "keyboard" / "img_keyboard_layout.png"
+
+# How often the Device tab re-enumerates on its own, so a plug/unplug shows up
+# without the user having to hit Refresh -- on top of the explicit refresh
+# MainWindow does when this tab becomes current (see MainWindow._on_tab_changed).
+POLL_INTERVAL_MS = 5000
 
 # resolve(devices) -> (index to preselect or -1, status text, actions enabled)
 Resolver = Callable[[list], tuple[int, str, bool]]
@@ -167,6 +172,14 @@ class DeviceTab(QWidget):
         layout.addStretch(1)
 
         self.keyboard.changed.connect(self._on_keyboard_changed)
+
+        # Background poll so a plug/unplug shows up on its own; MainWindow
+        # additionally calls refresh_all() the moment this tab becomes
+        # current, so switching here doesn't wait out the rest of this tick.
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(POLL_INTERVAL_MS)
+        self._poll_timer.timeout.connect(self.refresh_all)
+        self._poll_timer.start()
 
     def _build_keyboard_image(self) -> QLabel:
         label = QLabel()

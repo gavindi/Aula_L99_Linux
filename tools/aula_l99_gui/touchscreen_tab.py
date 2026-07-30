@@ -71,12 +71,6 @@ class TouchscreenTab(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        # Read-only mirror of the Device tab's status line -- see the same
-        # comment in lighting_tab.py.
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
         layout.addWidget(self._build_single_image_group())
         layout.addWidget(self._build_gif_group())
 
@@ -187,7 +181,6 @@ class TouchscreenTab(QWidget):
     # -- device handling --------------------------------------------------
 
     def _on_device_changed(self, status: str, enabled: bool) -> None:
-        self.status_label.setText(status)
         self._device_ready = enabled
         self._sync_actions()
 

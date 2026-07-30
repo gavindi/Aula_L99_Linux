@@ -23,6 +23,7 @@ from .device_tab import DeviceTab
 from .keyboard_tab import KeyboardTab
 from .lighting_tab import LightingTab
 from .touchscreen_tab import TouchscreenTab
+from .user_lighting_tab import UserLightingTab
 
 
 class SidebarTabBar(QTabBar):
@@ -120,6 +121,9 @@ class TitleBar(QWidget):
     def set_usb_connected(self, connected: bool) -> None:
         self.usb_icon.setVisible(connected)
 
+    def set_usb_tooltip(self, text: str) -> None:
+        self.usb_icon.setToolTip(text)
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             handle = self._window.windowHandle()
@@ -147,6 +151,7 @@ class MainWindow(QMainWindow):
         self._device_tab.setObjectName("DeviceTab")
         self._keyboard_tab = KeyboardTab(self._device_tab.keyboard)
         self._lighting_tab = LightingTab(self._device_tab.keyboard)
+        self._user_lighting_tab = UserLightingTab(self._device_tab.keyboard)
         self._touchscreen_tab = TouchscreenTab(self._device_tab.screen)
 
         self._tabs = QTabWidget()
@@ -156,9 +161,12 @@ class MainWindow(QMainWindow):
         # The rail is icon-only, so the titles can't live in the tab text any
         # more -- they're kept here for the icon lookup and shown as tooltips,
         # which is the only thing naming an unlabelled button for the user.
-        self._tab_titles = ["Device", "Keyboard", "Lighting", "Touchscreen"]
+        self._tab_titles = ["Device", "Keyboard", "Lighting", "User Lighting", "Touchscreen"]
         for widget, title in zip(
-            (self._device_tab, self._keyboard_tab, self._lighting_tab, self._touchscreen_tab),
+            (
+                self._device_tab, self._keyboard_tab, self._lighting_tab,
+                self._user_lighting_tab, self._touchscreen_tab,
+            ),
             self._tab_titles,
         ):
             index = self._tabs.addTab(widget, "")
@@ -169,6 +177,8 @@ class MainWindow(QMainWindow):
         self._title_bar = TitleBar(self)
         self._keyboard_found = False
         self._screen_found = False
+        self._keyboard_status = ""
+        self._screen_status = ""
         self._device_tab.keyboard.changed.connect(self._on_keyboard_presence)
         self._device_tab.screen.changed.connect(self._on_screen_presence)
 
@@ -201,13 +211,20 @@ class MainWindow(QMainWindow):
             self._tabs.setTabIcon(index, self._tab_icon(title, index == current))
         if 0 <= current < len(self._tab_titles):
             self._title_bar.set_mode(f"{self._tab_titles[current]} Mode")
+        # Immediate refresh on switching to the Device tab, on top of its own
+        # background poll (see device_tab.POLL_INTERVAL_MS) -- otherwise the
+        # tab could show up-to-5s-stale state right after switching to it.
+        if self._tabs.widget(current) is self._device_tab:
+            self._device_tab.refresh_all()
 
-    def _on_keyboard_presence(self, _status: str, _enabled: bool, found: bool) -> None:
+    def _on_keyboard_presence(self, status: str, _enabled: bool, found: bool) -> None:
         self._keyboard_found = found
+        self._keyboard_status = status
         self._update_usb_icon()
 
-    def _on_screen_presence(self, _status: str, _enabled: bool, found: bool) -> None:
+    def _on_screen_presence(self, status: str, _enabled: bool, found: bool) -> None:
         self._screen_found = found
+        self._screen_status = status
         self._update_usb_icon()
 
     def _update_usb_icon(self) -> None:
@@ -215,6 +232,10 @@ class MainWindow(QMainWindow):
         # (even though it's unsupported for actions), or touchscreen -- not
         # just the subset that's actionable.
         self._title_bar.set_usb_connected(self._keyboard_found or self._screen_found)
+        # Replaces the per-tab status line the control tabs used to mirror
+        # from the Device tab's selectors -- both statuses combined here
+        # since one icon now speaks for both devices.
+        self._title_bar.set_usb_tooltip(f"{self._keyboard_status}\n{self._screen_status}")
 
     def paintEvent(self, event) -> None:
         theme.paint_background(self, self._background)
@@ -228,6 +249,7 @@ class MainWindow(QMainWindow):
             self._device_tab.is_busy
             or self._keyboard_tab.is_busy
             or self._lighting_tab.is_busy
+            or self._user_lighting_tab.is_busy
             or self._touchscreen_tab.is_busy
         ):
             QMessageBox.warning(
