@@ -46,6 +46,7 @@ TAB_ICONS = {
     "Lighting": "tab_light",
     "User Lighting": "tab_userlight",
     "Touchscreen": "tab_tft",
+    "Config": "tab_config",
 }
 # The strip frames are 36x36, so 40px upscales them by ~11% -- close enough to
 # native that the softness doesn't show, and it keeps the rail on round numbers.

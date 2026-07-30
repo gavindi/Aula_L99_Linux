@@ -5,6 +5,71 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-07-31
+
+**GUI: Touchscreen tab's GIF/animation workflow rebuilt around a persistent
+`Customized_Animation` library (browse/create/edit/delete saved animations,
+unified across single-image and multi-frame sends), and every tab's
+separate debug log consolidated into a new Config tab.**
+
+### Added
+- Touchscreen tab: every GIF upload now saves a local, human-viewable copy
+  under the OS app-data directory (`QStandardPaths.AppDataLocation`) in a
+  `Customized_Animation` folder -- a re-encoded `.gif` (via Pillow, not the
+  proprietary device blob) plus a sibling `.csv` recording the output
+  filename and each source input file (full path) with its delay, serial-
+  numbered by scanning the directory for the highest existing stem + 1.
+- "Saved Animations" column (left of the tab, widened to 320px) lists every
+  saved csv as a thumbnail, built by reading each csv's first line rather
+  than scanning for `.gif` files directly. "New" reserves the next serial
+  number as an empty placeholder (shown as a grey tile) and selects it;
+  "Delete" removes both the csv and whichever companion file exists
+  (`.gif` or `.png`), after confirmation.
+- "Source Images": a universal, multi-select "Choose Image…" picker
+  (png/jpg/jpeg/gif/mp4) replacing the old three-radio-button GIF source
+  section (Multiple image files / Animated GIF file / Video (MP4)) --
+  clicking it repeatedly appends to one ordered list, shown as a horizontal
+  thumbnail strip (right-click an item to remove it). Selecting a saved
+  animation loads its recorded sources into this same live, editable list,
+  so browsing history doubles as loading a starting point to keep editing.
+- "Send to Device" button group: Background/Photo Frame (enabled only for
+  exactly one png/jpeg in the source list) and Customized Animation
+  (enabled for one or more source images of any type, sequentially
+  processed per file type -- still image, every frame of a `.gif`, or
+  ffmpeg-sampled frames of an `.mp4`). All three save a local csv/output
+  copy same as before; if a Saved Animations entry is currently selected,
+  the save updates that entry in place instead of always creating a new
+  numbered one.
+- New `Config` tab (`tab_config.png`, sliced via `slice_skin.py`) appended
+  last in the rail, holding one consolidated "Debug Log". New
+  `debug_log.py`'s `DebugLog` is a shared `QObject` (`message`/`cleared`
+  signals) passed into Keyboard/Lighting/User Lighting/Touchscreen at
+  construction; each tab's status/progress lines are tagged with their
+  source tab (e.g. `"[Keyboard] Key 3: ok"`) since all four now interleave
+  in one widget.
+
+### Changed
+- `main.py` now sets `QCoreApplication.setOrganizationName`/
+  `setApplicationName("AULA_L99")` -- required for
+  `QStandardPaths.AppDataLocation` to resolve to a stable path instead of
+  falling back to the interpreter's own name.
+
+### Removed
+- The standalone "Upload Image" section (its own target dropdown, its own
+  image picker, its own "Upload" button, `self._image_path`) -- superseded
+  by "Send to Device", which reads from the same shared source list as
+  animation uploads instead of keeping a separate one.
+- Each of Keyboard/Lighting/User Lighting/Touchscreen's own isolated
+  `self.log` widget -- moved into the Config tab (see Added).
+
+### Fixed
+- Removing each tab's debug log left `QVBoxLayout` with no trailing
+  stretch, stranding the fixed-height progress bar at the very bottom of
+  the tab with a large empty gap above it -- its idle grey groove (no
+  orange fill, no label) read as a stray decorative line rather than a
+  progress bar. Added `addStretch(1)` after the progress bar in all four
+  affected tabs so it sits directly below the last control group again.
+
 ## [0.9.2] - 2026-07-31
 
 **GUI: GIF conversion (frame decode + dithering) moved off the GUI thread,

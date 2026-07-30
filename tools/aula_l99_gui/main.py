@@ -8,6 +8,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent.parent
 if str(_TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_TOOLS_DIR))
 
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication
 
 from aula_l99_gui import theme
@@ -16,6 +17,8 @@ from aula_l99_gui.main_window import MainWindow
 
 def main() -> int:
     app = QApplication(sys.argv)
+    QCoreApplication.setOrganizationName("AULA_L99")
+    QCoreApplication.setApplicationName("AULA_L99")
     app.setStyleSheet(theme.stylesheet())
     window = MainWindow()
     window.show()

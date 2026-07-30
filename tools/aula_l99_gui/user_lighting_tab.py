@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSlider,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 from aula_l99_hacky import protocol as kb_protocol
 
 from .color_wheel import ColorWheel
+from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
 from .workers import KeyboardWorker, start_worker
@@ -52,9 +52,10 @@ COLORFUL_EFFECT_ID = 0x06
 class UserLightingTab(QWidget):
     busy_changed = Signal(bool)
 
-    def __init__(self, selector: DeviceSelector) -> None:
+    def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
         self._selector = selector
+        self._debug_log = debug_log
         self._thread = None
         self._worker = None
         self._busy = False
@@ -75,11 +76,7 @@ class UserLightingTab(QWidget):
 
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(500)
-        layout.addWidget(self.log)
+        layout.addStretch(1)
 
     def _build_color_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -261,7 +258,7 @@ class UserLightingTab(QWidget):
         self._set_busy(True)
         self.progress_bar.setMaximum(max(len(transactions), 1))
         self.progress_bar.setValue(0)
-        self.log.clear()
+        self._debug_log.clear()
 
         # See lighting_tab.py's _run_transactions for why `_worker`/`_thread`
         # are kept referenced until `thread.finished` (not `worker.finished`)
@@ -275,10 +272,10 @@ class UserLightingTab(QWidget):
     def _on_progress(self, index: int, total: int, name: str, acked: bool) -> None:
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(index + 1)
-        self.log.appendPlainText(f"{name}: {'ok' if acked else 'NOT ACKED'}")
+        self._debug_log.append("User Lighting", f"{name}: {'ok' if acked else 'NOT ACKED'}")
 
     def _on_finished(self, success: bool, message: str) -> None:
-        self.log.appendPlainText(f"-- {message}")
+        self._debug_log.append("User Lighting", f"-- {message}")
         if not success:
             text = message
             if "permission" in message.lower():

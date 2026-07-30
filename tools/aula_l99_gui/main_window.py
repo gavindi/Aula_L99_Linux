@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from .config_tab import ConfigTab
+from .debug_log import DebugLog
 from .device_tab import DeviceTab
 from .keyboard_tab import KeyboardTab
 from .lighting_tab import LightingTab
@@ -147,12 +149,15 @@ class MainWindow(QMainWindow):
         # Loaded once; paintEvent re-scales it per resize rather than re-reading.
         self._background = QPixmap(str(theme.BACKGROUND_IMAGE))
 
+        self._debug_log = DebugLog()
+
         self._device_tab = DeviceTab()
         self._device_tab.setObjectName("DeviceTab")
-        self._keyboard_tab = KeyboardTab(self._device_tab.keyboard)
-        self._lighting_tab = LightingTab(self._device_tab.keyboard)
-        self._user_lighting_tab = UserLightingTab(self._device_tab.keyboard)
-        self._touchscreen_tab = TouchscreenTab(self._device_tab.screen)
+        self._keyboard_tab = KeyboardTab(self._device_tab.keyboard, self._debug_log)
+        self._lighting_tab = LightingTab(self._device_tab.keyboard, self._debug_log)
+        self._user_lighting_tab = UserLightingTab(self._device_tab.keyboard, self._debug_log)
+        self._touchscreen_tab = TouchscreenTab(self._device_tab.screen, self._debug_log)
+        self._config_tab = ConfigTab(self._debug_log)
 
         self._tabs = QTabWidget()
         self._tabs.setTabBar(SidebarTabBar())
@@ -161,11 +166,13 @@ class MainWindow(QMainWindow):
         # The rail is icon-only, so the titles can't live in the tab text any
         # more -- they're kept here for the icon lookup and shown as tooltips,
         # which is the only thing naming an unlabelled button for the user.
-        self._tab_titles = ["Device", "Keyboard", "Lighting", "User Lighting", "Touchscreen"]
+        self._tab_titles = [
+            "Device", "Keyboard", "Lighting", "User Lighting", "Touchscreen", "Config",
+        ]
         for widget, title in zip(
             (
                 self._device_tab, self._keyboard_tab, self._lighting_tab,
-                self._user_lighting_tab, self._touchscreen_tab,
+                self._user_lighting_tab, self._touchscreen_tab, self._config_tab,
             ),
             self._tab_titles,
         ):
@@ -202,7 +209,7 @@ class MainWindow(QMainWindow):
 
         for tab in (
             self._device_tab, self._keyboard_tab, self._lighting_tab,
-            self._user_lighting_tab, self._touchscreen_tab,
+            self._user_lighting_tab, self._touchscreen_tab, self._config_tab,
         ):
             tab.busy_changed.connect(self._on_any_busy_changed)
 
@@ -266,13 +273,14 @@ class MainWindow(QMainWindow):
         # Recomputes from every tab's own `is_busy` rather than trusting just
         # the `busy` this particular signal carried -- simpler than tracking
         # each tab's last-known state separately, and the reason this handler
-        # is shared by all five tabs' `busy_changed` instead of one per tab.
+        # is shared by all six tabs' `busy_changed` instead of one per tab.
         busy = (
             self._device_tab.is_busy
             or self._keyboard_tab.is_busy
             or self._lighting_tab.is_busy
             or self._user_lighting_tab.is_busy
             or self._touchscreen_tab.is_busy
+            or self._config_tab.is_busy
         )
         self._loading_overlay.setVisible(busy)
         if busy:
@@ -294,6 +302,7 @@ class MainWindow(QMainWindow):
             or self._lighting_tab.is_busy
             or self._user_lighting_tab.is_busy
             or self._touchscreen_tab.is_busy
+            or self._config_tab.is_busy
         ):
             QMessageBox.warning(
                 self, "AULA L99 Control",
