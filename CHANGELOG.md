@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-07-30
+
+**"Save to GIF": traced the last untraced GIF-relevant export in
+`pic_scan.dll` -- confirmed the dithering decision is not anywhere in
+this DLL at all, not just not in `Gif_to_data_LT7689`.**
+
+### Verified
+- **`Gif_to_data`** (the non-`_LT7689` sibling export) is functionally
+  identical to `Gif_to_data_LT7689` for pixel processing: same direct
+  calls (`Scan_aRGB8565`/`Scan_aRGB8888`/`SaveMode16`/`SaveMode24`/flash
+  writers), same register-indirect calls resolving to the same `QImage`/
+  `QString` accessor set. The one difference is a single extra call into
+  a previously-unnoticed unexported helper.
+- That helper (VA `0x6a9c17f0`) reads a file in 2KB chunks and computes a
+  running checksum via two 256-byte lookup tables. Dumped both tables
+  directly from the PE image's `.rdata` section and diffed them
+  byte-for-byte against a from-scratch table for the reflected polynomial
+  `0xA001` -- the same polynomial this repo's own `crc16_packet()` already
+  uses for the wire protocol -- exact match, confirmed standard
+  **CRC-16/ARC**. This is a file-integrity checksum (almost certainly
+  verifying a freshly-written flash-blob file), unrelated to pixel
+  dithering.
+
+### Changed
+- **Every exported GIF-relevant function in `pic_scan.dll`, and
+  everything reachable from any of them, has now been examined.** Both
+  top-level GIF export entry points (`Gif_to_data` and
+  `Gif_to_data_LT7689`) are ruled out, closing off the DLL entirely as a
+  location for the dithering decision.
+- The one remaining candidate is code in the qt-tool app's own `.exe`
+  itself (not yet disassembled at all) -- e.g. a
+  `QImage::convertToFormat()` call with an explicit dithering flag,
+  executed by the app before ever calling into `pic_scan.dll`, which
+  would be invisible no matter how thoroughly this DLL is traced.
+
+### Known gaps
+- The actual dithering decision algorithm is still not located --
+  `pic_scan.dll` is now fully exhausted as a search space; the qt-tool
+  `.exe` itself is the only remaining lead for continuing this
+  particular thread.
+- Same longstanding open items otherwise: the 528-byte prefix's exact
+  purpose, the exact diffusion coefficients/direction, the G ramp's
+  off-by-one, `mode_flag`'s exact overrun mechanics, `save_to_gif_2`'s
+  inefficiency.
+
 ## [0.8.1] - 2026-07-30
 
 **"Save to GIF": resumed the 0.7.7 static-analysis pivot and closed it

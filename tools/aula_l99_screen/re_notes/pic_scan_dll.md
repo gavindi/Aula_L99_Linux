@@ -239,25 +239,68 @@ math, ramp comparisons, or an error/accumulator variable carried across loop ite
 This is a stronger result than `[0.7.7]`'s "partially traced, banked for later": the call
 graph from this export is now **exhausted**, not merely deferred.
 
+### `Gif_to_data` (ordinal 4, VA `0x6a9c6c80`, spans to `0x6a9c87d8`) — **the non-`_LT7689` sibling, traced this round**
+
+**Verdict: functionally identical to `Gif_to_data_LT7689` for pixel processing. One extra
+call, to a CRC-16 file-checksum utility — not dithering. No new leads for the color path.**
+
+Bounded by finding the true next function-start after `0x6c80`: the sorted set of every
+`call 0x6a9cXXXX` target anywhere in the DLL has a gap from `0x4b90` to `0x87d8` — i.e.
+nothing in the whole binary ever calls into the `0x4c00`-`0x87d0` range except by falling
+through as instructions, confirming `0x4e20` (`Gif_to_data_LT7689`) and `0x6c80`
+(`Gif_to_data`) are the only two entry points into that whole span, each other's neighbor.
+
+Direct call targets are identical to `Gif_to_data_LT7689`'s (`Image_IF_A_Png`,
+`Scan_aRGB8565`, `Scan_aRGB8888`, `SaveMode16`, `SaveMode24`, the three flash-blob writers,
+the same CRT/Qt boilerplate helpers) with exactly one addition: `0x6a9c17f0`, and exactly
+one omission (`0x6a9c97a0`, a boilerplate helper — not significant). All register-indirect
+calls resolve to the identical `QImage`/`QString` accessor set as `Gif_to_data_LT7689` — no
+new call target of any kind in the pixel-processing path.
+
+### `0x6a9c17f0` (unexported, VA `0x6a9c17f0`-`0x6a9c19b0`, 448 bytes) — new, called only from `Gif_to_data`
+
+**Verdict: a CRC-16 file-checksum utility. Not dithering.**
+
+Opens/reads a file in `0x800` (2048)-byte chunks (via a handful of unnamed IAT calls — a
+`QFile`-shaped open/read/close sequence at IAT slots `0x6a9d0234`/`0x220`/`0x210`/`0x20c`/
+`0x214`, not yet matched to demangled names) into a heap buffer, and folds each byte through
+a classic split-table CRC update: `idx = (crc>>8) ^ byte; crc = table_hi[idx] ^ ((crc & 0xff
+... ) | table_lo[idx]<<8)`ish (see disassembly for the exact byte order), using two 256-byte
+tables at `.rdata` VAs `0x6a9cb080` (high-byte contributions) and `0x6a9cb180` (low-byte
+contributions), initial value `0xffff`. Byte-for-byte diffed against a from-scratch table for
+the reflected polynomial `0xA001` (standard **CRC-16/ARC**, the exact same polynomial already
+used by this repo's own `crc16_packet()` for the wire protocol) — exact match:
+
+```
+table@0x6a9cb080 first 16 bytes: 00 c0 c1 01 c3 03 02 c2 c6 06 07 c7 05 c5 c4 04
+CRC-16/ARC high-byte table:      00 c0 c1 01 c3 03 02 c2 c6 06 07 c7 05 c5 c4 04
+table@0x6a9cb180 first 16 bytes: 00 c1 81 40 01 c0 80 41 01 c0 80 41 00 c1 81 40
+CRC-16/ARC low-byte table:       00 c1 81 40 01 c0 80 41 01 c0 80 41 00 c1 81 40
+```
+
+Almost certainly used to checksum a freshly-written flash-blob file before/after saving it
+to disk — an integrity check, not part of the pixel pipeline. `Gif_to_data_LT7689` never
+calls this function; that's the one real difference between the two sibling exports.
+
 ## What this rules in/out, and what's left
 
 Ruled out as the location of the dithering decision (fully traced, confirmed no per-pixel
 channel branching or diffusion state): `Scan_aRGB8565`, `Scan_aRGB8888`, `SaveMode16` (all
 branches), `SaveMode24`, `Scan_ColorTB_Data`, `Scan_ColorTB_from_image_data`,
-`Image_u16Data_to_colorTBu8Data`, `ColorTB_u8Data_to_zipU8Data`, and every reachable call
-inside `Gif_to_data_LT7689` itself (direct or indirect).
+`Image_u16Data_to_colorTBu8Data`, `ColorTB_u8Data_to_zipU8Data`, every reachable call inside
+`Gif_to_data_LT7689` itself (direct or indirect), **and now `Gif_to_data`** (its sibling
+export) — confirmed functionally identical to `Gif_to_data_LT7689` for pixel processing,
+its only addition being an unrelated CRC-16 file-checksum call (`0x6a9c17f0`, confirmed
+standard CRC-16/ARC, see above). **Every exported GIF-relevant function in `pic_scan.dll`,
+and everything reachable from any of them, has now been examined.**
 
 Given the wire-capture evidence (established back in `[0.6.1]`-`[0.6.9]`) that already-
 dithered pixel patterns appear in the bytes actually transmitted, the dithering must happen
-somewhere in the PC-side pipeline before transmission — but demonstrably not in anything
-reachable from `Gif_to_data_LT7689`. Two remaining candidates, neither examined yet:
-
-1. **`Gif_to_data`** (ordinal 4, VA `0x6a9c6c80`) — the non-`_LT7689` sibling export.
-   Untraced this round; earlier recon noted "an almost identical call-target profile" to
-   `Gif_to_data_LT7689` but that was based on call-target addresses only, not a full trace —
-   worth confirming whether it's truly parallel or diverges somewhere meaningful.
-2. **Code outside `pic_scan.dll` entirely** — e.g. in the qt-tool GUI executable itself,
-   which calls into this DLL. A `QImage::convertToFormat()` call with an explicit dithering
-   flag (Qt supports ordered/diffuse dithering on format conversion) executed by the *app*
-   before ever calling into `pic_scan.dll` would be invisible from inside this DLL no matter
-   how thoroughly it's traced.
+somewhere in the PC-side pipeline before transmission — but demonstrably not anywhere in
+`pic_scan.dll` itself. The one remaining candidate: **code outside `pic_scan.dll` entirely**
+— e.g. in the qt-tool GUI executable itself, which calls into this DLL. A
+`QImage::convertToFormat()` call with an explicit dithering flag (Qt supports ordered/diffuse
+dithering on format conversion) executed by the *app* before ever calling into `pic_scan.dll`
+would be invisible from inside this DLL no matter how thoroughly it's traced — the qt-tool
+`.exe` itself (not yet disassembled at all) is the next and, as far as this DLL's contents
+go, only place left to look.

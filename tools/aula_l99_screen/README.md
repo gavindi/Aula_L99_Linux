@@ -885,13 +885,28 @@ entire reachable call graph — direct and indirect — is now exhaustively
 traced and confirmed free of any per-pixel dithering decision. Since the
 wire captures already proved dithered patterns exist in what's actually
 transmitted, the logic must live somewhere in the PC-side pipeline before
-upload — just demonstrably not anywhere this export reaches. Two
-untested leads remain: the sibling export `Gif_to_data` (non-`_LT7689`,
-never actually traced despite a similar call-target profile), and code in
-the qt-tool app itself, outside `pic_scan.dll` entirely. Full disassembly
-transcript and per-function notes are checked in at
+upload — just demonstrably not anywhere this export reaches. Full
+disassembly transcript and per-function notes are checked in at
 [`re_notes/pic_scan_dll.md`](re_notes/pic_scan_dll.md) so this doesn't
 have to be re-derived from scratch again.
+
+**Immediately closed the one remaining in-DLL lead: `Gif_to_data` (the
+non-`_LT7689` sibling) is functionally identical for pixel processing —
+the dithering isn't there either.** Its only real difference is one extra
+call, into a previously-unnoticed unexported helper that reads a file in
+2KB chunks and computes a running checksum via two 256-byte lookup
+tables. Dumped those tables straight from the PE image and diffed them
+byte-for-byte against a from-scratch table for the reflected polynomial
+`0xA001` — the same polynomial this repo's own `crc16_packet()` already
+uses — and they match exactly: standard **CRC-16/ARC**. A file-integrity
+checksum, not part of the color pipeline. That means **every exported
+GIF-relevant function in `pic_scan.dll`, and everything reachable from
+any of them, has now been examined**, and the dithering decision is
+demonstrably not anywhere in this DLL. The one remaining candidate is the
+qt-tool app's own `.exe` (not yet disassembled at all) — e.g. a
+`QImage::convertToFormat()` call with an explicit dithering flag, executed
+by the app before ever calling into `pic_scan.dll`, which no amount of
+tracing this DLL could ever reveal.
 
 ## Image format
 

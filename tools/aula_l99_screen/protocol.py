@@ -1360,15 +1360,32 @@ GIF_FLASH_BASE = 0x04240000
 # wire-capture evidence (0.6.1-0.6.9) already showed dithered patterns in
 # the bytes actually transmitted, the dithering must happen somewhere in
 # the PC-side pipeline before transmission -- but demonstrably not in
-# anything Gif_to_data_LT7689 reaches. Two untested candidates remain: the
-# sibling export Gif_to_data (non-_LT7689, never actually traced despite
-# a similar call-target profile), and code in the qt-tool app itself
-# outside pic_scan.dll entirely (e.g. a QImage::convertToFormat() call
-# with an explicit dithering flag, invisible from inside this DLL no
-# matter how thoroughly it's traced). Full disassembly transcript,
+# anything Gif_to_data_LT7689 reaches. Full disassembly transcript,
 # RVA/export/import tables, and per-function notes are checked in at
 # tools/aula_l99_screen/re_notes/pic_scan_dll.md so this doesn't have to
 # be re-derived again.
+#
+# Immediately followed up on the one remaining in-DLL candidate: traced
+# Gif_to_data, the non-_LT7689 sibling export. Its direct-call set is
+# identical to Gif_to_data_LT7689's (same Scan_aRGB8565/8888, SaveMode16/
+# SaveMode24, flash-blob writers) with exactly one addition -- an
+# unexported helper at VA 0x6a9c17f0 that reads a file in 2KB chunks and
+# computes a running checksum via two 256-byte tables at .rdata VAs
+# 0x6a9cb080/0x6a9cb180. Dumped those tables directly from the PE image
+# and diffed them byte-for-byte against a from-scratch table for the
+# reflected polynomial 0xA001 (the same poly this file's own
+# crc16_packet() already uses) -- exact match, confirmed standard
+# CRC-16/ARC. This is a file-integrity checksum, unrelated to pixel
+# dithering; Gif_to_data is otherwise functionally identical to
+# Gif_to_data_LT7689 for pixel processing. This rules out BOTH GIF-export
+# entry points in pic_scan.dll -- every exported GIF-relevant function in
+# the DLL, and everything reachable from any of them, has now been
+# examined. The dithering decision is not anywhere in pic_scan.dll. The
+# one remaining candidate is the qt-tool app's own .exe (not yet
+# disassembled at all) -- e.g. a QImage::convertToFormat() call with an
+# explicit dithering flag, executed by the app before ever calling into
+# this DLL, which would be invisible no matter how thoroughly the DLL is
+# traced.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region
