@@ -9,8 +9,8 @@ separate `EEEF:268A` USB-serial device, already documented in
 
 Confirmed on real hardware (wired `0C45:800A`, interface 3):
 
-- Session framing, writing per-key RGB, selecting built-in effects, and the
-  RTC-set command.
+- Session framing, writing per-key RGB, reading per-key RGB back, selecting
+  built-in effects, and the RTC-set command.
 - Every packet builder in `protocol.py` reproduces the vendor app's own packets
   byte-for-byte — see "Verifying against a capture" below.
 
@@ -36,6 +36,9 @@ python3 -m aula_l99_hacky.cli --handshake --debug
 
 # set every key to one colour, stored on the keyboard
 python3 -m aula_l99_hacky.cli --color 00FF00
+
+# read back every key's current colour
+python3 -m aula_l99_hacky.cli --read-color
 
 # run a built-in effect: id, colour, speed 1-5
 python3 -m aula_l99_hacky.cli --list-effects
@@ -75,12 +78,23 @@ Data blocks flow *out* from the host for a write (`0x23`) and *back* from the
 device for a query (`0xF5`). The command header looks identical either way, so
 always check the direction of a captured packet before assuming it is a write.
 
-**Colour blocks.** Nine blocks: eight key rows plus a zero-filled terminator.
-Each row holds 16 entries of 4 bytes, `[key_id, R, G, B]`, where the entry's
-position is the key id's low nibble and the block index is its high nibble.
-Colour is plain RGB, passed through literally (verified with `#00FF00` →
-`00 ff 00` and `#0000FF` → `00 00 ff`). The L99 has 84 keys in ids `0x00`–`0x7F`;
-positions with no physical key are sent as four zero bytes.
+A query is **not** wrapped in a begin/commit/end session the way a write is.
+The vendor app's steady-state poll loop, confirmed against a capture, is just
+`commit -> query -> 9 blocks in`, repeated: the commit closes out the previous
+read before the next query is issued. An unrelated begin/effect/commit/end
+session elsewhere in the same capture (the user picking an effect) runs
+independently and doesn't interrupt the poll. `cmd_read_color()` in `cli.py`
+reproduces this exact sequence and has been run against real hardware.
+
+**Colour blocks.** A write is nine blocks: eight key rows plus a zero-filled
+terminator carrying `AA 55`. A query reply is also nine blocks but has no
+terminator — all nine are real rows (`0x00`–`0x8F`), the ninth simply has no
+physical keys in it. Each row holds 16 entries of 4 bytes, `[key_id, R, G, B]`,
+where the entry's position is the key id's low nibble and the block index is
+its high nibble. Colour is plain RGB, passed through literally (verified with
+`#00FF00` → `00 ff 00` and `#0000FF` → `00 00 ff`). The L99 has 84 keys in ids
+`0x00`–`0x7F`; positions with no physical key are sent/received as four zero
+bytes.
 
 **Effect blocks.** One block, with the trailer at bytes 14–15 rather than
 62–63 — the trailer marks end-of-record and records are not all the same

@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-07-31
+
+**Touchscreen upload's fixed 5ms inter-packet delay made tunable from the
+GUI, then its default dropped to 0ms after the user confirmed a transfer at
+0ms works reliably on real hardware -- the delay was a defensive default,
+not a firmware requirement. Separately, `aula_l99_hacky` gained a
+`--read-color` command, reading each key's actual current colour back off
+the keyboard -- the read opcode existed as a named constant but had never
+been implemented.**
+
+### Added
+- "Packet gap (ms)" `QDoubleSpinBox` in the Touchscreen tab's "Send to
+  Device" group (`touchscreen_tab.py`, range 0.0-50.0, 0.5 step), read in
+  `_start_upload` and passed straight through to `ScreenUploadWorker`'s
+  existing `gap` parameter (`workers.py`), which already looped
+  `time.sleep(self._gap)` after every packet but had no GUI control -- the
+  value was hardcoded at the call site.
+- `aula_l99_hacky`'s `--read-color` (`cli.py`'s `cmd_read_color`), reading
+  every physical key's current colour back off the keyboard. `OP_COLOR_QUERY`
+  (`0xF5`) had been in `protocol.py` since early on as a named opcode with a
+  comment noting reading was never implemented; the missing piece was the
+  wire sequence, which isn't the begin/commit/end session the write path
+  uses. Recovered it by decoding `tmp/l99dump1.pcapng` (a previously-unparsed
+  raw USBPcap capture) byte-for-byte: the vendor app's steady-state poll is
+  just `commit -> query -> 9 raw data blocks in`, repeated, with an unrelated
+  begin/effect/commit/end session elsewhere in the same capture running
+  independently without interrupting it. `protocol.py` gained
+  `build_color_query_commands()` and `parse_color_blocks()` (the inverse of
+  `build_color_blocks()`, minus the write path's terminator block -- a query
+  reply's ninth block is just an ordinary, always-empty row rather than an
+  `AA 55` sentinel). Confirmed end-to-end against real hardware: all 84 keys
+  read back correctly.
+
+### Changed
+- `DEFAULT_PACKET_GAP_MS` (`touchscreen_tab.py`) and the CLI's `--gap`
+  default (`aula_l99_screen/cli.py`) both lowered from their prior
+  0.005s/5ms default to `0.0`. Investigated after the user asked whether
+  the transfer could be sped up: neither `protocol.py`'s reverse-engineering
+  notes nor any code comment tied the delay to an actual firmware
+  requirement -- the real per-packet cost is the sequential
+  write-then-block-on-ack loop in `SerialTransport`
+  (`aula_l99_screen/device.py`), not this sleep. Confirmed on real hardware
+  at 0ms before lowering the default; the spinbox remains available to dial
+  back up if a future transfer on different hardware turns out to need it.
+
 ## [0.9.5] - 2026-07-31
 
 **GUI: Touchscreen tab's "Animation Settings" delay/dither controls

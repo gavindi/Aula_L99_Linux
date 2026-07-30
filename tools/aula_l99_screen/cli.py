@@ -306,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "real hardware. This dithering path is now CONFIRMED working "
                              "on real hardware too, including the automatic raw-bitmap-mode "
                              "fallback for oversized content")
-    parser.add_argument("--gap", type=float, default=0.005,
+    parser.add_argument("--gap", type=float, default=0.0,
                         help="seconds between packets (default %(default)s)")
     parser.add_argument("--ignore-nak", action="store_true",
                         help="keep going when a packet is not acked")

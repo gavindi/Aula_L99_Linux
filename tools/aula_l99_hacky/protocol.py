@@ -45,7 +45,23 @@ OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # The vendor app polls this ~27x/s to drive its
                          # on-screen preview, which means lighting effects run
                          # on the keyboard rather than being streamed from the
-                         # PC. Reading is not implemented here yet.
+                         # PC.
+                         #
+                         # Confirmed against tmp/l99dump1.pcapng: unlike the
+                         # write path, a query is NOT wrapped in a
+                         # begin/commit/end session. The steady-state poll
+                         # loop is just commit -> query -> 9 blocks in,
+                         # repeated, with the commit apparently only needed
+                         # to close out the previous query's read before the
+                         # next one is issued (the very first query in the
+                         # capture is preceded by a bare commit, not a
+                         # begin). A begin/effect-select/commit/end session
+                         # elsewhere in the same capture happens independent
+                         # of this loop and doesn't interrupt it. The 9
+                         # blocks carry the same [key_id, R, G, B] x16 layout
+                         # as a write, except there is no terminator block:
+                         # all 9 are real rows (0x00-0x8F), the 9th simply
+                         # has no physical keys mapped into it.
 OP_EFFECT = 0x13         # select a built-in effect (1 block out)
 OP_END = 0xF0            # close a session
 
@@ -246,6 +262,37 @@ def build_color_blocks(colors: dict[int, tuple[int, int, int]]) -> list[bytes]:
 def build_uniform_colors(rgb: tuple[int, int, int]) -> dict[int, tuple[int, int, int]]:
     """Every physical key set to one colour."""
     return {key_id: rgb for key_id in KEY_IDS}
+
+
+def parse_color_blocks(blocks: list[bytes]) -> dict[int, tuple[int, int, int]]:
+    """Decode the data blocks returned by an OP_COLOR_QUERY read.
+
+    Inverse of build_color_blocks(), except a query reply has no terminator
+    block: every block is a real row, so all of them are scanned the same way.
+    Positions with no physical key (key id absent from KEY_IDS, including the
+    all-zero padding in the last block) are dropped.
+    """
+    colors: dict[int, tuple[int, int, int]] = {}
+    for block in blocks:
+        for column in range(KEYS_PER_ROW):
+            offset = column * BYTES_PER_KEY
+            key_id = block[offset]
+            if key_id in KEY_IDS:
+                colors[key_id] = tuple(block[offset + 1:offset + 4])
+    return colors
+
+
+def build_color_query_commands() -> list[Transaction]:
+    """The two framed commands that precede a colour read: commit (closing
+    out whatever came before) then the query itself, announcing 9 inbound
+    blocks. Follow this with COLOR_BLOCK_COUNT raw get_feature() reads, which
+    have no framing of their own -- see parse_color_blocks()."""
+    return [
+        Transaction("commit", build_command(OP_COMMIT), expect_reply=True,
+                    retry_until_ack=True),
+        Transaction("color-query", build_command(OP_COLOR_QUERY, COLOR_BLOCK_COUNT),
+                    expect_reply=True, retry_until_ack=True),
+    ]
 
 
 def build_rtc_blocks(when: datetime) -> list[bytes]:

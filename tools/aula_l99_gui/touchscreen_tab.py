@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QDoubleSpinBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -40,6 +41,7 @@ from .device_utils import SCREEN_PERMISSION_HINT
 from .workers import CallableResultWorker, ScreenUploadWorker, start_worker
 
 DEFAULT_GIF_DELAY = 50
+DEFAULT_PACKET_GAP_MS = 0.0
 THUMBNAIL_ICON_SIZE = QSize(96, 144)
 STRIP_ICON_SIZE = QSize(64, 96)
 PREVIEW_ICON_SIZE = QSize(200, 300)  # same 2:3 aspect as the panel (320x480)
@@ -423,6 +425,20 @@ class TouchscreenTab(QWidget):
         self.customized_animation_button.clicked.connect(self._on_upload_gif)
         layout.addWidget(self.customized_animation_button)
 
+        layout.addStretch(1)
+        layout.addWidget(QLabel("Packet gap (ms):"))
+        self.packet_gap_spin = QDoubleSpinBox()
+        self.packet_gap_spin.setRange(0.0, 50.0)
+        self.packet_gap_spin.setSingleStep(0.5)
+        self.packet_gap_spin.setDecimals(1)
+        self.packet_gap_spin.setValue(DEFAULT_PACKET_GAP_MS)
+        self.packet_gap_spin.setToolTip(
+            "Delay after each packet during upload. Lower is faster but "
+            "unverified against the panel's firmware -- if transfers start "
+            "failing, raise this back up."
+        )
+        layout.addWidget(self.packet_gap_spin)
+
         return group
 
     def _build_gif_group(self) -> QGroupBox:
@@ -763,7 +779,9 @@ class TouchscreenTab(QWidget):
         # safe once the *old* QThread has actually stopped, which is why
         # `self._busy` (guarding re-entry into this method) is cleared from
         # `thread.finished`, not `worker.finished` -- see _on_thread_stopped.
-        self._worker = ScreenUploadWorker(device_path, packets)
+        self._worker = ScreenUploadWorker(
+            device_path, packets, gap=self.packet_gap_spin.value() / 1000.0
+        )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._thread = start_worker(self._worker)

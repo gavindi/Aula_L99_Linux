@@ -4,6 +4,7 @@ Usage:
     python3 -m aula_l99_hacky.cli --list
     python3 -m aula_l99_hacky.cli --handshake
     python3 -m aula_l99_hacky.cli --color 0000FF
+    python3 -m aula_l99_hacky.cli --read-color
     python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
     python3 -m aula_l99_hacky.cli --rtc
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
@@ -147,6 +148,42 @@ def cmd_color(args: argparse.Namespace) -> int:
     return 1 if _run_sequence(device, transactions, args) else 0
 
 
+def cmd_read_color(args: argparse.Namespace) -> int:
+    device = find_l99()
+    if not _require_cable(device, "reading colours"):
+        return 1
+
+    print(f"using {device.path}; reading per-key colour")
+    with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
+        for tx in protocol.build_color_query_commands():
+            attempts = protocol.SESSION_OPEN_RETRIES if tx.retry_until_ack else 1
+            reply = None
+            for attempt in range(1, attempts + 1):
+                reply = _run_cable(transport, tx, args.debug, args.gap)
+                if reply is None or _acked(tx, reply):
+                    break
+                if attempt < attempts:
+                    time.sleep(protocol.RETRY_DELAY_SECONDS)
+            if reply is not None and not _acked(tx, reply):
+                print(f"{tx.name}: WARNING no ack, got {reply[:4].hex()}", file=sys.stderr)
+                return 1
+
+        blocks = []
+        for i in range(protocol.COLOR_BLOCK_COUNT):
+            block = transport.get_feature(protocol.REPORT_ID, protocol.PACKET_SIZE + 1)[1:]
+            time.sleep(args.gap)
+            if args.debug:
+                print(f"block{i}: in ={block.hex()}")
+            blocks.append(block)
+
+    colors = protocol.parse_color_blocks(blocks)
+    for key_id in protocol.KEY_IDS:
+        r, g, b = colors.get(key_id, (0, 0, 0))
+        row, col = key_id >> 4, key_id & 0x0F
+        print(f"  key 0x{key_id:02X} (row {row}, col {col:2d}): #{r:02X}{g:02X}{b:02X}")
+    return 0
+
+
 def cmd_effect(args: argparse.Namespace) -> int:
     device = find_l99()
     if not _require_cable(device, "selecting effects"):
@@ -223,6 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="list hidraw devices and exit")
     parser.add_argument("--handshake", action="store_true", help="open and close a session")
     parser.add_argument("--color", metavar="RRGGBB", help="set every key to one colour")
+    parser.add_argument("--read-color", action="store_true",
+                        help="read back every key's current colour")
     parser.add_argument("--effect", metavar="ID",
                         help="select a built-in effect by id, e.g. 0x05 (see --list-effects)")
     parser.add_argument("--list-effects", action="store_true",
@@ -262,6 +301,8 @@ def main() -> int:
             return cmd_effect(args)
         if args.color:
             return cmd_color(args)
+        if args.read_color:
+            return cmd_read_color(args)
         if args.rtc:
             return cmd_rtc(args)
         if args.send_hex:
