@@ -1325,6 +1325,50 @@ GIF_FLASH_BASE = 0x04240000
 # wasn't perfectly flat, not investigated. It is NOT raw RGB565 for the
 # RLE-mode frames (well under width*height*2 bytes), not zlib, not
 # raw-deflate. No JPEG SOI marker (FFD8) appears anywhere in a frame.
+#
+# Resumed the 0.7.7 static-analysis pivot and closed it out: disassembled
+# two previously-unexamined exports, SaveMode16 (VA 0x6a9c24f0) and
+# SaveMode24 (0x6a9c3290), both called directly by Gif_to_data_LT7689.
+# SaveMode16 dispatches on a mode parameter -- modes {2,5} pack ARGB4444,
+# modes {1,4} pack RGB565 (plain shift+mask truncation, with a special
+# case remapping opaque pure-black to 0x0021 so 0x0000 stays a
+# transparency sentinel), and all other modes take a "default" path that
+# ALSO just does RGB565 truncation. Modes {3,4,5} then proceed to call
+# Scan_ColorTB_Data -> Scan_ColorTB_from_image_data ->
+# Image_u16Data_to_colorTBu8Data -> ColorTB_u8Data_to_zipU8Data -- the
+# exact chain from 0.7.7, now confirmed reachable end-to-end from
+# Gif_to_data_LT7689 via SaveMode16, closing the gap 0.7.7 left open.
+# SaveMode24 is confirmed the trivial 24bpp sibling (lossless 8-bit
+# passthrough, no quantization needed, not a dithering candidate).
+# Also fully traced Scan_ColorTB_Data (pure per-chunk orchestration,
+# looping up to 255 times over Scan_ColorTB_from_image_data -- clarifying
+# that the "<=256px chunking" cap most likely originates in this
+# chunk-count limit, not the RLE token format's separate 256-run cap) and
+# Scan_ColorTB_from_image_data (confirmed exact-match palette dedup on
+# already-16-bit RGB565 words, zero per-channel math). Finally, all ~55
+# register-indirect calls inside Gif_to_data_LT7689 were traced back to
+# their register loads and resolved to QImage width/height/pixel/dtor,
+# QString/QCoreApplication housekeeping, or memory alloc/free/refcount
+# boilerplate -- none lead anywhere new.
+#
+# Net result: the ENTIRE call graph reachable from Gif_to_data_LT7689 is
+# now exhaustively traced (not "partially traced, banked" as in 0.7.7)
+# and confirmed free of any dithering decision -- every step is a
+# stateless, per-pixel-independent truncation, exact-equality comparison,
+# or RLE emission; no ramp constant appears as an immediate anywhere, and
+# no per-channel accumulator is carried across loop iterations. Since the
+# wire-capture evidence (0.6.1-0.6.9) already showed dithered patterns in
+# the bytes actually transmitted, the dithering must happen somewhere in
+# the PC-side pipeline before transmission -- but demonstrably not in
+# anything Gif_to_data_LT7689 reaches. Two untested candidates remain: the
+# sibling export Gif_to_data (non-_LT7689, never actually traced despite
+# a similar call-target profile), and code in the qt-tool app itself
+# outside pic_scan.dll entirely (e.g. a QImage::convertToFormat() call
+# with an explicit dithering flag, invisible from inside this DLL no
+# matter how thoroughly it's traced). Full disassembly transcript,
+# RVA/export/import tables, and per-function notes are checked in at
+# tools/aula_l99_screen/re_notes/pic_scan_dll.md so this doesn't have to
+# be re-derived again.
 
 # Write and final chunks are acked with a 19-byte reply ending in ASCII "OK".
 # Commits get a 21-byte reply instead, carrying a 4-byte checksum of the region

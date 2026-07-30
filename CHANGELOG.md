@@ -5,6 +5,87 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-07-30
+
+**"Save to GIF": resumed the 0.7.7 static-analysis pivot and closed it
+out -- traced two previously-unexamined `pic_scan.dll` exports
+(`SaveMode16`/`SaveMode24`), confirmed the entire `Gif_to_data_LT7689`
+call graph is now exhaustively free of dithering logic, and checked in a
+persisted RE artifact so this doesn't have to be re-derived again.**
+
+### Verified
+- **`SaveMode16`** (VA `0x6a9c24f0`, never examined in 0.7.7) dispatches
+  on a mode parameter: modes `{2,5}` pack ARGB4444, modes `{1,4}` pack
+  RGB565, and all other modes take a "default" path that also just does
+  RGB565 truncation -- all three are **plain bit-truncation, no
+  dithering** (one mode has an unrelated special case remapping opaque
+  pure-black to `0x0021` so `0x0000` stays a usable transparency
+  sentinel). Modes `{3,4,5}` then call onward into exactly the chain
+  traced in 0.7.7 -- `Scan_ColorTB_Data` -> `Scan_ColorTB_from_image_data`
+  -> `Image_u16Data_to_colorTBu8Data` -> `ColorTB_u8Data_to_zipU8Data` --
+  which **closes the GIF pipeline end-to-end for the first time**:
+  `Gif_to_data_LT7689` calls `SaveMode16` directly, resolving 0.7.7's
+  open question of how its four traced functions are actually reached.
+- **`SaveMode24`** (VA `0x6a9c3290`, also unexamined) confirmed as the
+  trivial 24bpp sibling -- lossless 8-bit passthrough, no quantization
+  possible at that depth, not a dithering candidate.
+- **`Scan_ColorTB_Data`** (VA `0x6a9c2420`, 208 bytes) fully traced: pure
+  per-chunk orchestration, looping up to 255 times over
+  `Scan_ColorTB_from_image_data`. Clarifies that the well-known
+  "chained in <=256px pieces" cap most likely originates in **this**
+  chunk-count limit, not the RLE token format's separately-identical
+  256-run cap in `ColorTB_u8Data_to_zipU8Data`.
+- **`Scan_ColorTB_from_image_data`** (VA `0x6a9c14d0`, 192 bytes) fully
+  traced: confirmed **exact-match palette dedup** on already-16-bit
+  RGB565 words via linear search, zero per-channel math of any kind.
+- **`ColorTB_u8Data_to_zipU8Data`** and **`Scan_aRGB8888`** (Checkpoints
+  A/B for this round) fully traced and confirmed as previously
+  characterized: pure RLE encoder (with a per-row raw-copy overflow
+  fallback) and a plain 32-bit raw-copy sibling of `Scan_aRGB8565`,
+  respectively. No dithering in either.
+- All ~55 register-indirect calls inside `Gif_to_data_LT7689` traced back
+  to their register loads: every one resolves to `QImage`
+  width/height/pixel/destructor, `QString`/`QCoreApplication` string and
+  event-loop housekeeping, or memory alloc/free/refcount boilerplate.
+
+### Changed
+- **`Gif_to_data_LT7689`'s entire reachable call graph -- direct and
+  indirect -- is now exhaustively traced**, not "partially traced,
+  banked" as in 0.7.7. Every step in the confirmed chain (raw pixel scan
+  -> RGB565 truncation -> palette dedup -> exact-match quantize -> RLE)
+  is a stateless, per-pixel-independent operation: no ramp constant
+  appears as an immediate anywhere, and no per-channel accumulator is
+  carried across loop iterations.
+- Since the wire-capture evidence (0.6.1-0.6.9) already proved dithered
+  patterns exist in the bytes actually transmitted, the dithering must
+  happen somewhere in the PC-side pipeline before upload -- just
+  demonstrably not anywhere `Gif_to_data_LT7689` reaches. Two untested
+  leads remain for a future round: the sibling export `Gif_to_data`
+  (non-`_LT7689`, never actually traced despite a similar call-target
+  profile), and code in the qt-tool app itself, outside `pic_scan.dll`
+  entirely (e.g. a `QImage::convertToFormat()` call with an explicit
+  dithering flag).
+
+### Added
+- `tools/aula_l99_screen/re_notes/pic_scan_dll.md`: the disassembly
+  transcript 0.7.7 was missing -- exact `objdump`/export-table commands,
+  the full ordinal/RVA/VA/name export table, relevant IAT import
+  resolutions, and per-function findings for every function traced this
+  round and in 0.7.7. Exists so the next round doesn't have to re-derive
+  RVAs and re-slice the disassembly from scratch.
+
+### Known gaps
+- The actual dithering decision algorithm is still not located -- this
+  round *ruled out* the previously-most-likely location rather than
+  finding it. `Gif_to_data` (non-`_LT7689`) and the qt-tool app's own
+  code outside `pic_scan.dll` are the two remaining candidates.
+- Same longstanding open items otherwise: the 528-byte prefix's exact
+  purpose (though `ColorTB_u8Data_to_zipU8Data` and `Scan_ColorTB_Data`
+  both independently touch a `0x204`/516-byte-strided region this round,
+  reinforcing but not proving the existing palette-table suspicion), the
+  exact diffusion coefficients/direction, the G ramp's off-by-one,
+  `mode_flag`'s exact overrun mechanics, `save_to_gif_2`'s inefficiency.
+
 ## [0.8.0] - 2026-07-30
 
 **New tool: `aula_l99_gui`, a PySide6 GUI wrapping both `aula_l99_hacky`

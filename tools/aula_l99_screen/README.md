@@ -858,6 +858,41 @@ symbol to search for. Finding it would mean methodically stepping
 through that function's full call graph — banked here as a larger effort
 for later.
 
+**Resumed and closed out the disassembly pivot: traced two previously-
+unexamined exports and confirmed the entire `Gif_to_data_LT7689` call
+graph contains no dithering logic anywhere.** `SaveMode16` and
+`SaveMode24` — both called directly by `Gif_to_data_LT7689`, neither
+looked at in the round above — turned out to be the missing link.
+`SaveMode16` dispatches on a mode parameter: some modes pack ARGB4444 or
+RGB565 via plain bit truncation (no dithering; one mode has a neat but
+unrelated special case reserving `0x0000` as a transparency sentinel),
+and for modes 3/4/5 it then calls onward into exactly the chain traced
+earlier — `Scan_ColorTB_Data` → `Scan_ColorTB_from_image_data` →
+`Image_u16Data_to_colorTBu8Data` → `ColorTB_u8Data_to_zipU8Data` — closing
+the pipeline end-to-end for the first time. `SaveMode24` is the trivial
+24bpp sibling (lossless passthrough, no quantization possible at 8-bit
+depth). `Scan_ColorTB_Data` turned out to be pure per-chunk orchestration
+(loops up to 255 times, clarifying that the "≤256px chunking" cap likely
+originates here rather than in the RLE token format's separate 256-run
+cap), and `Scan_ColorTB_from_image_data` is confirmed exact-match palette
+dedup on already-16-bit words with zero channel math. Finally, all ~55
+register-indirect calls inside `Gif_to_data_LT7689` were traced back to
+their register loads — every one resolves to `QImage` accessors, `QString`/
+`QCoreApplication` housekeeping, or memory alloc/free/refcount boilerplate.
+
+The net result is stronger than "banked for later": `Gif_to_data_LT7689`'s
+entire reachable call graph — direct and indirect — is now exhaustively
+traced and confirmed free of any per-pixel dithering decision. Since the
+wire captures already proved dithered patterns exist in what's actually
+transmitted, the logic must live somewhere in the PC-side pipeline before
+upload — just demonstrably not anywhere this export reaches. Two
+untested leads remain: the sibling export `Gif_to_data` (non-`_LT7689`,
+never actually traced despite a similar call-target profile), and code in
+the qt-tool app itself, outside `pic_scan.dll` entirely. Full disassembly
+transcript and per-function notes are checked in at
+[`re_notes/pic_scan_dll.md`](re_notes/pic_scan_dll.md) so this doesn't
+have to be re-derived from scratch again.
+
 ## Image format
 
 Byte-identical to what the vendor's own `qt-tool/Image2Bin.exe` produces:
