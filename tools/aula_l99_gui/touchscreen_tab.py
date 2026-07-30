@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import pathlib
 import shutil
 import subprocess
@@ -41,6 +42,7 @@ from .workers import CallableResultWorker, ScreenUploadWorker, start_worker
 DEFAULT_GIF_DELAY = 50
 THUMBNAIL_ICON_SIZE = QSize(96, 144)
 STRIP_ICON_SIZE = QSize(64, 96)
+PREVIEW_ICON_SIZE = QSize(200, 300)  # same 2:3 aspect as the panel (320x480)
 SOURCE_IMAGE_FILTER = "Supported files (*.png *.jpg *.jpeg *.gif *.mp4)"
 SINGLE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
@@ -182,7 +184,14 @@ class TouchscreenTab(QWidget):
         self.source_strip.setFixedHeight(STRIP_ICON_SIZE.height() + 30)
         self.source_strip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.source_strip.customContextMenuRequested.connect(self._on_source_strip_context_menu)
+        self.source_strip.currentItemChanged.connect(self._on_source_image_selected)
         layout.addWidget(self.source_strip)
+
+        self.source_preview = QLabel("(no image selected)")
+        self.source_preview.setObjectName("ImagePreview")
+        self.source_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.source_preview.setFixedSize(PREVIEW_ICON_SIZE)
+        layout.addWidget(self.source_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         return group
 
@@ -320,19 +329,53 @@ class TouchscreenTab(QWidget):
             self.source_strip.addItem(item)
         self._sync_send_buttons()
 
-    def _load_source_thumbnail(self, path: str) -> QPixmap:
+    def _load_source_thumbnail(self, path: str, size: QSize = STRIP_ICON_SIZE) -> QPixmap:
+        pixmap = None
         try:
             with Image.open(path) as im:
                 pixmap = self._to_pixmap(im.convert("RGB"))
-        except Exception:  # noqa: BLE001 - e.g. .mp4, or a missing/moved file
-            pixmap = QPixmap(STRIP_ICON_SIZE)
+        except Exception:  # noqa: BLE001 - not Pillow-openable, e.g. .mp4
+            pass
+        if pixmap is None and pathlib.Path(path).suffix.lower() == ".mp4":
+            frame = self._video_thumbnail_frame(path)
+            if frame is not None:
+                pixmap = self._to_pixmap(frame)
+        if pixmap is None:
+            pixmap = QPixmap(size)
             pixmap.fill(Qt.GlobalColor.darkGray)
             return pixmap
         return pixmap.scaled(
-            STRIP_ICON_SIZE,
+            size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+    def _video_thumbnail_frame(self, path: str):
+        # Best-effort only: a thumbnail failure should fall back to the grey
+        # placeholder tile, never raise/crash the UI -- unlike
+        # _extract_video_frames, which raises since it feeds an actual upload.
+        if shutil.which("ffmpeg") is None:
+            return None
+        command = [
+            "ffmpeg", "-i", path, "-vframes", "1",
+            "-f", "image2pipe", "-vcodec", "png", "-",
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, check=True)
+            return Image.open(io.BytesIO(result.stdout)).convert("RGB")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _on_source_image_selected(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
+    ) -> None:
+        if current is None:
+            self.source_preview.setPixmap(QPixmap())
+            self.source_preview.setText("(no image selected)")
+            return
+        source_path = current.data(Qt.ItemDataRole.UserRole)
+        self.source_preview.setPixmap(self._load_source_thumbnail(source_path, PREVIEW_ICON_SIZE))
+        self.source_preview.setText("")
 
     def _on_choose_source_images(self) -> None:
         if Image is None:
@@ -386,21 +429,17 @@ class TouchscreenTab(QWidget):
         group = QGroupBox("Animation Settings")
         layout = QVBoxLayout(group)
 
-        delay_row = QHBoxLayout()
-        delay_row.addWidget(QLabel("Delay (centiseconds):"))
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(QLabel("Delay (centiseconds):"))
         self.gif_delay_spin = QSpinBox()
         self.gif_delay_spin.setRange(1, 1000)
         self.gif_delay_spin.setValue(DEFAULT_GIF_DELAY)
-        delay_row.addWidget(self.gif_delay_spin)
-        delay_row.addStretch(1)
-        layout.addLayout(delay_row)
-
-        dither_row = QHBoxLayout()
+        settings_row.addWidget(self.gif_delay_spin)
         self.dither_checkbox = QCheckBox("Dither")
         self.dither_checkbox.setChecked(True)
-        dither_row.addWidget(self.dither_checkbox)
-        dither_row.addStretch(1)
-        layout.addLayout(dither_row)
+        settings_row.addWidget(self.dither_checkbox)
+        settings_row.addStretch(1)
+        layout.addLayout(settings_row)
 
         return group
 

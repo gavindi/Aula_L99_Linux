@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-07-31
+
+**GUI: Touchscreen tab's "Animation Settings" delay/dither controls
+combined onto one row, a preview panel added below the Source Images list,
+and `.mp4` sources now get a real extracted-frame thumbnail instead of a
+flat grey tile.**
+
+### Added
+- A preview panel (`self.source_preview`, reusing the existing but
+  previously-orphaned `QLabel#ImagePreview` styling from the removed
+  single-image upload section) below the "Source Images" strip, showing a
+  larger thumbnail of whichever source item is currently selected --
+  `source_strip.currentItemChanged` drives `_on_source_image_selected`,
+  which reuses `_load_source_thumbnail` at a bigger `PREVIEW_ICON_SIZE`
+  (200x300, matching the panel's 2:3 aspect) instead of duplicating the
+  loading logic. Falls back to "(no image selected)" placeholder text with
+  no selection.
+- `_video_thumbnail_frame`: shells out to `ffmpeg -vframes 1 -f image2pipe
+  -vcodec png -` to grab an `.mp4`'s first frame as a real thumbnail, for
+  both the Source Images strip and the new preview panel -- previously any
+  `.mp4` just showed the generic grey placeholder tile, indistinguishable
+  from a missing/corrupt file. Best-effort only (returns `None` on any
+  failure -- no ffmpeg, decode error) so a bad video can't crash the UI;
+  falls back to the grey tile same as before when extraction fails.
+
+### Changed
+- "Delay (centiseconds)" and "Dither" moved onto one shared row in the
+  Animation Settings group instead of two stacked rows.
+
 ## [0.9.4] - 2026-07-31
 
 **New `run.sh` at the repo root, launching the GUI without needing to
