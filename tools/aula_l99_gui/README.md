@@ -83,14 +83,15 @@ can freeze the panel.
 ## Files
 
 - `main.py` — entry point (`sys.path` bootstrap + `QApplication`)
-- `main_window.py` — top-level window, hosts the three tabs
-- `device_tab.py` — the Device tab and the `DeviceSelector` widget both control
+- `main_window.py` — top-level window, hosts the four tabs
+- `device_tab.py` — the Device tab and the `DeviceSelector` widget the other
   tabs are wired to; owns all enumeration, selection and auto-detect logic
-- `keyboard_tab.py` / `screen_tab.py` — the two control tabs
+- `keyboard_tab.py` / `lighting_tab.py` / `touchscreen_tab.py` — the three
+  control tabs (RTC clock; per-key color and effects; image/GIF upload)
 - `workers.py` — background `QThread` workers that do the actual device I/O, so the
   UI stays responsive during a handshake or upload
 - `device_utils.py` — device enumeration and permission-error hint text shared by
-  both tabs
+  all three control tabs
 - `theme.py` / `slice_skin.py` / `assets/` — the vendor skin, see below
 
 ## The skin

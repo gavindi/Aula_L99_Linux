@@ -48,7 +48,7 @@ def _pillow_missing_message() -> str:
     return "Pillow is required to load images (pip install pillow)."
 
 
-class ScreenTab(QWidget):
+class TouchscreenTab(QWidget):
     def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
         self._selector = selector
@@ -72,7 +72,7 @@ class ScreenTab(QWidget):
         layout = QVBoxLayout(self)
 
         # Read-only mirror of the Device tab's status line -- see the same
-        # comment in keyboard_tab.py.
+        # comment in lighting_tab.py.
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)

@@ -71,7 +71,7 @@ def _resolve_screen(devices: list) -> tuple[int, str, bool]:
 class DeviceSelector(QGroupBox):
     """Combo + Refresh + status line for one device family."""
 
-    changed = Signal(str, bool)  # status text, actions enabled
+    changed = Signal(str, bool, bool)  # status text, actions enabled, known device found
 
     def __init__(
         self,
@@ -87,6 +87,7 @@ class DeviceSelector(QGroupBox):
         self._devices: list = []
         self._status = ""
         self._enabled = False
+        self._found = False
 
         layout = QVBoxLayout(self)
 
@@ -122,8 +123,12 @@ class DeviceSelector(QGroupBox):
 
         self._status = status
         self._enabled = enabled
+        # A known VID:PID match (cable, dongle, or screen), independent of
+        # `enabled` -- the dongle is recognized but unsupported for actions,
+        # yet it's still "our" hardware plugged in over USB.
+        self._found = index >= 0
         self.status_label.setText(status)
-        self.changed.emit(status, enabled)
+        self.changed.emit(status, enabled, self._found)
 
     def current_path(self) -> str | None:
         index = self.device_combo.currentIndex()
@@ -132,7 +137,7 @@ class DeviceSelector(QGroupBox):
         return None
 
     def _on_combo_changed(self) -> None:
-        self.changed.emit(self._status, self._enabled)
+        self.changed.emit(self._status, self._enabled, self._found)
 
 
 class DeviceTab(QWidget):
@@ -209,7 +214,7 @@ class DeviceTab(QWidget):
         self._busy = True
         self._sync_connection_button()
 
-        # See keyboard_tab.py's _run_transactions for why `_worker`/`_thread`
+        # See lighting_tab.py's _run_transactions for why `_worker`/`_thread`
         # are kept referenced until `thread.finished` (not `worker.finished`)
         # and why `_busy` is only cleared there.
         self._worker = KeyboardWorker(device_path, kb_protocol.build_cable_handshake())

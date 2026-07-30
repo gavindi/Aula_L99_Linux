@@ -28,6 +28,12 @@ CONTENT = "#0A0A0C"                  # log/list/preview; must stay fully opaque
 PANEL_BORDER = "rgba(150, 150, 160, 90)"
 
 BACKGROUND_IMAGE = THEME / "main_bkg.png"
+LOGO_IMAGE = THEME / "logo" / "logo.png"
+USB_MODE_ICON = ICONS / "usb_mode.png"
+
+TITLE_BAR_HEIGHT = 40
+TITLE_BAR_BG = "rgba(10, 10, 12, 235)"
+TITLE_BUTTON_SIZE = QSize(30, 30)
 
 # Icon strip -> tab, using the vendor's own tab art. `_pressed` is the
 # fully-saturated orange frame, which reads as "current tab".
@@ -317,5 +323,49 @@ QToolTip {{
     border: 1px solid {ACCENT};
     color: {TEXT};
     padding: 4px;
+}}
+
+/* Custom title bar, standing in for the OS one on a frameless window (see
+   MainWindow.TitleBar) so the vendor logo/wordmark/system buttons can match
+   the vendor app's own skin. */
+QWidget#TitleBar {{
+    background: {TITLE_BAR_BG};
+}}
+QLabel#TitleModeLabel {{
+    font-weight: bold;
+    color: {TEXT};
+}}
+QLabel#TitleCenterLabel {{
+    color: {TEXT};
+}}
+
+/* Square icon buttons, not the stretchy pill from the generic QPushButton
+   rule above -- border-image needs no side slices since the art is drawn at
+   its native size with no stretching. */
+QPushButton#TitleMinButton, QPushButton#TitleCloseButton {{
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    border: none;
+}}
+QPushButton#TitleMinButton {{
+    border-image: {_slice("main_sysbtn_min", "normal")} 0 0 0 0 stretch stretch;
+}}
+QPushButton#TitleMinButton:hover {{
+    border-image: {_slice("main_sysbtn_min", "hover")} 0 0 0 0 stretch stretch;
+}}
+QPushButton#TitleMinButton:pressed {{
+    border-image: {_slice("main_sysbtn_min", "pressed")} 0 0 0 0 stretch stretch;
+}}
+QPushButton#TitleCloseButton {{
+    border-image: {_slice("main_sysbtn_close", "normal")} 0 0 0 0 stretch stretch;
+}}
+QPushButton#TitleCloseButton:hover {{
+    border-image: {_slice("main_sysbtn_close", "hover")} 0 0 0 0 stretch stretch;
+}}
+QPushButton#TitleCloseButton:pressed {{
+    border-image: {_slice("main_sysbtn_close", "pressed")} 0 0 0 0 stretch stretch;
 }}
 """

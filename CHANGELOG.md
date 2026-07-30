@@ -5,6 +5,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-30
+
+**GUI: split into a four-tab layout (Device, Keyboard, Lighting,
+Touchscreen) behind a custom frameless title bar skinned to match the
+vendor app, and stripped out the leftover default-Qt chrome (borders,
+card backgrounds) the vendor skin never called for.**
+
+### Added
+- New `Keyboard` tab (`keyboard_tab.py`/`KeyboardTab`), holding just the RTC
+  "Set Clock to Now" action -- split out of the old `keyboard_tab.py` (now
+  `lighting_tab.py`) so color/effect and the clock aren't bundled under one
+  icon. Rail order is now Device, Keyboard, Lighting, Touchscreen.
+- Device tab: a `Connection` group with "Test Connection" (the handshake
+  action, moved here from the keyboard tab since it's a property of the
+  connection itself, not a lighting/RTC action) and an
+  `img_keyboard_layout.png` preview that appears once a cable keyboard is
+  detected.
+- `TitleBar` in `main_window.py`: a frameless custom title bar (vendor
+  logo, current-tab "`<Tab> Mode`" label, centred "AULA L99" wordmark,
+  minimize/close) standing in for the OS one, since Qt can't skin native
+  window chrome. Dragged via `QWindow.startSystemMove()` rather than
+  hand-rolled `move()`-on-drag -- the latter is a silent no-op under
+  Wayland, which (unlike X11) doesn't let a client reposition its own
+  top-level window.
+- USB-mode icon (`usb_mode.png`) in the title bar, left of minimize, shown
+  whenever a known AULA L99 VID:PID is seen on either the keyboard or
+  touchscreen selector -- including the dongle, which is recognized but
+  unsupported for actions. Threaded through as a third `found` bool on
+  `DeviceSelector.changed`, alongside the existing status/enabled pair.
+- `main_sysbtn_close.png`/`main_sysbtn_min.png` sliced into the usual
+  4-state (`normal`/`hover`/`pressed`/`disabled`) strips via
+  `slice_skin.py`, plus the `tab_light` (Lighting) and re-added
+  `tab_customkey` (Keyboard) tab-rail icons.
+
+### Changed
+- `keyboard_tab.py` (color/effect controls) renamed to `lighting_tab.py`/
+  `LightingTab`, and `screen_tab.py`/`ScreenTab` renamed to
+  `touchscreen_tab.py`/`TouchscreenTab` -- file, class, and `MainWindow`
+  attribute names now all match the tab they back rather than the
+  pre-split names.
+- Tab-rail icons are drawn centred by hand in `SidebarTabBar.paintEvent`
+  rather than via `CE_TabBarTabLabel`, which never centred them (it lays
+  icon+text out left-aligned, plus a west-facing rotation).
+- Group boxes and the tab-rail buttons lost their border and background
+  (previously a translucent dark card / `rgba` fill) -- both fully
+  transparent now, so the starfield shows straight through instead of a
+  boxy vendor-Qt look.
+- Window is frameless and fixed-size (1200x800) instead of resizable --
+  a frameless window has no native resize grips, and hand-rolling
+  edge-drag resize wasn't worth it for a tool with no real reason to be
+  resized; matches the vendor app's own non-resizable window.
+
 ## [0.8.11] - 2026-07-30
 
 **GUI: the tab bar moved from across the top to an icon-only rail down the
