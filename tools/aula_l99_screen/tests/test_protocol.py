@@ -1,6 +1,34 @@
+import random
+
 import pytest
 
 import protocol
+
+
+def _crc16_modbus_reference(data: bytes) -> int:
+    """Bit-by-bit reference implementation, independent of the table-driven
+    crc16_modbus(), to guard the table rewrite against ever drifting.
+    """
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def test_crc16_modbus_matches_bit_by_bit_reference():
+    rng = random.Random(1)
+    for _ in range(20):
+        data = bytes(rng.randint(0, 255) for _ in range(rng.randint(0, 500)))
+        assert protocol.crc16_modbus(data) == _crc16_modbus_reference(data)
+
+
+def test_ramp_lut_matches_nearest_ramp_value():
+    for v in range(256):
+        assert protocol.RAMP_R_LUT[v] == protocol.nearest_ramp_value(v, protocol.RAMP_R)
+        assert protocol.RAMP_G_LUT[v] == protocol.nearest_ramp_value(v, protocol.RAMP_G)
+        assert protocol.RAMP_B_LUT[v] == protocol.nearest_ramp_value(v, protocol.RAMP_B)
 
 
 def test_ramp_constants():

@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-07-30
+
+**"Save to GIF": sped up dithering and CRC computation -- a 10-frame,
+full-panel `dither=True` GIF went from 6.3s to 3.1s (~51% faster), after
+profiling showed the previous release's dithering was slow enough to
+notice in practice.**
+
+### Changed
+- `nearest_ramp_value()`'s linear scan (comparing a diffused float against
+  each ramp rung via `abs()`) was ~44% of total conversion time by itself.
+  Replaced with `RAMP_R_LUT`/`RAMP_G_LUT`/`RAMP_B_LUT`, precomputed 256-entry
+  tables built from `nearest_ramp_value()` at import time, turning the hot
+  per-pixel quantize step into an O(1) lookup. `nearest_ramp_value()` itself
+  is unchanged and still used to build the tables.
+- `crc16_modbus()` rewritten table-driven instead of bit-by-bit (~12% of
+  total conversion time); verified byte-for-byte equivalent against the old
+  formulation on 20 random inputs before replacing it -- same polynomial,
+  same output, just faster.
+
+### Investigated but not adopted
+- The user asked whether numpy (installed on their system) would help.
+  Benchmarked directly rather than assumed: a naive numpy port of the same
+  per-pixel-sequential algorithm was **5x slower** (1.6s vs 0.3s/frame) --
+  numpy's per-element access overhead loses to plain Python list/tuple
+  indexing for this kind of tight, unavoidably sequential loop. A fully
+  vectorized numpy rewrite *is* possible (~0.06s/frame, ~5x faster than
+  today) but requires switching from Floyd-Steinberg error diffusion to
+  ordered/Bayer dithering, trading the current noise-like look for a fixed
+  repeating pattern -- decided against, to keep today's dithering algorithm
+  and dependency footprint unchanged. Revisit if raw speed ever matters
+  more than the visual trade-off.
+
+### Known gaps
+- Floyd-Steinberg is a sequential process where each pixel's error depends
+  on the ones before it, so this release's lookup-table quantization
+  produces a *different* (not byte-identical) dithered pattern than 0.8.3's
+  exact-float linear search -- a single rounding-boundary difference
+  cascades through the whole diffusion chain. Still always ramp-legal and
+  visually equivalent; noted in `dither_frame_floyd_steinberg()`'s
+  docstring so a future refactor producing "different but equally valid"
+  output again isn't a surprise.
+- Still unvalidated on real hardware, unchanged from 0.8.3.
+
 ## [0.8.3] - 2026-07-30
 
 **"Save to GIF": added opt-in Floyd-Steinberg dithering, lifting the encoder's

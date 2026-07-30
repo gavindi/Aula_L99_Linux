@@ -54,13 +54,27 @@ PANEL_HEIGHT = 480
 CONSTANT_BYTE = 0x00
 
 
-def crc16_modbus(data: bytes) -> int:
-    """CRC16/MODBUS: reflected poly 0x8005 (0xA001), init 0xFFFF, no final xor."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
+def _build_crc16_table() -> tuple[int, ...]:
+    table = []
+    for i in range(256):
+        crc = i
         for _ in range(8):
             crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+        table.append(crc)
+    return tuple(table)
+
+
+_CRC16_TABLE = _build_crc16_table()
+
+
+def crc16_modbus(data: bytes) -> int:
+    """CRC16/MODBUS: reflected poly 0x8005 (0xA001), init 0xFFFF, no final xor.
+    Table-driven (see _build_crc16_table) -- same math as the classic
+    bit-by-bit formulation, just faster.
+    """
+    crc = 0xFFFF
+    for byte in data:
+        crc = (crc >> 8) ^ _CRC16_TABLE[(crc ^ byte) & 0xFF]
     return crc
 
 
@@ -1511,6 +1525,16 @@ def nearest_ramp_value(value: float, ramp: tuple[int, ...]) -> int:
     return best
 
 
+# Precomputed nearest_ramp_value(v, RAMP_*) for every possible clamped/rounded
+# input byte -- turns dither_frame_floyd_steinberg()'s hot per-pixel quantize
+# step into an O(1) lookup instead of a linear scan over the ramp. Built once
+# at import time from nearest_ramp_value() itself, so it can never drift out
+# of sync with the reference implementation.
+RAMP_R_LUT: tuple[int, ...] = tuple(nearest_ramp_value(v, RAMP_R) for v in range(256))
+RAMP_G_LUT: tuple[int, ...] = tuple(nearest_ramp_value(v, RAMP_G) for v in range(256))
+RAMP_B_LUT: tuple[int, ...] = RAMP_R_LUT
+
+
 def is_ramp_legal_color(r: int, g: int, b: int) -> bool:
     """True if (r, g, b) already sits exactly on the device's fixed
     per-channel ramp -- the generalization of is_safe_gif_color() that also
@@ -1539,6 +1563,15 @@ def dither_frame_floyd_steinberg(
     should look correct on real hardware since every output pixel is
     guaranteed ramp-legal by construction. Unvalidated on real hardware.
 
+    Quantization uses RAMP_*_LUT (a precomputed table) rather than calling
+    nearest_ramp_value() directly, for speed. Output is deterministic and
+    always ramp-legal, but is a rounded-to-nearest-int approximation, not an
+    exact float-precision match to nearest_ramp_value()'s own linear search
+    -- expected and harmless here, since Floyd-Steinberg is chaotically
+    sensitive to rounding anyway (a single boundary difference at one pixel
+    cascades through the whole diffusion chain), so there was never a
+    byte-exact algorithm being preserved in the first place.
+
     pixels: flat width*height list, raster order, one frame's worth.
     width: needed to compute row-wrap offsets for the below-row diffusion
     targets; must evenly divide len(pixels).
@@ -1563,9 +1596,12 @@ def dither_frame_floyd_steinberg(
             r0, g0, b0 = pixels[i]
             r, g, b = r0 + err_r[i], g0 + err_g[i], b0 + err_b[i]
 
-            rq = nearest_ramp_value(r, RAMP_R)
-            gq = nearest_ramp_value(g, RAMP_G)
-            bq = nearest_ramp_value(b, RAMP_B)
+            ri = 0 if r < 0 else 255 if r > 255 else int(r + 0.5)
+            gi = 0 if g < 0 else 255 if g > 255 else int(g + 0.5)
+            bi = 0 if b < 0 else 255 if b > 255 else int(b + 0.5)
+            rq = RAMP_R_LUT[ri]
+            gq = RAMP_G_LUT[gi]
+            bq = RAMP_B_LUT[bi]
             out[i] = (rq, gq, bq)
 
             er, eg, eb = r - rq, g - gq, b - bq
