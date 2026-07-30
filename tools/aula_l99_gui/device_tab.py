@@ -8,31 +8,39 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from aula_l99_hacky import protocol as kb_protocol
 from aula_l99_hacky.device import find_l99
 from aula_l99_screen.device import find_screen
 
+from . import theme
 from .device_utils import (
+    KEYBOARD_PERMISSION_HINT,
     describe_keyboard,
     describe_screen,
     list_keyboard_candidates,
     list_screen_devices,
 )
+from .workers import KeyboardWorker, start_worker
 
 DONGLE_UNSUPPORTED_MESSAGE = (
     "This tool only implements the wired 0C45:800A path; "
     "the dongle's packet format has never been captured."
 )
+
+KEYBOARD_LAYOUT_IMAGE = theme.THEME / "keyboard" / "img_keyboard_layout.png"
 
 # resolve(devices) -> (index to preselect or -1, status text, actions enabled)
 Resolver = Callable[[list], tuple[int, str, bool]]
@@ -134,6 +142,11 @@ class DeviceTab(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._thread = None
+        self._worker = None
+        self._busy = False
+        self._keyboard_ready = False
+
         layout = QVBoxLayout(self)
 
         self.keyboard = DeviceSelector(
@@ -144,8 +157,79 @@ class DeviceTab(QWidget):
         )
         layout.addWidget(self.keyboard)
         layout.addWidget(self.screen)
+        layout.addWidget(self._build_connection_group())
+        layout.addWidget(self._build_keyboard_image())
         layout.addStretch(1)
+
+        self.keyboard.changed.connect(self._on_keyboard_changed)
+
+    def _build_keyboard_image(self) -> QLabel:
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pixmap = QPixmap(str(KEYBOARD_LAYOUT_IMAGE))
+        if not pixmap.isNull():
+            pixmap = pixmap.scaledToWidth(640, Qt.TransformationMode.SmoothTransformation)
+        label.setPixmap(pixmap)
+        label.setVisible(False)
+        self.keyboard_image = label
+        return label
+
+    def _build_connection_group(self) -> QGroupBox:
+        group = QGroupBox("Connection")
+        row = QHBoxLayout(group)
+        self.test_connection_button = QPushButton("Test Connection")
+        self.test_connection_button.setEnabled(False)
+        self.test_connection_button.clicked.connect(self._on_handshake)
+        row.addWidget(self.test_connection_button)
+        row.addStretch(1)
+        return group
 
     def refresh_all(self) -> None:
         self.keyboard.refresh()
         self.screen.refresh()
+
+    # -- connection test --------------------------------------------------
+
+    def _on_keyboard_changed(self, status: str, enabled: bool) -> None:
+        self._keyboard_ready = enabled
+        self.keyboard_image.setVisible(enabled)
+        self._sync_connection_button()
+
+    def _sync_connection_button(self) -> None:
+        self.test_connection_button.setEnabled(self._keyboard_ready and not self._busy)
+
+    def _on_handshake(self) -> None:
+        if self._busy:
+            return
+        device_path = self.keyboard.current_path()
+        if device_path is None:
+            QMessageBox.warning(self, "Keyboard", "No device selected.")
+            return
+
+        self._busy = True
+        self._sync_connection_button()
+
+        # See keyboard_tab.py's _run_transactions for why `_worker`/`_thread`
+        # are kept referenced until `thread.finished` (not `worker.finished`)
+        # and why `_busy` is only cleared there.
+        self._worker = KeyboardWorker(device_path, kb_protocol.build_cable_handshake())
+        self._worker.finished.connect(self._on_handshake_finished)
+        self._thread = start_worker(self._worker)
+        self._thread.finished.connect(self._on_thread_stopped)
+
+    def _on_handshake_finished(self, success: bool, message: str) -> None:
+        if success:
+            QMessageBox.information(self, "Keyboard", "Connection OK.")
+            return
+        text = message
+        if "permission" in message.lower():
+            text = f"{message}\n\n{KEYBOARD_PERMISSION_HINT}"
+        QMessageBox.critical(self, "Keyboard Error", text)
+
+    def _on_thread_stopped(self) -> None:
+        self._busy = False
+        self._sync_connection_button()
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy

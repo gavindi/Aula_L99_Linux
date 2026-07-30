@@ -24,7 +24,6 @@ ACCENT = "#EF6C00"
 ACCENT_PRESSED = "#CF4D00"
 TEXT = "#E6E6E6"
 TEXT_DISABLED = "#808080"
-PANEL = "rgba(12, 12, 14, 200)"      # group-box cards; lets the starfield read
 CONTENT = "#0A0A0C"                  # log/list/preview; must stay fully opaque
 PANEL_BORDER = "rgba(150, 150, 160, 90)"
 
@@ -35,6 +34,7 @@ BACKGROUND_IMAGE = THEME / "main_bkg.png"
 TAB_ICONS = {
     "Device": "tab_home",
     "Keyboard": "tab_customkey",
+    "Lighting": "tab_light",
     "Touchscreen": "tab_tft",
 }
 # The strip frames are 36x36, so 40px upscales them by ~11% -- close enough to
@@ -120,24 +120,18 @@ QWidget:disabled {{
    those in the rotated coordinate space of a West bar, where a "width" turns
    into the tab's vertical extent and gives absurdly tall tabs. */
 QTabBar::tab {{
-    background: rgba(20, 20, 24, 170);
-    border: 1px solid {PANEL_BORDER};
-    border-left: 3px solid transparent;
+    background: transparent;
+    border: none;
     margin-bottom: 2px;
 }}
-QTabBar::tab:hover {{
-    background: rgba(239, 108, 0, 60);
-}}
 QTabBar::tab:selected {{
-    background: rgba(30, 30, 36, 220);
-    border-left: 3px solid {ACCENT};
     color: {ACCENT};
 }}
 
-/* Group boxes as dark cards over the starfield. */
+/* Group boxes transparent so the starfield shows straight through. */
 QGroupBox {{
-    background: {PANEL};
-    border: 1px solid {PANEL_BORDER};
+    background: transparent;
+    border: none;
     border-radius: 4px;
     margin-top: 14px;
     padding: 12px 10px 10px 10px;

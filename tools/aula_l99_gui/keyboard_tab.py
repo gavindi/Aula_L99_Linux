@@ -1,7 +1,5 @@
-"""Keyboard (aula_l99_hacky) control tab: handshake, per-key color, effects, RTC."""
+"""Lighting (aula_l99_hacky) control tab: per-key color and effects."""
 from __future__ import annotations
-
-from datetime import datetime
 
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -53,10 +51,8 @@ class KeyboardTab(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        layout.addWidget(self._build_handshake_group())
         layout.addWidget(self._build_color_group())
         layout.addWidget(self._build_effect_group())
-        layout.addWidget(self._build_rtc_group())
 
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
@@ -65,16 +61,6 @@ class KeyboardTab(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
         layout.addWidget(self.log)
-
-    def _build_handshake_group(self) -> QGroupBox:
-        group = QGroupBox("Connection")
-        row = QHBoxLayout(group)
-        button = QPushButton("Test Connection")
-        button.clicked.connect(self._on_handshake)
-        row.addWidget(button)
-        row.addStretch(1)
-        self._action_buttons.append(button)
-        return group
 
     def _build_color_group(self) -> QGroupBox:
         group = QGroupBox("Color")
@@ -133,16 +119,6 @@ class KeyboardTab(QWidget):
 
         return group
 
-    def _build_rtc_group(self) -> QGroupBox:
-        group = QGroupBox("Clock")
-        row = QHBoxLayout(group)
-        button = QPushButton("Set Clock to Now")
-        button.clicked.connect(self._on_set_rtc)
-        row.addWidget(button)
-        self._action_buttons.append(button)
-        row.addStretch(1)
-        return group
-
     # -- device handling --------------------------------------------------
 
     def _on_device_changed(self, status: str, enabled: bool) -> None:
@@ -174,9 +150,6 @@ class KeyboardTab(QWidget):
 
     # -- actions ------------------------------------------------------------
 
-    def _on_handshake(self) -> None:
-        self._run_transactions(kb_protocol.build_cable_handshake())
-
     def _on_apply_color(self) -> None:
         colors = kb_protocol.build_uniform_colors(self._rgb())
         self._run_transactions(kb_protocol.build_color_transfer(colors))
@@ -190,9 +163,6 @@ class KeyboardTab(QWidget):
             brightness=self.brightness_spin.value(),
         )
         self._run_transactions(transactions)
-
-    def _on_set_rtc(self) -> None:
-        self._run_transactions(kb_protocol.build_rtc_transfer(datetime.now()))
 
     @property
     def is_busy(self) -> bool:

@@ -1,6 +1,7 @@
 """Top-level window hosting the device, keyboard and screen tabs."""
 from __future__ import annotations
 
+from PySide6.QtCore import QRect
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
+from .clock_tab import ClockTab
 from .device_tab import DeviceTab
 from .keyboard_tab import KeyboardTab
 from .screen_tab import ScreenTab
@@ -36,22 +38,28 @@ class SidebarTabBar(QTabBar):
     def paintEvent(self, event) -> None:
         painter = QStylePainter(self)
         option = QStyleOptionTab()
+        icon_size = self.iconSize()
         for index in range(self.count()):
             self.initStyleOption(option, index)
             painter.drawControl(QStyle.ControlElement.CE_TabBarTabShape, option)
-            # Claiming the tab faces north for the label pass only is what stops
-            # Qt standing the icon on its side; the shape above was already drawn
-            # with the real (west) orientation. The buttons carry no text, so the
-            # icon just centres in the rect.
-            option.shape = QTabBar.Shape.RoundedNorth
-            painter.drawControl(QStyle.ControlElement.CE_TabBarTabLabel, option)
+            # CE_TabBarTabLabel lays icon+text out left-aligned (with a west-facing
+            # rotation to boot), which never centred the icon even before the
+            # buttons lost their border/background. Drawing the pixmap straight
+            # into the middle of the tab rect sidesteps the style's label layout
+            # (and the rotation) entirely.
+            icon = self.tabIcon(index)
+            if icon.isNull():
+                continue
+            icon_rect = QRect(0, 0, icon_size.width(), icon_size.height())
+            icon_rect.moveCenter(option.rect.center())
+            painter.drawPixmap(icon_rect, icon.pixmap(icon_size))
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AULA L99 Control")
-        self.resize(800, 720)
+        self.resize(1200, 720)
         self.setWindowIcon(QIcon(str(theme.THEME / "DeviceDriver.ico")))
 
         # Loaded once; paintEvent re-scales it per resize rather than re-reading.
@@ -59,6 +67,7 @@ class MainWindow(QMainWindow):
 
         self._device_tab = DeviceTab()
         self._device_tab.setObjectName("DeviceTab")
+        self._clock_tab = ClockTab(self._device_tab.keyboard)
         self._keyboard_tab = KeyboardTab(self._device_tab.keyboard)
         self._screen_tab = ScreenTab(self._device_tab.screen)
 
@@ -69,9 +78,9 @@ class MainWindow(QMainWindow):
         # The rail is icon-only, so the titles can't live in the tab text any
         # more -- they're kept here for the icon lookup and shown as tooltips,
         # which is the only thing naming an unlabelled button for the user.
-        self._tab_titles = ["Device", "Keyboard", "Touchscreen"]
+        self._tab_titles = ["Device", "Keyboard", "Lighting", "Touchscreen"]
         for widget, title in zip(
-            (self._device_tab, self._keyboard_tab, self._screen_tab),
+            (self._device_tab, self._clock_tab, self._keyboard_tab, self._screen_tab),
             self._tab_titles,
         ):
             index = self._tabs.addTab(widget, "")
@@ -107,7 +116,12 @@ class MainWindow(QMainWindow):
         # An interrupted screen upload can freeze the panel (see
         # aula_l99_screen/cli.py's own warning); refuse to close mid-transfer
         # rather than let Qt tear down a QThread that's still running.
-        if self._keyboard_tab.is_busy or self._screen_tab.is_busy:
+        if (
+            self._device_tab.is_busy
+            or self._clock_tab.is_busy
+            or self._keyboard_tab.is_busy
+            or self._screen_tab.is_busy
+        ):
             QMessageBox.warning(
                 self, "AULA L99 Control",
                 "An operation is still in progress. Wait for it to finish "
