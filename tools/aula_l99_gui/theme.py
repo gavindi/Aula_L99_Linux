@@ -37,8 +37,9 @@ TAB_ICONS = {
     "Keyboard": "tab_customkey",
     "Touchscreen": "tab_tft",
 }
-# The strip frames are 36x36; 20px keeps the icon rail compact.
-TAB_ICON_SIZE = QSize(20, 20)
+# The strip frames are 36x36, so 40px upscales them by ~11% -- close enough to
+# native that the softness doesn't show, and it keeps the rail on round numbers.
+TAB_ICON_SIZE = QSize(40, 40)
 # The rail is icon-only, with each button twice its icon's size. Derived rather
 # than hardcoded so the 2x relationship survives a change to TAB_ICON_SIZE.
 # Set here rather than in the stylesheet because Qt applies QSS

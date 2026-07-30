@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.10] - 2026-07-30
+## [0.8.11] - 2026-07-30
 
 **GUI: the tab bar moved from across the top to an icon-only rail down the
 left-hand side.** Three 40x40 buttons carrying the vendor tab artwork and
@@ -116,6 +116,8 @@ That's now one shared widget, and all device concerns live in one place.
   `_device_ready and not _busy`, which matters more now that Refresh
   lives on a separate, always-clickable tab. The `QThread` lifetime
   handling itself is untouched.
+
+## [0.8.7] - 2026-07-30
 
 **"Save to GIF": 0.8.6's raw-bitmap self-padding fix confirmed working on
 real hardware by the user.** Closes out the two biggest open "unvalidated
