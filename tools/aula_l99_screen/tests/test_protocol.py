@@ -1,8 +1,33 @@
 import random
+import struct
 
 import pytest
 
 import protocol
+
+
+def _parse_frame_header(blob: bytes, frame_index: int):
+    """Test helper: locate a frame via its TOC entry and read back its
+    sub-header fields (mode_flag, size32, palette) plus the frame's
+    absolute content offset/length.
+    """
+    toc_offset = 20 * frame_index
+    frame_offset = struct.unpack_from("<I", blob, toc_offset)[0]
+    size32 = struct.unpack_from("<I", blob, frame_offset + 8)[0]
+    mode_flag = struct.unpack_from("<H", blob, frame_offset + 14)[0]
+    content_length = size32 - protocol.GIF_FRAME_PREFIX_SIZE
+    content_offset = frame_offset + protocol.GIF_FRAME_PREFIX_SIZE
+    content = blob[content_offset:content_offset + content_length]
+    return {
+        "mode_flag": mode_flag,
+        "size32": size32,
+        "content": content,
+        "header": blob[frame_offset:frame_offset + protocol.GIF_FRAME_PREFIX_SIZE],
+    }
+
+
+def _palette_rgb565(header: bytes, count: int) -> list[int]:
+    return [struct.unpack_from("<H", header, 16 + i * 2)[0] for i in range(count)]
 
 
 def _crc16_modbus_reference(data: bytes) -> int:
@@ -100,3 +125,80 @@ def test_dither_false_is_unchanged_regression():
     default_call = protocol.build_gif_blob(frames, width, height, delay=50)
     explicit_false = protocol.build_gif_blob(frames, width, height, delay=50, dither=False)
     assert default_call == explicit_false
+
+
+def test_gif_largest_run_skips_ineligible_frames():
+    frames_runs = [
+        [(1000, (0, 0, 0))],       # frame 0: the biggest run, but ineligible (raw-bitmap)
+        [(50, (255, 255, 255))],   # frame 1: smaller run, eligible
+    ]
+    assert protocol._gif_largest_run(frames_runs, eligible={1}) == (1, 0, 50)
+    # sanity: without the filter, frame 0's bigger run would win instead
+    assert protocol._gif_largest_run(frames_runs) == (0, 0, 1000)
+
+
+def test_gif_largest_run_returns_none_when_nothing_eligible():
+    frames_runs = [[(1000, (0, 0, 0))]]
+    assert protocol._gif_largest_run(frames_runs, eligible=set()) is None
+
+
+def test_build_gif_blob_forces_raw_bitmap_for_oversized_rle_content():
+    # Alternate between two safe colors every single pixel across the whole
+    # frame -- every run is 1px, so RLE tokens cost 2 bytes/pixel. At
+    # 300x120 = 36000 pixels that's 72000 content bytes, comfortably over
+    # the 16-bit content-length field's 65535-byte range, forcing this
+    # frame into raw-bitmap mode automatically. A second, solid-color frame
+    # is included purely as a CRC-length-tuning padding donor (once a frame
+    # is raw-bitmap it has no run capacity of its own -- same reason the
+    # dither tests above need a flat region too).
+    width, height = 300, 120
+    n = width * height
+    raw_frame = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
+    solid_frame = [(0, 255, 0)] * n
+    blob = protocol.build_gif_blob([raw_frame, solid_frame], width, height, delay=50)
+    parsed = _parse_frame_header(blob, 0)
+    assert parsed["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
+    assert len(parsed["content"]) == n
+
+
+def test_raw_bitmap_content_round_trips_to_original_pixels():
+    width, height = 300, 120
+    n = width * height
+    pixels = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
+    solid_frame = [(0, 255, 0)] * n
+    blob = protocol.build_gif_blob([pixels, solid_frame], width, height, delay=50)
+    parsed = _parse_frame_header(blob, 0)
+    assert parsed["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
+
+    distinct_colors = len({parsed["content"][i] for i in range(n)})
+    palette = _palette_rgb565(parsed["header"], distinct_colors)
+    for i, original in enumerate(pixels):
+        idx = parsed["content"][i]
+        assert palette[idx] == protocol.rgb_to_rgb565(*original)
+
+
+def test_build_gif_blob_small_content_still_uses_rle():
+    width, height = 128, 128
+    frames = [[(255, 0, 0)] * (width * height // 2) + [(0, 0, 0)] * (width * height // 2)]
+    blob = protocol.build_gif_blob(frames, width, height, delay=50)
+    parsed = _parse_frame_header(blob, 0)
+    assert parsed["mode_flag"] == protocol.GIF_MODE_RLE
+
+
+def test_mixed_rle_and_raw_bitmap_frames_build_successfully():
+    # Frame 0 is forced into raw-bitmap mode (oversized RLE content); frame
+    # 1 is a simple solid-color frame with a big run -- the only viable
+    # CRC-length-tuning padding candidate. This exercises _gif_largest_run's
+    # eligible-frame filtering through the full build_gif_blob path, not
+    # just in isolation.
+    width, height = 300, 120
+    n = width * height
+    raw_frame = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
+    solid_frame = [(0, 255, 0)] * n
+    blob = protocol.build_gif_blob([raw_frame, solid_frame], width, height, delay=50)
+
+    parsed0 = _parse_frame_header(blob, 0)
+    parsed1 = _parse_frame_header(blob, 1)
+    assert parsed0["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
+    assert len(parsed0["content"]) == n
+    assert parsed1["mode_flag"] == protocol.GIF_MODE_RLE

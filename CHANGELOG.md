@@ -5,6 +5,66 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-07-30
+
+**"Save to GIF": fixed a real hardware bug the user hit -- GIFs over ~100KB
+uploaded and partially rendered (correct content up top, scrambled green
+noise below). Root cause: a silent 16-bit content-length field overflow,
+already flagged but never fixed; the real fix is automatic raw-bitmap-mode
+encoding for oversized frames, not just a guard rail.**
+
+### Fixed
+- `build_gif_blob`'s per-frame header has a 16-bit content-length field
+  (`header[12:14]`) that silently wrapped for RLE content over 65,535
+  bytes. Dithering makes this easy to hit -- RLE costs 2 bytes per run,
+  and dithered pixels alternate constantly, so busy dithered regions
+  produce far more RLE bytes than flat safe-color content ever did. This
+  matches a directly analogous hardware test already on record (forcing a
+  frame's real content past its declared length produced the exact same
+  symptom: correct rendering up to the wrong/short boundary, garbled
+  content after).
+- Any frame whose RLE content would exceed 65,535 bytes is now
+  automatically encoded as raw-bitmap mode (`mode_flag = 0x0002`) instead:
+  one palette-index byte per pixel, always exactly `width*height` bytes.
+  Confirmed by a real hardware capture (`save_to_gif_13`) that the
+  raw-bitmap decoder ignores the declared content-length field entirely
+  and always reads exactly `width*height` bytes based on the frame's own
+  width/height fields -- sidestepping the overflow regardless of size.
+  This is a correctness fix, not an opt-in feature: it only activates when
+  RLE content would otherwise have produced guaranteed-corrupt output, so
+  anything that already worked (safe-color and lightly-dithered content)
+  is unaffected and keeps using RLE exactly as before.
+
+### Added
+- `GIF_MODE_RLE`/`GIF_MODE_RAW_BITMAP` named constants and
+  `_gif_raw_bitmap_content()`. `_gif_largest_run()` gained an `eligible`
+  parameter so the CRC-length-tuning padding pass never targets a
+  raw-bitmap-mode frame (its content is fixed-size -- there are no tokens
+  to pad). A final safety-net check verifies no frame's actual content
+  exceeds the 16-bit field after all padding, raising a clear error
+  instead of ever silently producing wraparound-corrupted output again.
+- Tests: forcing raw-bitmap mode via an all-single-pixel-run image,
+  round-tripping raw-bitmap content back to the original pixels via the
+  palette, confirming small/existing content still uses RLE unchanged,
+  and confirming `_gif_largest_run`'s eligible-filtering works both in
+  isolation and through the full `build_gif_blob` path with mixed-mode
+  frames.
+
+### Known gaps
+- **New, less-tested territory beyond the general "unvalidated on real
+  hardware" caveat**: every prior raw-bitmap hardware test was a small
+  edit to an already-working captured frame, never a frame built from
+  scratch by this encoder. A real hardware smoke test of a large/colorful
+  image that actually forces this path is recommended -- ideally a small
+  forced-raw-bitmap test image before retrying the user's original
+  failing GIF.
+- The raw-bitmap-mode-specific "content validator" (row transition/run-
+  structure check, never fully decoded) was only ever exercised via edits
+  to existing captures, not scratch-built content -- natural dithering
+  produced a coherent gradient in every real capture examined, which is
+  the kind of content that passed, but this genuinely hasn't been tested
+  for this encoder's own output.
+
 ## [0.8.4] - 2026-07-30
 
 **"Save to GIF": sped up dithering and CRC computation -- a 10-frame,

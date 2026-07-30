@@ -1503,6 +1503,11 @@ GIF_FRAME_PREFIX_SIZE = 528
 GIF_FRAME_MAGIC_A = bytes([0x4C, 0x54])
 GIF_FRAME_MAGIC_B = bytes([0x01, 0x03])
 
+# mode_flag values (header[14:16]) -- confirmed a real, functional decoder
+# switch, not a passive tag (see the GIF_FLASH_BASE comment block).
+GIF_MODE_RLE = 0x0100
+GIF_MODE_RAW_BITMAP = 0x0002
+
 # The full fixed dither ramp, characterized end-to-end in the comment block
 # above (see save_to_gif_14/15). Each 8-bit value here was chosen because it
 # reproduces its own RGB565 index exactly under rgb_to_rgb565()'s existing
@@ -1679,13 +1684,29 @@ def _gif_tokens(runs, palette_index, split_at=None):
     return tokens
 
 
-def _gif_largest_run(frames_runs):
+def _gif_raw_bitmap_content(pixels, palette_index) -> bytes:
+    """One palette-index byte per pixel, raster order -- the same per-pixel
+    index data _gif_tokens() would otherwise RLE-compress, emitted directly
+    instead. Always exactly len(pixels) bytes, confirmed by both
+    disassembly and direct hardware byte-edit tests (see the
+    GIF_FLASH_BASE comment block).
+    """
+    return bytes(palette_index[c] for c in pixels)
+
+
+def _gif_largest_run(frames_runs, eligible: set[int] | None = None):
     """(frame_index, run_index, length) of the single longest run across
     all frames -- the best candidate for the CRC_INIT-length-matching
     padding trick, since it has the most spare capacity.
+
+    eligible: if given, only frame indices in this set are considered --
+    used to skip raw-bitmap-mode frames, whose fixed-size content has no
+    tokens to pad in the first place.
     """
     best = None
     for fi, runs in enumerate(frames_runs):
+        if eligible is not None and fi not in eligible:
+            continue
         for ri, (length, _color) in enumerate(runs):
             if best is None or length > best[2]:
                 best = (fi, ri, length)
@@ -1722,6 +1743,29 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     may raise the "no large enough solid/uniform run" error even though
     every pixel is otherwise ramp-legal. Keeping at least one sizable flat
     region (even a solid black border) avoids this.
+
+    Mode selection: each frame's content is normally RLE-encoded
+    (mode_flag=GIF_MODE_RLE), matching every previously-validated capture.
+    header[12:14] (the content-length field) is only 16 bits, so RLE
+    content over 65535 bytes would silently wrap -- previously a real bug
+    (dithering makes this easy to hit, since alternating pixels produce far
+    more RLE bytes than flat safe-color content ever did). Any frame whose
+    RLE content would exceed that range is automatically encoded as
+    mode_flag=GIF_MODE_RAW_BITMAP instead: one palette-index byte per
+    pixel, always exactly width*height bytes. Confirmed by both
+    disassembly and a real hardware capture (save_to_gif_13's raw-bitmap
+    frame, content=153600 bytes) that the raw-bitmap decoder ignores the
+    declared content-length field entirely and always reads exactly
+    width*height bytes based on the frame's own width/height fields, so
+    this sidesteps the overflow regardless of how large width*height is.
+
+    Caveat beyond the general "unvalidated on real hardware" one above:
+    unlike RLE mode (hardware-validated since 0.7.0), every prior
+    raw-bitmap hardware test was a small edit to an already-working
+    captured frame, never a frame built from scratch by this encoder --
+    this is genuinely newer, less-tested territory. A real hardware smoke
+    test of a large/colorful-enough image that actually forces this path
+    is recommended before trusting it.
     """
     n = width * height
     for i, px in enumerate(frames_pixels):
@@ -1760,23 +1804,54 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
 
     frames_runs = [_gif_runs(px) for px in frames_pixels]
 
+    # Build each frame's palette once (first-appearance-order dedup, shared
+    # by both RLE and raw-bitmap content) and decide its mode up front --
+    # this must stay fixed across the CRC-length-tuning retries below,
+    # since raw-bitmap content has no tokens for split_at to pad.
+    frame_palettes: list[list[tuple[int, int, int]]] = []
+    frame_palette_indexes: list[dict[tuple[int, int, int], int]] = []
+    frame_modes: list[bool] = []  # True = raw-bitmap
+    for runs in frames_runs:
+        palette: list[tuple[int, int, int]] = []
+        palette_index: dict[tuple[int, int, int], int] = {}
+        for _length, color in runs:
+            if color not in palette_index:
+                palette_index[color] = len(palette)
+                palette.append(color)
+        frame_palettes.append(palette)
+        frame_palette_indexes.append(palette_index)
+        frame_modes.append(len(_gif_tokens(runs, palette_index)) * 2 > 0xFFFF)
+
+    frame_content_lengths = [0] * len(frames_pixels)
+
+    def _verify_and_return(blob: bytes) -> bytes:
+        for fi in range(len(frames_pixels)):
+            if not frame_modes[fi] and frame_content_lengths[fi] > 0xFFFF:
+                raise ValueError(
+                    f"frame {fi}: RLE content grew to {frame_content_lengths[fi]} bytes "
+                    "after CRC-length padding, exceeding the 16-bit content-length "
+                    "field -- this is an unexpected edge case, please report it"
+                )
+        return blob
+
     def build_all(split_at=None):
         frame_bytes = []
         for fi, runs in enumerate(frames_runs):
-            palette: list[tuple[int, int, int]] = []
-            palette_index: dict[tuple[int, int, int], int] = {}
-            for _length, color in runs:
-                if color not in palette_index:
-                    palette_index[color] = len(palette)
-                    palette.append(color)
+            palette = frame_palettes[fi]
+            palette_index = frame_palette_indexes[fi]
 
-            frame_split = split_at[1:] if split_at and split_at[0] == fi else None
-            tokens = _gif_tokens(runs, palette_index, split_at=frame_split)
-
-            content = bytearray()
-            for length, flag in tokens:
-                content.append(length - 1)
-                content.append(flag)
+            if frame_modes[fi]:
+                content = _gif_raw_bitmap_content(frames_pixels[fi], palette_index)
+                mode_flag = GIF_MODE_RAW_BITMAP
+            else:
+                frame_split = split_at[1:] if split_at and split_at[0] == fi else None
+                tokens = _gif_tokens(runs, palette_index, split_at=frame_split)
+                content = bytearray()
+                for length, flag in tokens:
+                    content.append(length - 1)
+                    content.append(flag)
+                mode_flag = GIF_MODE_RLE
+            frame_content_lengths[fi] = len(content)
 
             header = bytearray(GIF_FRAME_PREFIX_SIZE)
             header[0:2] = GIF_FRAME_MAGIC_A
@@ -1786,7 +1861,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             size32 = GIF_FRAME_PREFIX_SIZE + len(content)
             header[8:12] = struct.pack("<I", size32)
             header[12:14] = struct.pack("<H", len(content) % 65536)
-            header[14:16] = struct.pack("<H", 0x0100)  # RLE mode
+            header[14:16] = struct.pack("<H", mode_flag)
             for i, color in enumerate(palette):
                 off = 16 + i * 2
                 # This caps the palette at (528-16)/2 = 256 slots. The full
@@ -1833,16 +1908,24 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     deltas.sort()
 
     if deltas and deltas[0] == 0:
-        return baseline
+        return _verify_and_return(baseline)
 
-    fi, ri, run_length = _gif_largest_run(frames_runs)
+    eligible = {fi for fi, raw in enumerate(frame_modes) if not raw}
+    largest = _gif_largest_run(frames_runs, eligible=eligible)
+    if largest is None:
+        raise ValueError(
+            "no frame has a large enough solid/uniform run to tune the upload length onto "
+            "an already-solved CRC_INIT entry -- every frame is using raw-bitmap mode (no "
+            "run-based content to pad); add a bigger solid-color region to one frame"
+        )
+    fi, ri, run_length = largest
     base_pieces = -(-run_length // 256)  # ceil
     capacity = run_length - base_pieces
 
     for delta in deltas:
         extra = delta // 2
         if extra <= capacity:
-            return build_all(split_at=(fi, ri, base_pieces + extra))
+            return _verify_and_return(build_all(split_at=(fi, ri, base_pieces + extra)))
 
     raise ValueError(
         "no frame has a large enough solid/uniform run to tune the upload length onto "
