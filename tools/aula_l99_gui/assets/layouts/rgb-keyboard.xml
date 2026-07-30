@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<device.info>
+	<menu macro="1" light_mode="1" sidelight="0" user_light="1" custom_light="1" music="1" screen="1" />
+	<menu_wireless macro="1" light_mode="1" sidelight="0" user_light="1" music="1" screen="0" />
+	<function fn_layer="1" sleep_time="1" key_respondtime="1" />
+	<firmware version="120" file="" url="" />
+	<cmd_delaytime value="35" />
+	<screen gif_headlength="256" gif_maxframes="200" gif_count="1" width="320" height="480" />
+	<light rgb_keyboard="1" default_mode="11" default_brightness="5" default_speed="3" brightness_max="5" speed_max="5" />
+	<Keyboard bk_color="CD7A00" image="img_keyboard_layout.png" col_count="20" row_count="6" xpos="385" ypos="140" width="800" height="300">
+		<KeyItems>
+			<key code="0x29" name="Esc" desc="Esc" key_index="1" light_index="1" icon="" row_col="0#1" rect_left="32" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3a" name="F1" desc="F1" key_index="2" light_index="2" icon="" row_col="0#3" rect_left="97" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3b" name="F2" desc="F2" key_index="3" light_index="3" icon="" row_col="0#4" rect_left="135" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3c" name="F3" desc="F3" key_index="4" light_index="4" icon="" row_col="0#5" rect_left="174" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3d" name="F4" desc="F4" key_index="5" light_index="5" icon="" row_col="0#6" rect_left="212" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3e" name="F5" desc="F5" key_index="6" light_index="6" icon="" row_col="0#8" rect_left="268" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x3f" name="F6" desc="F6" key_index="7" light_index="7" icon="" row_col="0#9" rect_left="306" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x40" name="F7" desc="F7" key_index="8" light_index="8" icon="" row_col="0#10" rect_left="345" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x41" name="F8" desc="F8" key_index="9" light_index="9" icon="" row_col="0#11" rect_left="383" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x42" name="F9" desc="F9" key_index="10" light_index="10" icon="" row_col="0#12" rect_left="440" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x43" name="F10" desc="F10" key_index="11" light_index="11" icon="" row_col="0#13" rect_left="478" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x44" name="F11" desc="F11" key_index="12" light_index="12" icon="" row_col="0#14" rect_left="516" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x45" name="F12" desc="F12" key_index="13" light_index="13" icon="" row_col="0#15" rect_left="555" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4c" name="Del" desc="Del" key_index="119" light_index="119" icon="" row_col="0#19" rect_left="605" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x46" name="PRINT" desc="PRINT" key_index="112" light_index="112" icon="" row_col="0#16" rect_left="655" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x47" name="SCROOL" desc="SCROOL" key_index="113" light_index="113" icon="" row_col="0#17" rect_left="695" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x48" name="pause" desc="pause" key_index="115" light_index="115" icon="" row_col="0#18" rect_left="735" rect_top="34" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			
+			<key code="0x35" name="~`" desc="~`" key_index="19" light_index="19" icon="" row_col="1#1" rect_left="32" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1e" name="!1" desc="!1" key_index="20" light_index="20" icon="" row_col="1#2" rect_left="69" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1f" name="@2" desc="@2" key_index="21" light_index="21" icon="" row_col="1#3" rect_left="107" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x20" name="#3" desc="#3" key_index="22" light_index="22" icon="" row_col="1#4" rect_left="145" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x21" name="$4" desc="$4" key_index="23" light_index="23" icon="" row_col="1#5" rect_left="184" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x22" name="%5" desc="%5" key_index="24" light_index="24" icon="" row_col="1#6" rect_left="222" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x23" name="^6" desc="^6" key_index="25" light_index="25" icon="" row_col="1#7" rect_left="261" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x24" name="&amp;7" desc="&amp;7" key_index="26" light_index="26" icon="" row_col="1#8" rect_left="299" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x25" name="*8" desc="*8" key_index="27" light_index="27" icon="" row_col="1#9" rect_left="337" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x26" name="(9" desc="(9" key_index="28" light_index="28" icon="" row_col="1#10" rect_left="375" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x27" name=")0" desc=")0" key_index="29" light_index="29" icon="" row_col="1#11" rect_left="414" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x2d" name="_-" desc="_-" key_index="30" light_index="30" icon="" row_col="1#12" rect_left="452" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x2e" name="+=" desc="+=" key_index="31" light_index="31" icon="" row_col="1#13" rect_left="490" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x2a" name="Backspace" desc="Backspace" key_index="103" light_index="103" icon="" row_col="1#14" rect_left="529" rect_top="83" rect_width="67" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4a" name="Home" desc="home" key_index="117" light_index="117" icon="" row_col="1#16" rect_left="605" rect_top="83" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+
+			<key code="0x2b" name="Tab" desc="Tab" key_index="37" light_index="37" icon="" row_col="2#1" rect_left="32" rect_top="121" rect_width="49" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x14" name="Q" desc="Q" key_index="38" light_index="38" icon="" row_col="2#2" rect_left="89" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1a" name="W" desc="W" key_index="39" light_index="39" icon="" row_col="2#3" rect_left="127" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x8" name="E" desc="E" key_index="40" light_index="40" icon="" row_col="2#4" rect_left="165" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x15" name="R" desc="R" key_index="41" light_index="41" icon="" row_col="2#5" rect_left="203" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x17" name="T" desc="T" key_index="42" light_index="42" icon="" row_col="2#6" rect_left="241" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1c" name="Y" desc="Y" key_index="43" light_index="43" icon="" row_col="2#7" rect_left="279" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x18" name="U" desc="U" key_index="44" light_index="44" icon="" row_col="2#8" rect_left="318" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xc" name="I" desc="I" key_index="45" light_index="45" icon="" row_col="2#9" rect_left="356" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x12" name="O" desc="O" key_index="46" light_index="46" icon="" row_col="2#10" rect_left="394" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x13" name="P" desc="P" key_index="47" light_index="47" icon="" row_col="2#11" rect_left="432" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x2f" name="{[" desc="{[" key_index="48" light_index="48" icon="" row_col="2#12" rect_left="471" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x30" name="}}" desc="}}" key_index="49" light_index="49" icon="" row_col="2#13" rect_left="509" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x31" name="|\" desc="|\" key_index="67" light_index="67" icon="" row_col="2#14" rect_left="547" rect_top="121" rect_width="49" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4b" name="PgUp" desc="page up" key_index="118" light_index="118"  icon="" row_col="2#16" rect_left="605" rect_top="121" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			
+			<key code="0x39" name="CapsLock" desc="CapsLock" key_index="55" light_index="55" icon="" row_col="3#1" rect_left="32" rect_top="157" rect_width="58" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4" name="A" desc="A" key_index="56" light_index="56" icon="" row_col="3#2" rect_left="98" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x16" name="S" desc="S" key_index="57" light_index="57" icon="" row_col="3#3" rect_left="136" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x7" name="D" desc="D" key_index="58" light_index="58" icon="" row_col="3#4" rect_left="175" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x9" name="F" desc="F" key_index="59" light_index="59" icon="" row_col="3#5" rect_left="213" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xa" name="G" desc="G" key_index="60" light_index="60" icon="" row_col="3#6" rect_left="251" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xb" name="H" desc="H" key_index="61" light_index="61" icon="" row_col="3#7" rect_left="289" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xd" name="J" desc="J" key_index="62" light_index="62" icon="" row_col="3#8" rect_left="327" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xe" name="K" desc="K" key_index="63" light_index="63" icon="" row_col="3#9" rect_left="366" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xf" name="L" desc="L" key_index="64" light_index="64" icon="" row_col="3#10" rect_left="404" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x33" name=":;" desc=":;" key_index="65" light_index="65" icon="" row_col="3#11" rect_left="442" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x34" name="&quot;&apos;" desc="&quot;&apos;" key_index="66" light_index="66" icon="" row_col="3#12" rect_left="480" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x28" name="Enter" desc="Enter" key_index="85" light_index="85" icon="" row_col="3#14" rect_left="519" rect_top="157" rect_width="77" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4e" name="PgDn" desc="page down" key_index="121" light_index="121" icon="" row_col="3#15" rect_left="605" rect_top="157" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			
+			<key code="0xe1" name="Shift_L" desc="Shift_L" key_index="73" light_index="73" icon="" row_col="4#0" rect_left="32" rect_top="196" rect_width="77" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1d" name="Z" desc="Z" key_index="74" light_index="74" icon="" row_col="4#2" rect_left="117" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x1b" name="X" desc="X" key_index="75" light_index="75" icon="" row_col="4#3" rect_left="156" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x6" name="C" desc="C" key_index="76" light_index="76" icon="" row_col="4#4" rect_left="194" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x19" name="V" desc="V" key_index="77" light_index="77" icon="" row_col="4#5" rect_left="232" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x5" name="B" desc="B" key_index="78" light_index="78" icon="" row_col="4#6" rect_left="270" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x11" name="N" desc="N" key_index="79" light_index="79" icon="" row_col="4#7" rect_left="308" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x10" name="M" desc="M" key_index="80" light_index="80" icon="" row_col="4#8" rect_left="346" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x36" name=",&lt;" desc=",&lt;" key_index="81" light_index="81" icon="" row_col="4#9" rect_left="385" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x37" name=".&gt;" desc=".&gt;" key_index="82" light_index="82" icon="" row_col="4#10" rect_left="423" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x38" name="/?" desc="/?" key_index="83" light_index="83" icon="" row_col="4#11" rect_left="461" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xe5" name="Shift_R" desc="Shift_R" key_index="84" light_index="84" icon="" row_col="4#13" rect_left="499" rect_top="196" rect_width="59" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x52" name="↑" desc="↑" key_index="101" light_index="101" icon="" row_col="4#17" rect_left="566" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4d" name="End" desc="end" key_index="120" light_index="120" icon="" row_col="4#18" rect_left="605" rect_top="196" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			
+			<key code="0xe0" name="Ctrl_L" desc="Ctrl_L" key_index="91" light_index="91" icon="" row_col="5#0" rect_left="32" rect_top="235" rect_width="39" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xe3" name="Win_L" desc="Win_L" key_index="92" light_index="92" icon="" row_col="5#1" rect_left="80" rect_top="235" rect_width="39" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xe2" name="Alt_L" desc="Alt_L" key_index="93" light_index="93" icon="" row_col="5#2" rect_left="127" rect_top="235" rect_width="39" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x2c" name="Space" desc="Space" key_index="94" light_index="94" icon="" row_col="5#6" rect_left="175" rect_top="235" rect_width="230" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xAF" name="Fn" desc="Fn" key_index="96" light_index="96" icon="" row_col="5#11" rect_left="414" rect_top="235" rect_width="39" rect_height="30" fnlayer_disable="0"/>
+			<key code="0xE4" name="Ctrl_R" desc="Ctrl_R" key_index="98" light_index="98" icon="" row_col="5#13" rect_left="462" rect_top="235" rect_width="39" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x50" name="←" desc="←" key_index="99" light_index="99" icon="" row_col="5#16" rect_left="528" rect_top="235" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x51" name="↓" desc="↓" key_index="100" light_index="100" icon="" row_col="5#17" rect_left="566" rect_top="235" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+			<key code="0x4f" name="→" desc="→" key_index="102" light_index="102" icon="" row_col="5#18" rect_left="604" rect_top="235" rect_width="30" rect_height="30" fnlayer_disable="0"/>
+		</KeyItems>
+	</Keyboard>
+</device.info>

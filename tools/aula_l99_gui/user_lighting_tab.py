@@ -1,8 +1,10 @@
-"""User Lighting tab: per-key color picking (wheel/RGB/presets) and the
-"Apply to All Keys" static-color action.
+"""User Lighting tab: color picking (wheel/RGB/presets) plus "Apply to All
+Keys", "Apply to Selected Key" (via the clickable KeyboardOverlay), and a
+"Read Current Colours" diagnostic that paints the overlay with what's
+actually lit on the hardware right now.
 
 Entirely self-contained -- its color state and Colorful checkbox affect only
-this tab's own Apply action, not the Lighting tab's Run Effect (which has
+this tab's own Apply actions, not the Lighting tab's Run Effect (which has
 its own separate copy of the same controls in lighting_tab.py).
 """
 from __future__ import annotations
@@ -30,7 +32,8 @@ from .color_wheel import ColorWheel
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
-from .workers import KeyboardWorker, start_worker
+from .keyboard_overlay import KeyboardOverlay
+from .workers import CallableResultWorker, KeyboardWorker, read_colors, start_worker
 
 # Preset swatches: red, orange, yellow, green, blue, cyan, magenta, white.
 PRESET_COLORS = [
@@ -63,6 +66,9 @@ class UserLightingTab(QWidget):
         self._color = QColor(255, 0, 0)
         self._action_buttons: list[QPushButton] = []
         self._color_pickers: list[QWidget] = []
+        self._selected_key: int | None = None
+        self._read_worker = None
+        self._read_thread = None
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
@@ -71,6 +77,12 @@ class UserLightingTab(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+
+        overlay_row = QHBoxLayout()
+        overlay_row.addStretch(1)
+        overlay_row.addWidget(self._build_overlay())
+        overlay_row.addStretch(1)
+        layout.addLayout(overlay_row)
 
         layout.addWidget(self._build_color_group())
 
@@ -96,7 +108,23 @@ class UserLightingTab(QWidget):
         outer.addWidget(apply_button)
         self._action_buttons.append(apply_button)
 
+        self.apply_selected_button = QPushButton("Apply to Selected Key")
+        self.apply_selected_button.clicked.connect(self._on_apply_selected_key)
+        self.apply_selected_button.setEnabled(False)
+        outer.addWidget(self.apply_selected_button)
+
+        read_button = QPushButton("Read Current Colours")
+        read_button.clicked.connect(self._on_read_colors)
+        outer.addWidget(read_button)
+        self._action_buttons.append(read_button)
+
         return group
+
+    def _build_overlay(self) -> KeyboardOverlay:
+        overlay = KeyboardOverlay()
+        overlay.keyClicked.connect(self._on_key_selected)
+        self.overlay = overlay
+        return overlay
 
     def _build_palette_column(self):
         column = QVBoxLayout()
@@ -183,6 +211,9 @@ class UserLightingTab(QWidget):
         enabled = self._device_ready and not self._busy
         for button in self._action_buttons:
             button.setEnabled(enabled)
+        self.apply_selected_button.setEnabled(
+            enabled and self._selected_key is not None and not self.colorful_checkbox.isChecked()
+        )
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -214,6 +245,11 @@ class UserLightingTab(QWidget):
         # its own colors, so the pickers here don't apply to it.
         for widget in self._color_pickers:
             widget.setEnabled(not checked)
+        self._sync_actions()
+
+    def _on_key_selected(self, key_id: int) -> None:
+        self._selected_key = None if key_id < 0 else key_id
+        self._sync_actions()
 
     def rgb(self) -> tuple[int, int, int]:
         return (self._color.red(), self._color.green(), self._color.blue())
@@ -241,6 +277,7 @@ class UserLightingTab(QWidget):
             )
             colors = kb_protocol.build_uniform_colors(self.rgb())
             transactions = custom_mode + kb_protocol.build_color_transfer(colors)
+        self.overlay.clear_swatches()
         self._run_transactions(transactions)
 
     @property
@@ -288,3 +325,82 @@ class UserLightingTab(QWidget):
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
         self._set_busy(False)
+
+    def _on_apply_selected_key(self) -> None:
+        # Single-key colour changes need read-modify-write: build_color_transfer
+        # writes the *entire* 84-key table, so a bare {key: rgb} dict would
+        # blank every other key. Stage 1 reads the current table; stage 2
+        # (_on_read_for_apply_finished) merges the one change and writes it
+        # back. Busy spans both stages -- only the stage-2 write's
+        # thread.finished clears it, so this stage deliberately does not wire
+        # up _on_thread_stopped.
+        if self._busy or self._selected_key is None:
+            return
+        device_path = self._selector.current_path()
+        if device_path is None:
+            QMessageBox.warning(self, "Keyboard", "No device selected.")
+            return
+
+        self._set_busy(True)
+        self.progress_bar.setRange(0, 0)
+        self._debug_log.clear()
+
+        self._read_worker = CallableResultWorker(lambda: read_colors(device_path))
+        self._read_worker.finished.connect(self._on_read_for_apply_finished)
+        self._read_thread = start_worker(self._read_worker)
+
+    def _on_read_for_apply_finished(self, colors: object, error: str) -> None:
+        if error or set(colors) != set(kb_protocol.KEY_IDS):
+            message = error or (
+                f"incomplete colour read ({len(colors)}/{len(kb_protocol.KEY_IDS)} keys) "
+                f"-- refusing to write, since a partial table would blank the rest"
+            )
+            self._debug_log.append("User Lighting", f"-- read failed: {message}")
+            QMessageBox.critical(self, "Keyboard Error", message)
+            self._set_busy(False)
+            return
+
+        device_path = self._selector.current_path()
+        colors[self._selected_key] = self.rgb()
+        custom_mode = kb_protocol.build_effect_transfer(
+            kb_protocol.EFFECT_CUSTOM, rgb=self.rgb(),
+            speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
+        )
+        transactions = custom_mode + kb_protocol.build_color_transfer(colors)
+
+        self.progress_bar.setRange(0, max(len(transactions), 1))
+        self.progress_bar.setValue(0)
+        self.overlay.clear_swatches()
+
+        self._worker = KeyboardWorker(device_path, transactions)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._thread = start_worker(self._worker)
+        self._thread.finished.connect(self._on_thread_stopped)
+
+    def _on_read_colors(self) -> None:
+        if self._busy:
+            return
+        device_path = self._selector.current_path()
+        if device_path is None:
+            QMessageBox.warning(self, "Keyboard", "No device selected.")
+            return
+
+        self._set_busy(True)
+        self.progress_bar.setRange(0, 0)
+        self._debug_log.clear()
+
+        self._read_worker = CallableResultWorker(lambda: read_colors(device_path))
+        self._read_worker.finished.connect(self._on_read_colors_finished)
+        self._read_thread = start_worker(self._read_worker)
+        self._read_thread.finished.connect(self._on_thread_stopped)
+
+    def _on_read_colors_finished(self, colors: object, error: str) -> None:
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(1)
+        if error:
+            self._debug_log.append("User Lighting", f"-- read failed: {error}")
+            QMessageBox.critical(self, "Keyboard Error", error)
+        else:
+            self._debug_log.append("User Lighting", "-- read current colours: ok")
+            self.overlay.set_swatches(colors)

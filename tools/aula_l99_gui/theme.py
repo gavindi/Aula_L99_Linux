@@ -33,6 +33,8 @@ USB_MODE_ICON = ICONS / "usb_mode.png"
 COLOR_WHEEL_IMAGE = THEME / "img_circlepalette.png"
 LOADING_GIF = THEME / "loading.gif"
 LOADING_GIF_SIZE = QSize(100, 100)
+KEYBOARD_LAYOUT_IMAGE = THEME / "keyboard" / "img_keyboard_layout.png"
+LAYOUT_XML = ASSETS / "layouts" / "rgb-keyboard.xml"
 
 TITLE_BAR_HEIGHT = 40
 TITLE_BAR_BG = "rgba(10, 10, 12, 235)"

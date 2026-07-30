@@ -167,11 +167,11 @@ class DeviceTab(QWidget):
         self.screen = DeviceSelector(
             "Touchscreen", list_screen_devices, describe_screen, _resolve_screen
         )
+        layout.addWidget(self._build_keyboard_image())
+        layout.addStretch(1)
         layout.addWidget(self.keyboard)
         layout.addWidget(self.screen)
         layout.addWidget(self._build_connection_group())
-        layout.addWidget(self._build_keyboard_image())
-        layout.addStretch(1)
 
         self.keyboard.changed.connect(self._on_keyboard_changed)
 

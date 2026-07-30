@@ -96,6 +96,30 @@ class KeyboardWorker(QObject):
             self.finished.emit(False, str(exc))
 
 
+def read_colors(device_path: str, timeout: float = 1.0,
+                 gap: float = kb_protocol.PACKET_GAP_SECONDS,
+                 ) -> dict[int, tuple[int, int, int]]:
+    """Read the keyboard's current per-key colours -- the GUI-side companion to
+    aula_l99_hacky/cli.py's cmd_read_color, minus its printing and retry loop
+    (this is a read path, not the flaky write path retry_until_ack guards
+    against). Meant to run inside a CallableResultWorker closure, off the GUI
+    thread. Raises on transport/HID failure."""
+    with HidrawTransport(device_path, timeout_seconds=timeout) as transport:
+        for tx in kb_protocol.build_color_query_commands():
+            transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+            time.sleep(gap)
+            if tx.expect_reply:
+                transport.get_feature(kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)
+                time.sleep(gap)
+
+        blocks = []
+        for _ in range(kb_protocol.COLOR_BLOCK_COUNT):
+            block = transport.get_feature(kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+            time.sleep(gap)
+            blocks.append(block)
+    return kb_protocol.parse_color_blocks(blocks)
+
+
 class CallableResultWorker(QObject):
     """Runs an arbitrary no-arg callable on a background thread and reports
     its return value (or the exception's message) back via `finished`.

@@ -5,6 +5,11 @@ Entirely self-contained -- this tab's color state and Colorful checkbox
 affect only its own Run Effect action, not the User Lighting tab's Apply
 action (which has its own separate copy of the same controls in
 user_lighting_tab.py).
+
+No colour polling here, unlike keyboard_tab.py -- confirmed on hardware that
+OP_COLOR_QUERY, even sequenced strictly after a Run Effect write (never
+overlapping it), silently reverts the keyboard back out of the just-applied
+built-in effect. The overlay below is a static image only.
 """
 from __future__ import annotations
 
@@ -33,6 +38,7 @@ from .color_wheel import ColorWheel
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
+from .keyboard_overlay import KeyboardOverlay
 from .workers import KeyboardWorker, start_worker
 
 # Preset swatches: red, orange, yellow, green, blue, cyan, magenta, white.
@@ -76,6 +82,12 @@ class LightingTab(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
+        overlay_row = QHBoxLayout()
+        overlay_row.addStretch(1)
+        overlay_row.addWidget(self._build_overlay())
+        overlay_row.addStretch(1)
+        layout.addLayout(overlay_row)
+
         main_row = QHBoxLayout()
         main_row.addWidget(self._build_effect_list_group())
         main_row.addLayout(self._build_controls_column(), stretch=1)
@@ -84,6 +96,12 @@ class LightingTab(QWidget):
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
         layout.addStretch(1)
+
+    def _build_overlay(self) -> KeyboardOverlay:
+        overlay = KeyboardOverlay()
+        overlay.setVisible(False)
+        self.overlay = overlay
+        return overlay
 
     def _build_effect_list_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -236,6 +254,7 @@ class LightingTab(QWidget):
 
     def _on_device_changed(self, status: str, enabled: bool) -> None:
         self._device_ready = enabled
+        self.overlay.setVisible(enabled)
         self._sync_actions()
 
     def _sync_actions(self) -> None:

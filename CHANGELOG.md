@@ -5,6 +5,102 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-07-31
+
+**GUI: the keyboard layout image gained real uses across three tabs -- a
+static preview on the Device tab, a live per-key colour-polling overlay on
+the Keyboard tab, and a clickable per-key colour picker plus read-back
+diagnostic on User Lighting -- and two real bugs turned up along the way: a
+write/poll device-access race, and a `QThread`-still-running crash on exit.**
+
+### Added
+- `key_layout.py`: parses the vendor's `assets/layouts/rgb-keyboard.xml`
+  once at import into `KEY_RECTS: dict[key_id, KeyRect]` (pixel rect + name
+  per physical key, against the 800x300 base image). Confirmed by direct
+  comparison, not assumed: the XML's `light_index` is byte-identical to
+  `protocol.KEY_IDS`, just decimal vs hex -- asserted at import as a
+  regression guard.
+- `keyboard_overlay.py`'s `KeyboardOverlay`: a clickable per-key overlay
+  widget on the layout image. Swatches paint *behind* the pixmap, not on top
+  of it -- the per-key art has transparent cutouts, so a colour behind it
+  reads as that key lighting up rather than a rectangle stamped over the
+  artwork. A selected key gets an outline; clicking an already-selected key
+  deselects it (toggle, no separate "clear" control needed).
+- `workers.py`'s `read_colors()`: the GUI-side read path for per-key colour
+  -- mirrors `aula_l99_hacky/cli.py`'s `cmd_read_color` (query commands +
+  `COLOR_BLOCK_COUNT` raw feature-report reads + `parse_color_blocks`) minus
+  its printing/retry loop, meant to run inside a `CallableResultWorker` off
+  the GUI thread.
+- Device tab: the keyboard layout image moved to the top of the tab, above
+  a stretch that pushes the Keyboard/Touchscreen selectors and the
+  Connection group down to the very bottom.
+- Keyboard tab: the same layout image, now a live `KeyboardOverlay` polling
+  `read_colors()` on a `QTimer` -- default 100ms, adjustable via a "Colour
+  Polling" group's `QSpinBox` (1-5000ms, wired straight to
+  `QTimer.setInterval` so it retunes live). Hidden until a keyboard's
+  detected; RTC "Set Clock to Now" and the progress bar moved below it.
+- User Lighting tab: the same overlay (no group-box title -- plain, matching
+  the other two tabs), driving two new actions alongside the existing
+  "Apply to All Keys": "Apply to Selected Key" (click a key on the overlay,
+  pick a colour, Apply -- read-modify-write via two chained workers, since
+  `build_color_transfer` replaces the *entire* 84-key table and would blank
+  every unmentioned key) and "Read Current Colours" (paints the overlay with
+  each key's actual on-device colour, purely diagnostic, never polled --
+  button-triggered only). Aborts with an error rather than writing if a
+  readback comes back incomplete; disabled while Colorful is checked; any
+  write auto-clears stale readback swatches.
+- `theme.py` gained `KEYBOARD_LAYOUT_IMAGE`/`LAYOUT_XML` path constants,
+  consolidating what `device_tab.py` had defined locally.
+
+### Fixed
+- **Device-access race between colour polling and writes**: a colour-poll
+  read's full cycle (2 query transactions + 9 block reads, each gapped
+  10ms) runs ~130-160ms -- longer than the 100ms default poll interval, so
+  a background poll was very often still holding the keyboard's hidraw
+  handle open when a write (Set Clock, Run Effect) was clicked.
+  `_run_transactions` didn't check for this at all, so writes were racing
+  an in-flight read for the same device and losing. Fixed by queuing the
+  write behind any in-flight poll (`_pending_write`) instead of racing it,
+  flushed by `_on_poll_thread_stopped` the moment the read actually
+  finishes.
+- **Colour polling silently broke built-in effects on real hardware**:
+  confirmed on hardware that a Run Effect write on the Lighting tab acked
+  every transaction cleanly (`begin`/`effect`/`commit`/`end` all "ok") yet
+  the keyboard's lighting didn't actually change, whenever background
+  colour-polling was also running on that tab -- not a timing race (a
+  500ms post-write cooldown before resuming polling didn't fix it either),
+  but `OP_COLOR_QUERY` itself appears to revert the keyboard out of a
+  just-applied built-in effect even when strictly sequenced after the
+  write, never overlapping it. Colour polling removed entirely from the
+  Lighting tab (reverted to a static overlay image, matching Device tab) --
+  it only ever belonged on Keyboard tab (which never writes lighting data)
+  and User Lighting tab (which only ever writes *custom* per-key colours,
+  never a built-in effect).
+- **`QThread: Destroyed while thread '' is still running` crash on exit**:
+  `MainWindow.closeEvent()` already refused to close while any tab was
+  mid-*write*, but never accounted for the Keyboard tab's background poll
+  thread, which can easily still be mid-read at the moment the window
+  closes. New `KeyboardTab.shutdown()` stops the poll timer and, if a read
+  is in flight, blocks (`QThread.quit()` + `.wait()`) until it actually
+  finishes before `closeEvent` accepts the close -- verified headlessly
+  that this waits out a genuinely in-flight thread rather than a fixed
+  guess, and doesn't deadlock doing it.
+
+### Changed
+- Colour polling now pauses whenever *any* tab is busy, not just its own --
+  new `KeyboardTab.set_external_busy()`, driven from `MainWindow`'s existing
+  all-tabs busy aggregate (previously only used to drive the loading
+  spinner). Another tab's transaction can be holding the same hidraw handle
+  open even though this tab itself is idle.
+
+### Known gaps
+- Live physical-keypress highlighting (light up a key's overlay rect when
+  it's actually pressed) was considered and deliberately descoped: it needs
+  reading the keyboard's standard HID input-report interface, which is a
+  different, not-yet-identified interface from the vendor control interface
+  everything else here targets, and finding it needs hardware probing this
+  round didn't do.
+
 ## [0.9.6] - 2026-07-31
 
 **Touchscreen upload's fixed 5ms inter-packet delay made tunable from the

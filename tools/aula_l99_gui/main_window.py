@@ -288,6 +288,13 @@ class MainWindow(QMainWindow):
         else:
             self._loading_movie.stop()
 
+        # Colour polling (keyboard_tab.py) pauses for *any* upload in
+        # progress, not just its own tab's -- another tab's transaction can
+        # be holding the keyboard's hidraw handle open, and interleaving a
+        # colour-query read with it could confuse the firmware's stateful
+        # begin/commit/end session.
+        self._keyboard_tab.set_external_busy(busy)
+
     def paintEvent(self, event) -> None:
         theme.paint_background(self, self._background)
         super().paintEvent(event)
@@ -312,4 +319,10 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+
+        # Colour polling isn't covered by the busy-check above (deliberately
+        # -- it's frequent and lightweight, not worth nagging the user to
+        # wait out), but its QThread still has to actually stop before this
+        # window gets torn down, or Qt aborts the process on exit.
+        self._keyboard_tab.shutdown()
         event.accept()
