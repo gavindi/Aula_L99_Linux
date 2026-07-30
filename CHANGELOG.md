@@ -5,6 +5,59 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-07-31
+
+**GUI: GIF conversion (frame decode + dithering) moved off the GUI thread,
+a loading spinner now shows whenever any tab is busy, and GIF upload
+gained an MP4 video source.**
+
+### Added
+- `workers.py`'s `CallableResultWorker`: runs an arbitrary no-arg callable
+  on a background thread and reports its return value or exception message
+  back via `finished`. GIF upload's frame decode/resize and
+  `protocol.py`'s dithering + CRC computation were being done inline in the
+  button's click handler -- profiled at ~3s for just a 10-frame dithered
+  GIF (see 0.8.6/0.8.5), long enough to freeze the window. `touchscreen_tab.py`
+  now runs that whole pipeline (`_build_gif_packets`) through this worker,
+  with its own `_convert_worker`/`_convert_thread` pair separate from the
+  upload phase's; `_collect_gif_frame_pixels`/`_ensure_safe_colors` raise
+  instead of calling `QMessageBox` directly, since Qt widgets aren't
+  thread-safe and this now runs off the GUI thread.
+- A `busy_changed` signal and `_set_busy()` helper on all five tabs (Device,
+  Keyboard, Lighting, User Lighting, Touchscreen), replacing every direct
+  `self._busy = ...` assignment. `MainWindow` connects all five to one
+  handler that shows a `loading.gif` spinner (via `QMovie`), floated
+  centred over the whole window -- not part of any layout, parented
+  straight to `MainWindow` and re-raised after `setCentralWidget` so it
+  can't end up buried under the tab content -- whenever any tab reports
+  busy.
+- GIF upload gained a "Video (MP4)" source alongside folder/files/animated
+  GIF. `_extract_video_frames` shells out to a system `ffmpeg` (no new pip
+  dependency for this -- PyAV/opencv-python were both heavier than felt
+  justified) and samples at `fps = 100/delay`, so the extracted frame
+  count follows the same "Delay (centiseconds)" spinbox every other source
+  already uses rather than pulling in every frame of a 24-60fps source.
+  Raw `rgb24` output is reshaped via byte-strided slicing + `zip` (a
+  C-level reshape, not a per-pixel Python loop).
+
+### Fixed
+- The loading spinner itself could stall/stutter during GIF conversion even
+  though that work already ran on a background `QThread`. Root cause: a
+  tight pure-Python per-pixel loop with no natural GIL-release point
+  (`dither_frame_floyd_steinberg`, 320x480 pixels/frame) can still starve
+  the main thread of enough GIL time to service `QMovie`'s frame-advance
+  timer smoothly -- CPython's GIL serializes actual bytecode execution
+  between threads regardless of which OS thread a QThread runs on. Added a
+  `time.sleep(0)` yield once per row (not per pixel -- that would
+  meaningfully slow the algorithm down) in `aula_l99_screen/protocol.py`;
+  a no-op for single-threaded CLI use, but gives the main thread frequent,
+  reliable chances to reacquire the GIL during GUI conversion.
+
+### Changed
+- "Dither" now defaults to checked, and its label dropped the "(confirmed
+  working on real hardware)" qualifier -- confirmed enough at this point
+  (see 0.8.6 onward) not to need repeating on every use.
+
 ## [0.9.1] - 2026-07-30
 
 **GUI: Lighting split into Lighting (built-in effects) and a new User

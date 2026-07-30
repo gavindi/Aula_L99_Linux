@@ -7,7 +7,7 @@ its own separate copy of the same controls in lighting_tab.py).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -50,6 +50,8 @@ COLORFUL_EFFECT_ID = 0x06
 
 
 class UserLightingTab(QWidget):
+    busy_changed = Signal(bool)
+
     def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
         self._selector = selector
@@ -185,6 +187,11 @@ class UserLightingTab(QWidget):
         for button in self._action_buttons:
             button.setEnabled(enabled)
 
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.busy_changed.emit(busy)
+        self._sync_actions()
+
     # -- color ------------------------------------------------------------
 
     def _update_swatch(self) -> None:
@@ -251,8 +258,7 @@ class UserLightingTab(QWidget):
             QMessageBox.warning(self, "Keyboard", "No device selected.")
             return
 
-        self._busy = True
-        self._sync_actions()
+        self._set_busy(True)
         self.progress_bar.setMaximum(max(len(transactions), 1))
         self.progress_bar.setValue(0)
         self.log.clear()
@@ -284,5 +290,4 @@ class UserLightingTab(QWidget):
         # self._worker/self._thread reassignment) once the QThread has
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
-        self._busy = False
-        self._sync_actions()
+        self._set_busy(False)

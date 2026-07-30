@@ -31,6 +31,8 @@ BACKGROUND_IMAGE = THEME / "main_bkg.png"
 LOGO_IMAGE = THEME / "logo" / "logo.png"
 USB_MODE_ICON = ICONS / "usb_mode.png"
 COLOR_WHEEL_IMAGE = THEME / "img_circlepalette.png"
+LOADING_GIF = THEME / "loading.gif"
+LOADING_GIF_SIZE = QSize(100, 100)
 
 TITLE_BAR_HEIGHT = 40
 TITLE_BAR_BG = "rgba(10, 10, 12, 235)"

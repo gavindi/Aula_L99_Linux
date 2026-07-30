@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QMovie, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -185,6 +185,27 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._refresh_tab_icons)
         self._refresh_tab_icons(self._tabs.currentIndex())  # currentChanged
 
+        # Floating overlay, not part of any layout -- parented straight to
+        # the window so it can sit centred over everything (title bar and
+        # tab content alike) rather than just one tab's own area.
+        self._loading_movie = QMovie(str(theme.LOADING_GIF))
+        self._loading_overlay = QLabel(self)
+        self._loading_overlay.setMovie(self._loading_movie)
+        self._loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._loading_overlay.setFixedSize(theme.LOADING_GIF_SIZE)
+        self._loading_overlay.move(
+            (self.width() - self._loading_overlay.width()) // 2,
+            (self.height() - self._loading_overlay.height()) // 2,
+        )
+        self._loading_overlay.setVisible(False)
+        self._loading_overlay.raise_()
+
+        for tab in (
+            self._device_tab, self._keyboard_tab, self._lighting_tab,
+            self._user_lighting_tab, self._touchscreen_tab,
+        ):
+            tab.busy_changed.connect(self._on_any_busy_changed)
+
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
@@ -192,6 +213,10 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self._title_bar)
         central_layout.addWidget(self._tabs)
         self.setCentralWidget(central)
+        # Re-raised here: setCentralWidget can reparent/restack central above
+        # siblings added before it, which would otherwise bury the overlay
+        # under the tab content it's supposed to float over.
+        self._loading_overlay.raise_()
 
         # Only after both control tabs have connected to their selector's
         # `changed` signal -- refreshing any earlier means they never receive
@@ -236,6 +261,24 @@ class MainWindow(QMainWindow):
         # from the Device tab's selectors -- both statuses combined here
         # since one icon now speaks for both devices.
         self._title_bar.set_usb_tooltip(f"{self._keyboard_status}\n{self._screen_status}")
+
+    def _on_any_busy_changed(self, _busy: bool) -> None:
+        # Recomputes from every tab's own `is_busy` rather than trusting just
+        # the `busy` this particular signal carried -- simpler than tracking
+        # each tab's last-known state separately, and the reason this handler
+        # is shared by all five tabs' `busy_changed` instead of one per tab.
+        busy = (
+            self._device_tab.is_busy
+            or self._keyboard_tab.is_busy
+            or self._lighting_tab.is_busy
+            or self._user_lighting_tab.is_busy
+            or self._touchscreen_tab.is_busy
+        )
+        self._loading_overlay.setVisible(busy)
+        if busy:
+            self._loading_movie.start()
+        else:
+            self._loading_movie.stop()
 
     def paintEvent(self, event) -> None:
         theme.paint_background(self, self._background)

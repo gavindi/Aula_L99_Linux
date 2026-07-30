@@ -150,6 +150,8 @@ class DeviceTab(QWidget):
     calls refresh_all() once the control tabs have connected to `changed`,
     otherwise they'd miss the first emission and sit disabled forever."""
 
+    busy_changed = Signal(bool)
+
     def __init__(self) -> None:
         super().__init__()
         self._thread = None
@@ -216,6 +218,11 @@ class DeviceTab(QWidget):
     def _sync_connection_button(self) -> None:
         self.test_connection_button.setEnabled(self._keyboard_ready and not self._busy)
 
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.busy_changed.emit(busy)
+        self._sync_connection_button()
+
     def _on_handshake(self) -> None:
         if self._busy:
             return
@@ -224,8 +231,7 @@ class DeviceTab(QWidget):
             QMessageBox.warning(self, "Keyboard", "No device selected.")
             return
 
-        self._busy = True
-        self._sync_connection_button()
+        self._set_busy(True)
 
         # See lighting_tab.py's _run_transactions for why `_worker`/`_thread`
         # are kept referenced until `thread.finished` (not `worker.finished`)
@@ -245,8 +251,7 @@ class DeviceTab(QWidget):
         QMessageBox.critical(self, "Keyboard Error", text)
 
     def _on_thread_stopped(self) -> None:
-        self._busy = False
-        self._sync_connection_button()
+        self._set_busy(False)
 
     @property
     def is_busy(self) -> bool:

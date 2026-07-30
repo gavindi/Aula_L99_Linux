@@ -1,14 +1,17 @@
-"""Background-thread workers wrapping the keyboard/screen device I/O.
+"""Background-thread workers wrapping the keyboard/screen device I/O, plus a
+generic one for CPU-bound work (currently: GIF frame decode + dithering).
 
-Reimplements the transaction-running and packet-sending loops from each
-tool's cli.py (aula_l99_hacky/cli.py's _run_cable/_run_sequence and
-aula_l99_screen/cli.py's cmd_upload send loop) against the public
-protocol.py/device.py API, emitting Qt signals instead of printing, so the
-GUI thread never blocks on hidraw feature-report or serial I/O.
+The device-I/O workers reimplement the transaction-running and
+packet-sending loops from each tool's cli.py (aula_l99_hacky/cli.py's
+_run_cable/_run_sequence and aula_l99_screen/cli.py's cmd_upload send loop)
+against the public protocol.py/device.py API, emitting Qt signals instead of
+printing, so the GUI thread never blocks on hidraw feature-report or serial
+I/O.
 """
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -91,6 +94,36 @@ class KeyboardWorker(QObject):
             )
         except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
             self.finished.emit(False, str(exc))
+
+
+class CallableResultWorker(QObject):
+    """Runs an arbitrary no-arg callable on a background thread and reports
+    its return value (or the exception's message) back via `finished`.
+
+    Introduced for GIF upload: loading/resizing source frames and building
+    the upload blob (protocol.py's dithering + CRC computation) were being
+    done inline in the button's click handler, which froze the window for
+    however long that took -- profiled at ~3s for just a 10-frame dithered
+    GIF (see CHANGELOG). This has no device-I/O or GIF-specific knowledge of
+    its own; the caller supplies a closure that does the actual work and
+    raises on failure instead of touching any widgets, since this runs off
+    the GUI thread.
+    """
+
+    finished = Signal(object, str)  # result (None on failure), error ("" on success)
+
+    def __init__(self, fn: Callable[[], object]):
+        super().__init__()
+        self._fn = fn
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self._fn()
+        except Exception as exc:  # noqa: BLE001 - reported back, not swallowed
+            self.finished.emit(None, str(exc))
+        else:
+            self.finished.emit(result, "")
 
 
 class ScreenUploadWorker(QObject):

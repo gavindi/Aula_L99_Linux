@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
+import subprocess
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -34,7 +36,7 @@ from aula_l99_screen import protocol as screen_protocol
 
 from .device_tab import DeviceSelector
 from .device_utils import SCREEN_PERMISSION_HINT
-from .workers import ScreenUploadWorker, start_worker
+from .workers import CallableResultWorker, ScreenUploadWorker, start_worker
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 SINGLE_IMAGE_TARGETS = {
@@ -49,11 +51,18 @@ def _pillow_missing_message() -> str:
 
 
 class TouchscreenTab(QWidget):
+    busy_changed = Signal(bool)
+
     def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
         self._selector = selector
         self._thread = None
         self._worker = None
+        self._convert_thread = None
+        self._convert_worker = None
+        self._convert_result: tuple[list[bytes], int, int] | None = None
+        self._convert_error = ""
+        self._pending_upload_device_path: str | None = None
         self._busy = False
         self._device_ready = False
         self._action_buttons: list[QPushButton] = []
@@ -62,6 +71,7 @@ class TouchscreenTab(QWidget):
         self._gif_folder_paths: list[str] = []
         self._gif_file_paths: list[str] = []
         self._gif_animated_path: str | None = None
+        self._gif_video_path: str | None = None
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
@@ -151,6 +161,16 @@ class TouchscreenTab(QWidget):
         gif_row.addStretch(1)
         layout.addLayout(gif_row)
 
+        video_row = QHBoxLayout()
+        self.radio_video = QRadioButton("Video (MP4)")
+        self._gif_source_group.addButton(self.radio_video)
+        video_row.addWidget(self.radio_video)
+        video_button = QPushButton("Choose Video…")
+        video_button.clicked.connect(self._on_choose_gif_video)
+        video_row.addWidget(video_button)
+        video_row.addStretch(1)
+        layout.addLayout(video_row)
+
         self.gif_frame_list = QListWidget()
         self.gif_frame_list.setMaximumHeight(100)
         layout.addWidget(self.gif_frame_list)
@@ -165,8 +185,8 @@ class TouchscreenTab(QWidget):
         layout.addLayout(delay_row)
 
         dither_row = QHBoxLayout()
-        self.dither_checkbox = QCheckBox("Dither (confirmed working on real hardware)")
-        self.dither_checkbox.setChecked(False)
+        self.dither_checkbox = QCheckBox("Dither")
+        self.dither_checkbox.setChecked(True)
         dither_row.addWidget(self.dither_checkbox)
         dither_row.addStretch(1)
         layout.addLayout(dither_row)
@@ -191,6 +211,11 @@ class TouchscreenTab(QWidget):
         enabled = self._device_ready and not self._busy
         for button in self._action_buttons:
             button.setEnabled(enabled)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.busy_changed.emit(busy)
+        self._sync_actions()
 
     # -- image loading ------------------------------------------------------
 
@@ -290,11 +315,29 @@ class TouchscreenTab(QWidget):
         self.radio_gif.setChecked(True)
         self._refresh_gif_frame_list([f"{pathlib.Path(path).name} (all frames)"])
 
+    def _on_choose_gif_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Choose Video", filter="Video (*.mp4)")
+        if not path:
+            return
+        self._gif_video_path = path
+        self.radio_video.setChecked(True)
+        self._refresh_gif_frame_list([f"{pathlib.Path(path).name} (sampled at the delay below)"])
+
     def _refresh_gif_frame_list(self, labels: list[str]) -> None:
         self.gif_frame_list.clear()
         self.gif_frame_list.addItems(labels)
 
-    def _collect_gif_frame_pixels(self) -> list[list[tuple[int, int, int]]] | None:
+    def _collect_gif_frame_pixels(self, delay: int) -> list[list[tuple[int, int, int]]]:
+        # Raises rather than showing a QMessageBox and returning None: this
+        # runs off the GUI thread now (see _build_gif_packets), and Qt
+        # widgets aren't thread-safe. _on_convert_thread_stopped turns the
+        # exception message into a dialog back on the GUI thread once the
+        # background job (a CallableResultWorker) finishes.
+        if self.radio_video.isChecked():
+            if self._gif_video_path is None:
+                raise ValueError("No video selected.")
+            return self._extract_video_frames(self._gif_video_path, delay)
+
         if self.radio_folder.isChecked():
             paths = self._gif_folder_paths
         elif self.radio_files.isChecked():
@@ -304,20 +347,17 @@ class TouchscreenTab(QWidget):
 
         if paths is not None:
             if not paths:
-                QMessageBox.warning(self, "Screen", "No frames selected.")
-                return None
+                raise ValueError("No frames selected.")
             frames = []
             for path in paths:
                 try:
                     frames.append(self._pixels_from_image(self._load_image(path)))
                 except OSError as exc:
-                    QMessageBox.critical(self, "Screen", f"Could not open {path}:\n{exc}")
-                    return None
+                    raise ValueError(f"Could not open {path}: {exc}") from exc
             return frames
 
         if self._gif_animated_path is None:
-            QMessageBox.warning(self, "Screen", "No animated GIF selected.")
-            return None
+            raise ValueError("No animated GIF selected.")
         frames = []
         size = (screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT)
         with Image.open(self._gif_animated_path) as im:
@@ -327,9 +367,89 @@ class TouchscreenTab(QWidget):
                     rgb = rgb.resize(size, Image.LANCZOS)
                 frames.append(self._pixels_from_image(rgb))
         if not frames:
-            QMessageBox.warning(self, "Screen", "That GIF has no frames.")
-            return None
+            raise ValueError("That GIF has no frames.")
         return frames
+
+    def _extract_video_frames(self, path: str, delay: int) -> list[list[tuple[int, int, int]]]:
+        """Decodes video frames via a system ffmpeg subprocess -- no video
+        decoding library is otherwise a dependency of this project, and
+        shelling out avoids adding one (PyAV/opencv-python) just for this.
+
+        Samples at fps = 100/delay so the extracted frame count matches the
+        same "Delay (centiseconds)" spinbox every other source uses for
+        playback timing, rather than pulling every frame of what's typically
+        a 24-60fps source into what's a small, slow panel to redraw.
+        """
+        if shutil.which("ffmpeg") is None:
+            raise ValueError(
+                "ffmpeg is required to convert video and wasn't found on PATH. "
+                "Install it (e.g. apt install ffmpeg) and try again."
+            )
+
+        width, height = screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT
+        fps = 100.0 / delay
+        command = [
+            "ffmpeg", "-i", path,
+            "-vf",
+            f"fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace")
+            raise ValueError(f"ffmpeg failed to decode {path}:\n{stderr[-800:]}") from exc
+
+        frame_size = width * height * 3
+        data = result.stdout
+        # Drop a truncated trailing frame rather than fail outright -- ffmpeg
+        # occasionally writes a partial last frame for an odd frame count.
+        usable = len(data) - (len(data) % frame_size)
+        frames = []
+        for offset in range(0, usable, frame_size):
+            chunk = data[offset:offset + frame_size]
+            # zip over three byte-strided slices (each a C-level slice, not a
+            # per-pixel Python loop) is the same reshape dither_frame_floyd_
+            # steinberg's per-pixel loop can't avoid -- see protocol.py's
+            # comment on that one for why a hot pure-Python loop here would
+            # matter even off the GUI thread.
+            frames.append(list(zip(chunk[0::3], chunk[1::3], chunk[2::3])))
+        if not frames:
+            raise ValueError("That video produced no frames.")
+        return frames
+
+    def _ensure_safe_colors(self, frames: list[list[tuple[int, int, int]]]) -> None:
+        bad: dict[tuple[int, int, int], int] = {}
+        for pixels in frames:
+            for color in pixels:
+                if not screen_protocol.is_safe_gif_color(*color):
+                    bad[color] = bad.get(color, 0) + 1
+        if bad:
+            worst = sorted(bad.items(), key=lambda kv: -kv[1])[:10]
+            lines = "\n".join(f"  rgb{color}: {count} px" for color, count in worst)
+            raise ValueError(
+                "These colors need dithering, which isn't supported -- every pixel "
+                "must have R, G, or B at exactly 0 or 255. Check \"Dither\" to "
+                "encode this anyway (confirmed working on real hardware):\n\n" + lines
+            )
+
+    def _build_gif_packets(self, dither: bool, delay: int) -> tuple[list[bytes], int, int]:
+        """Everything slow about a GIF upload: decode/resize every source
+        frame, then protocol.py's dithering + CRC computation. Runs on a
+        background thread (see _on_upload_gif) -- profiled at ~3s for just a
+        10-frame dithered GIF, which is long enough to freeze the window if
+        run inline with the button click, as it used to be.
+        """
+        frames = self._collect_gif_frame_pixels(delay)
+        if not dither:
+            self._ensure_safe_colors(frames)
+        blob = screen_protocol.build_gif_blob(
+            frames, screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT,
+            delay=delay, dither=dither,
+        )
+        packets = screen_protocol.build_upload(blob, screen_protocol.GIF_FLASH_BASE)
+        return packets, len(frames), len(blob)
 
     def _on_upload_gif(self) -> None:
         if self._busy:
@@ -342,41 +462,47 @@ class TouchscreenTab(QWidget):
             QMessageBox.warning(self, "Screen", "No device selected.")
             return
 
-        frames = self._collect_gif_frame_pixels()
-        if frames is None:
-            return
-
         dither = self.dither_checkbox.isChecked()
+        delay = self.gif_delay_spin.value()
 
-        if not dither:
-            bad: dict[tuple[int, int, int], int] = {}
-            for pixels in frames:
-                for color in pixels:
-                    if not screen_protocol.is_safe_gif_color(*color):
-                        bad[color] = bad.get(color, 0) + 1
-            if bad:
-                worst = sorted(bad.items(), key=lambda kv: -kv[1])[:10]
-                lines = "\n".join(f"  rgb{color}: {count} px" for color, count in worst)
-                QMessageBox.warning(
-                    self, "Screen",
-                    "These colors need dithering, which isn't supported -- every pixel "
-                    "must have R, G, or B at exactly 0 or 255. Check \"Dither\" to "
-                    "encode this anyway (confirmed working on real hardware):\n\n" + lines,
-                )
-                return
+        self._set_busy(True)
+        self.log.clear()
+        self.log.appendPlainText("Converting frames…")
 
-        try:
-            blob = screen_protocol.build_gif_blob(
-                frames, screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT,
-                delay=self.gif_delay_spin.value(), dither=dither,
-            )
-        except ValueError as exc:
-            QMessageBox.critical(self, "Screen", str(exc))
+        # Separate worker/thread attributes from the upload phase's
+        # (self._worker/self._thread, set in _start_upload) -- both are
+        # reassigned on their own schedule and would otherwise race each
+        # other's "only safe once the old QThread has actually stopped" rule.
+        self._pending_upload_device_path = device_path
+        self._convert_worker = CallableResultWorker(
+            lambda: self._build_gif_packets(dither, delay)
+        )
+        self._convert_worker.finished.connect(self._on_gif_converted)
+        self._convert_thread = start_worker(self._convert_worker)
+        self._convert_thread.finished.connect(self._on_convert_thread_stopped)
+
+    def _on_gif_converted(self, result: object, error: str) -> None:
+        # Just stash the outcome -- see _on_convert_thread_stopped for why
+        # `_busy` isn't touched and the next phase isn't started here.
+        self._convert_result = result
+        self._convert_error = error
+
+    def _on_convert_thread_stopped(self) -> None:
+        # Only safe to clear `_busy` (on failure) or start the next phase (on
+        # success) once this QThread has actually stopped -- not merely once
+        # the worker reported it was done, which races the still-shutting-down
+        # old thread. Same reasoning as _on_thread_stopped below, for the
+        # conversion phase's own worker/thread pair.
+        if self._convert_error:
+            self._set_busy(False)
+            QMessageBox.critical(self, "Screen", self._convert_error)
             return
-
-        packets = screen_protocol.build_upload(blob, screen_protocol.GIF_FLASH_BASE)
-        self.log.appendPlainText(f"{len(frames)} frame(s), {len(blob)} bytes")
-        self._start_upload(device_path, packets)
+        packets, frame_count, blob_len = self._convert_result
+        self.log.appendPlainText(f"{frame_count} frame(s), {blob_len} bytes")
+        # _busy stays True -- _start_upload sets it again (harmless) and it
+        # only ever meant "an upload-tab action is in flight", covering both
+        # the conversion and the upload phase.
+        self._start_upload(self._pending_upload_device_path, packets)
 
     # -- shared upload plumbing ------------------------------------------
 
@@ -385,8 +511,7 @@ class TouchscreenTab(QWidget):
         return self._busy
 
     def _start_upload(self, device_path: str, packets: list[bytes]) -> None:
-        self._busy = True
-        self._sync_actions()
+        self._set_busy(True)
         self.progress_bar.setMaximum(max(len(packets), 1))
         self.progress_bar.setValue(0)
 
@@ -417,8 +542,7 @@ class TouchscreenTab(QWidget):
         # self._worker/self._thread reassignment) once the QThread has
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
-        self._busy = False
-        self._sync_actions()
+        self._set_busy(False)
 
     def _on_finished(self, success: bool, message: str) -> None:
         self.log.appendPlainText(f"-- {message}")

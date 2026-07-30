@@ -36,6 +36,7 @@ is framed and chunked on the wire.
 from __future__ import annotations
 
 import struct
+import time
 
 HEADER_SIZE = 11
 OFF_SIZE = 0
@@ -1632,6 +1633,17 @@ def dither_frame_floyd_steinberg(
                     err_r[i + width + 1] += er * 1 / 16
                     err_g[i + width + 1] += eg * 1 / 16
                     err_b[i + width + 1] += eb * 1 / 16
+        # Tight pure-Python loop with no natural GIL-release point of its own;
+        # on a multi-core machine a thread that keeps re-acquiring the GIL
+        # the instant it's released can starve other threads of it far more
+        # than CPython's switch-interval alone would suggest (the "GIL
+        # convoy" effect) -- e.g. the GUI's main thread stalls badly enough
+        # to visibly freeze a QMovie spinner while this runs on a worker
+        # thread. One yield per row (not per pixel -- that would meaningfully
+        # slow this down) is enough opportunities for another thread to get
+        # scheduled, and is a no-op when nothing else is runnable, as in
+        # single-threaded CLI use.
+        time.sleep(0)
     return out
 
 

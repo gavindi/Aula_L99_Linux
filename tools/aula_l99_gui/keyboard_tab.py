@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -26,6 +27,8 @@ from .workers import KeyboardWorker, start_worker
 
 
 class KeyboardTab(QWidget):
+    busy_changed = Signal(bool)
+
     def __init__(self, selector: DeviceSelector) -> None:
         super().__init__()
         self._selector = selector
@@ -77,6 +80,11 @@ class KeyboardTab(QWidget):
         for button in self._action_buttons:
             button.setEnabled(enabled)
 
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        self.busy_changed.emit(busy)
+        self._sync_actions()
+
     # -- actions ------------------------------------------------------------
 
     def _on_set_rtc(self) -> None:
@@ -94,8 +102,7 @@ class KeyboardTab(QWidget):
             QMessageBox.warning(self, "Keyboard", "No device selected.")
             return
 
-        self._busy = True
-        self._sync_actions()
+        self._set_busy(True)
         self.progress_bar.setMaximum(max(len(transactions), 1))
         self.progress_bar.setValue(0)
         self.log.clear()
@@ -127,5 +134,4 @@ class KeyboardTab(QWidget):
         # self._worker/self._thread reassignment) once the QThread has
         # actually stopped -- not merely once the worker reported it was
         # done, which races the still-shutting-down old thread.
-        self._busy = False
-        self._sync_actions()
+        self._set_busy(False)
