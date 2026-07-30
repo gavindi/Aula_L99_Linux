@@ -5,6 +5,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-30
+
+**New tool: `aula_l99_gui`, a PySide6 GUI wrapping both `aula_l99_hacky`
+(keyboard) and `aula_l99_screen` (touchscreen) so their core features can be
+driven without CLI flags.** First GUI in the repo; imports both tools'
+`protocol.py`/`device.py` directly rather than shelling out to their CLIs.
+
+### Added
+- `tools/aula_l99_gui/`: a two-tab app (`main_window.py`, `keyboard_tab.py`,
+  `screen_tab.py`) covering a curated subset of each CLI, not full parity.
+  Keyboard tab: device list/refresh, handshake test, per-key color, built-in
+  effects (dropdown tagged confirmed/untested from `EFFECT_CONFIRMED`) with
+  speed/brightness, and RTC set -- cable path only, same as the CLI. Screen
+  tab: single-image upload to `photo-frame`/`background`, and GIF upload
+  from a folder, multiple files, or an animated `.gif`, with a pre-upload
+  safe-color check (`is_safe_gif_color`) that lists offending colors instead
+  of sending something the from-scratch encoder can't build.
+- `workers.py`: background `QThread` workers reimplementing each CLI's
+  device-I/O loop (`aula_l99_hacky/cli.py`'s `_run_cable`/`_run_sequence`,
+  `aula_l99_screen/cli.py`'s `cmd_upload` packet loop) against the public
+  `protocol.py`/`device.py` API, emitting Qt signals for live progress
+  instead of printing -- keeps the UI responsive during a handshake or
+  upload.
+- `tools/aula_l99_gui/README.md`: install/run instructions and a feature
+  summary.
+
+### Fixed
+- A `QThread` teardown crash ("QThread: Destroyed while thread ... is still
+  running", then a segfault) hit on first real hardware use, right after a
+  successful screen upload. Root cause: the "operation finished" UI update
+  was gated on the *worker's* `finished` signal, which fires before the
+  underlying `QThread` has actually stopped -- reassigning or nulling
+  `self._worker`/`self._thread` at that point could drop Python's last
+  reference to a `QThread` that was still alive. A first fix attempt (adding
+  `deleteLater()` alongside the manual nulling) traded that bug for a
+  double-free race between Qt's deferred deletion and Python's
+  refcount-triggered one. Final fix: gate re-enabling the UI (and thus
+  allowing a new worker/thread to be created) on `QThread.finished`, not
+  `Worker.finished`, and never explicitly null the references -- the next
+  run's reassignment (or normal object teardown) drops them safely once
+  `deleteLater()` has already made the underlying C++ object releasable.
+  Verified with an offline threaded regression test simulating rapid
+  consecutive uploads that reproduced both crash variants before the fix and
+  passed cleanly after.
+- `main_window.py` now blocks closing the window while a keyboard
+  transaction or screen upload is in flight (`closeEvent` checks each tab's
+  `is_busy`), since interrupting a screen upload partway through can freeze
+  the panel.
+
+### Known gaps
+- Curated feature set only: no raw-hex-send, `--convert`/`--describe`,
+  `--address` override, `--ignore-nak`, or video-file GIF frame extraction
+  -- use the CLIs directly for those.
+- GIF upload always applies one uniform delay to every frame regardless of
+  source, rather than reading a source `.gif`'s own embedded per-frame
+  delays -- sidesteps the delay-uniformity constraint from 0.7.6 entirely
+  rather than surfacing it.
+- Not tested against the dongle path (disabled in the UI, same as the CLI).
+
 ## [0.7.7] - 2026-07-30
 
 **"Save to GIF": identified the underlying display chip and confirmed the
