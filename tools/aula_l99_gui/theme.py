@@ -33,12 +33,17 @@ BACKGROUND_IMAGE = THEME / "main_bkg.png"
 # Icon strip -> tab, using the vendor's own tab art. `_pressed` is the
 # fully-saturated orange frame, which reads as "current tab".
 TAB_ICONS = {
-    "Device": "tab_config",
+    "Device": "tab_home",
     "Keyboard": "tab_customkey",
     "Touchscreen": "tab_tft",
 }
-# The strip frames are 36x36; 20px keeps the tab bar a sane height.
+# The strip frames are 36x36; 20px keeps the icon rail compact.
 TAB_ICON_SIZE = QSize(20, 20)
+# The rail is icon-only, with each button twice its icon's size. Derived rather
+# than hardcoded so the 2x relationship survives a change to TAB_ICON_SIZE.
+# Set here rather than in the stylesheet because Qt applies QSS
+# min-width/min-height in a West tab bar's rotated frame.
+SIDEBAR_TAB_SIZE = QSize(TAB_ICON_SIZE.width() * 2, TAB_ICON_SIZE.height() * 2)
 
 
 def _url(path: pathlib.Path) -> str:
@@ -93,7 +98,12 @@ QMainWindow, QTabWidget::pane, QTabBar, QWidget#DeviceTab {{
 }}
 QTabWidget::pane {{
     border: none;
-    top: -1px;
+    left: -1px;
+}}
+/* Keep the sidebar packed at the top instead of centred down the edge. */
+QTabWidget::tab-bar {{
+    alignment: left;
+    top: 0;
 }}
 
 QWidget {{
@@ -104,20 +114,22 @@ QWidget:disabled {{
     color: {TEXT_DISABLED};
 }}
 
-/* Tabs: vendor icons, orange underline on the current one. */
+/* Sidebar tabs: vendor icons, orange edge on the current one. Size comes from
+   SidebarTabBar.tabSizeHint, not from min-width/min-height here -- Qt applies
+   those in the rotated coordinate space of a West bar, where a "width" turns
+   into the tab's vertical extent and gives absurdly tall tabs. */
 QTabBar::tab {{
     background: rgba(20, 20, 24, 170);
     border: 1px solid {PANEL_BORDER};
-    border-bottom: 2px solid transparent;
-    padding: 6px 18px;
-    margin-right: 2px;
+    border-left: 3px solid transparent;
+    margin-bottom: 2px;
 }}
 QTabBar::tab:hover {{
     background: rgba(239, 108, 0, 60);
 }}
 QTabBar::tab:selected {{
     background: rgba(30, 30, 36, 220);
-    border-bottom: 2px solid {ACCENT};
+    border-left: 3px solid {ACCENT};
     color: {ACCENT};
 }}
 

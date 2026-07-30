@@ -32,7 +32,7 @@ HORIZONTAL = {
     "btn_apply.png": (".", STATES4),
     "img_combobox.png": (".", STATES4),
     "img_edit.png": (".", STATES4),
-    "icon/tab_config.png": ("icon", STATES4),
+    "icon/tab_home.png": ("icon", STATES4),
     "icon/tab_customkey.png": ("icon", STATES4),
     "icon/tab_tft.png": ("icon", STATES4),
 }
@@ -69,6 +69,15 @@ def main() -> int:
         print(f"no theme directory at {THEME_DIR}", file=sys.stderr)
         return 1
 
+    # Clear first so the output is exactly what the tables below describe --
+    # dropping a sheet (or renaming one, as tab_config -> tab_home) would
+    # otherwise leave orphaned slices behind that nothing references.
+    removed = 0
+    if SLICE_DIR.is_dir():
+        for stale in SLICE_DIR.glob("*.png"):
+            stale.unlink()
+            removed += 1
+
     written = 0
 
     for name, (_, states) in HORIZONTAL.items():
@@ -99,7 +108,7 @@ def main() -> int:
                 _save(frame, pathlib.Path(name).stem, state)
                 written += 1
 
-    print(f"wrote {written} slices to {SLICE_DIR}")
+    print(f"wrote {written} slices to {SLICE_DIR} (removed {removed} stale)")
     return 0
 
 

@@ -39,7 +39,10 @@ first) will fail with `ModuleNotFoundError: No module named 'aula_l99_gui'`.
 
 ## Using it
 
-Three tabs: **Device**, then one per device. No root is needed as long as the same
+Three tabs in an icon rail down the left-hand side: **Device**, then one per
+device. The buttons are icon-only — the icons come from the vendor's own tab
+artwork, the current one turns orange and gets an orange left edge, and each
+carries its name as a tooltip. No root is needed as long as the same
 permissions the CLIs need are already set up (a udev rule for the keyboard's hidraw
 node, membership in the `dialout` group for the touchscreen's serial port — see the
 permission-error dialogs, or each tool's own README, for details).
@@ -113,3 +116,17 @@ cd tools && python3 -m aula_l99_gui.slice_skin
 The background is cover-scaled (aspect ratio preserved, overflow cropped) and
 anchored to the bottom of the window, which keeps the blue grid — the only part
 of an otherwise near-black image with any detail — visible at any window size.
+
+The left-hand icon rail is a `QTabWidget` in Qt's `West` position paired with
+`SidebarTabBar` (in `main_window.py`), which draws the tab shape west-facing but
+its label as if the tab faced north — otherwise Qt stands the icons on their side
+along with the shape. For the same reason the button size is
+`theme.SIDEBAR_TAB_SIZE` applied via `tabSizeHint` rather than a stylesheet
+`min-width`: Qt evaluates that in the rotated frame, where a "width" turns into
+the button's vertical extent. `SIDEBAR_TAB_SIZE` is derived as twice
+`TAB_ICON_SIZE` rather than hardcoded, so changing the icon size keeps the
+buttons proportioned.
+
+Because the buttons carry no text, the tab titles live in `MainWindow._tab_titles`
+rather than in `tabText()` — that list is both the key for the per-tab icon lookup
+and the source of the tooltips.

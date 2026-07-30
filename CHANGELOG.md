@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] - 2026-07-30
+
+**GUI: the tab bar moved from across the top to an icon-only rail down the
+left-hand side.** Three 40x40 buttons carrying the vendor tab artwork and
+nothing else, with the current one picked out in orange.
+
+### Added
+- `SidebarTabBar` in `main_window.py`: a `QTabBar` for a `West`-positioned
+  `QTabWidget` that keeps its contents upright. Qt rotates a west tab's
+  label 90 degrees along with its shape, which stands the vendor icons on
+  their side, so the shape is drawn west-facing but the label is drawn as
+  if the tab faced north.
+- `theme.SIDEBAR_TAB_SIZE`, the rail button size, derived as twice
+  `TAB_ICON_SIZE` rather than hardcoded so the proportion survives a
+  change to the icon size.
+
+### Changed
+- The tab buttons are icon-only. With no text on them the tab titles moved
+  out of `tabText()` into `MainWindow._tab_titles`, which is both the key
+  for the per-tab icon lookup and the source of each button's tooltip --
+  the only thing naming an unlabelled button for the user.
+- The current tab is marked with an orange left edge instead of 0.8.9's
+  bottom underline, which reads wrong on a vertical rail.
+- Button geometry is applied in `tabSizeHint`, not as a stylesheet
+  `min-width`/`padding`. Qt evaluates those in a West tab bar's rotated
+  frame, where a "width" becomes the button's vertical extent -- doing it
+  in the stylesheet gave 155px-tall rows with the icons hanging off the
+  left edge.
+
 ## [0.8.9] - 2026-07-30
 
 **GUI: skinned with the vendor's own artwork, extracted from the Windows
@@ -25,10 +54,13 @@ looks like the thing it replaces instead of stock Qt.
 - `tools/aula_l99_gui/slice_skin.py`: splits the vendor sprite sheets into
   the per-state PNGs under `assets/skins/theme1/slices/` (45 of them, all
   committed). Qt stylesheets can only reference a whole file, never a
-  sub-rectangle, so each state the QSS names has to exist on its own.
-- Tab icons from the vendor's own `tab_config`/`tab_customkey`/`tab_tft`
-  strips, swapped between the plain and orange frames on tab change --
-  QIcon has no "selected tab" state Qt applies by itself.
+  sub-rectangle, so each state the QSS names has to exist on its own. The
+  script clears the output directory first, so swapping or dropping a
+  sheet can't leave orphaned slices nothing references behind.
+- Tab icons on the (still top-mounted) tab bar, from the vendor's own
+  `tab_home`/`tab_customkey`/`tab_tft` strips, swapped between the plain
+  and orange frames on tab change -- QIcon has no "selected tab" state Qt
+  applies by itself. The current tab is marked with an orange underline.
 
 ### Changed
 - Frame order in the sprite sheets was determined empirically rather than
