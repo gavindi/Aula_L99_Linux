@@ -148,9 +148,8 @@ def test_build_gif_blob_forces_raw_bitmap_for_oversized_rle_content():
     # 300x120 = 36000 pixels that's 72000 content bytes, comfortably over
     # the 16-bit content-length field's 65535-byte range, forcing this
     # frame into raw-bitmap mode automatically. A second, solid-color frame
-    # is included purely as a CRC-length-tuning padding donor (once a frame
-    # is raw-bitmap it has no run capacity of its own -- same reason the
-    # dither tests above need a flat region too).
+    # is included as a companion frame (no longer needed as a padding donor
+    # now that raw-bitmap frames pad themselves via trailing filler).
     width, height = 300, 120
     n = width * height
     raw_frame = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
@@ -158,7 +157,9 @@ def test_build_gif_blob_forces_raw_bitmap_for_oversized_rle_content():
     blob = protocol.build_gif_blob([raw_frame, solid_frame], width, height, delay=50)
     parsed = _parse_frame_header(blob, 0)
     assert parsed["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
-    assert len(parsed["content"]) == n
+    # Content may be padded with trailing filler bytes to tune the total
+    # upload length -- the true pixel data is always the first n bytes.
+    assert len(parsed["content"]) >= n
 
 
 def test_raw_bitmap_content_round_trips_to_original_pixels():
@@ -187,10 +188,8 @@ def test_build_gif_blob_small_content_still_uses_rle():
 
 def test_mixed_rle_and_raw_bitmap_frames_build_successfully():
     # Frame 0 is forced into raw-bitmap mode (oversized RLE content); frame
-    # 1 is a simple solid-color frame with a big run -- the only viable
-    # CRC-length-tuning padding candidate. This exercises _gif_largest_run's
-    # eligible-frame filtering through the full build_gif_blob path, not
-    # just in isolation.
+    # 1 is a simple solid-color RLE frame with a big run. Confirms a mixed
+    # upload builds successfully with the expected mode per frame.
     width, height = 300, 120
     n = width * height
     raw_frame = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
@@ -200,5 +199,55 @@ def test_mixed_rle_and_raw_bitmap_frames_build_successfully():
     parsed0 = _parse_frame_header(blob, 0)
     parsed1 = _parse_frame_header(blob, 1)
     assert parsed0["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
-    assert len(parsed0["content"]) == n
+    assert len(parsed0["content"]) >= n
     assert parsed1["mode_flag"] == protocol.GIF_MODE_RLE
+
+
+def test_raw_bitmap_frame_is_preferred_padding_donor_over_rle():
+    # When both a raw-bitmap frame and an RLE frame with a large run are
+    # present, padding should go to the raw-bitmap frame (unconstrained,
+    # always works) rather than splitting the RLE frame's run.
+    width, height = 300, 120
+    n = width * height
+    raw_frame = [(0, 0, 0) if i % 2 == 0 else (255, 255, 255) for i in range(n)]
+    solid_frame = [(0, 255, 0)] * n
+    blob = protocol.build_gif_blob([raw_frame, solid_frame], width, height, delay=50)
+
+    parsed1 = _parse_frame_header(blob, 1)
+    # A single 36000px run chains into ceil(36000/256) = 141 tokens (2
+    # bytes each) when NOT split for padding -- if this matches exactly,
+    # the RLE frame was left untouched and all padding went to frame 0.
+    expected_unpadded_content_length = -(-n // 256) * 2
+    assert len(parsed1["content"]) == expected_unpadded_content_length
+
+
+def test_build_gif_blob_single_busy_frame_no_donor_needed_regression():
+    # Regression test for a real reported bug: a single full-panel frame
+    # with color/detail variation everywhere (no flat region anywhere)
+    # forces raw-bitmap mode with no other frame to act as a padding
+    # donor. Previously raised "no frame has a large enough solid/uniform
+    # run... every frame is using raw-bitmap mode" -- should now succeed,
+    # since the raw-bitmap frame pads itself.
+    width, height = protocol.PANEL_WIDTH, protocol.PANEL_HEIGHT
+    pixels = [
+        ((x * 3) % 256, (y * 2) % 256, ((x + y) * 5) % 256)
+        for y in range(height) for x in range(width)
+    ]
+    blob = protocol.build_gif_blob([pixels], width, height, delay=50, dither=True)
+    parsed = _parse_frame_header(blob, 0)
+    assert parsed["mode_flag"] == protocol.GIF_MODE_RAW_BITMAP
+    assert len(parsed["content"]) >= width * height
+
+
+def test_build_gif_blob_pads_to_a_valid_chunk_boundary():
+    # Confirm the padded blob's length actually lands on a byte count
+    # whose CHUNK_SIZE remainder is 0 or a solved CRC_INIT entry -- not
+    # just that build_gif_blob happened not to raise.
+    width, height = protocol.PANEL_WIDTH, protocol.PANEL_HEIGHT
+    pixels = [
+        ((x * 3) % 256, (y * 2) % 256, ((x + y) * 5) % 256)
+        for y in range(height) for x in range(width)
+    ]
+    blob = protocol.build_gif_blob([pixels], width, height, delay=50, dither=True)
+    remainder = len(blob) % protocol.CHUNK_SIZE
+    assert remainder == 0 or remainder in protocol.CRC_INIT

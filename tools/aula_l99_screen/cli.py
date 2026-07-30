@@ -20,10 +20,11 @@ frame) and is confirmed working on real hardware as of 0.7.0, but only for
 images using "safe" colors (max(R,G,B) exactly 0 or 255) -- anything else
 needs dithering, which the device's own algorithm isn't understood well
 enough to reproduce. Pass `--dither` to run our own Floyd-Steinberg
-dithering instead and lift that restriction -- unvalidated on real
-hardware, so test carefully. See protocol.py's GIF_FLASH_BASE comment
-block and build_gif_blob() for the full story, including why some images
-may fail with a "no large enough solid run" error.
+dithering instead and lift that restriction -- CONFIRMED working on real
+hardware, including the automatic raw-bitmap-mode fallback for oversized
+content. See protocol.py's GIF_FLASH_BASE comment block and
+build_gif_blob() for the full story, including why some images may fail
+with a "no large enough solid run" error.
 """
 from __future__ import annotations
 
@@ -302,8 +303,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "device's fixed color ramp, allowing images with non-safe "
                              "colors to be encoded instead of rejected. Default: off, "
                              "matching the original safe-colors-only behavior confirmed on "
-                             "real hardware. This dithering path is NOT yet validated on "
-                             "real hardware -- test carefully before relying on it")
+                             "real hardware. This dithering path is now CONFIRMED working "
+                             "on real hardware too, including the automatic raw-bitmap-mode "
+                             "fallback for oversized content")
     parser.add_argument("--gap", type=float, default=0.005,
                         help="seconds between packets (default %(default)s)")
     parser.add_argument("--ignore-nak", action="store_true",

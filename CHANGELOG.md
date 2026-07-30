@@ -5,6 +5,76 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2026-07-30
+
+**"Save to GIF": 0.8.6's raw-bitmap self-padding fix confirmed working on
+real hardware by the user.** Closes out the two biggest open "unvalidated
+on real hardware" caveats from this whole dithering/raw-bitmap-mode arc:
+a from-scratch raw-bitmap-mode frame (not an edit to an existing capture)
+renders correctly, and trailing filler bytes appended past the decoder's
+declared `width*height` read window are correctly ignored rather than
+tripping the content validator or anything else.
+
+### Changed
+- Updated docstrings/help text across `protocol.py` (`build_gif_blob`,
+  `dither_frame_floyd_steinberg`), `cli.py` (`--dither` help, module
+  docstring), and `screen_tab.py` (dither checkbox label, warning message)
+  from "unvalidated"/"experimental" to "confirmed working on real
+  hardware" for: dithering itself, from-scratch raw-bitmap-mode encoding,
+  and the raw-bitmap filler-padding mechanism.
+
+### Known gaps
+- Still open, not addressed by this round: the exact device-side dithering
+  algorithm remains unknown (this encoder uses its own approximation, not
+  a reproduction -- see 0.8.2), the 528-byte prefix's exact purpose, the G
+  ramp's off-by-one, and `mode_flag`'s exact overrun mechanics. None of
+  these affect the now-confirmed working behavior above.
+
+## [0.8.6] - 2026-07-30
+
+**"Save to GIF": fixed a regression from 0.8.5 -- raw-bitmap mode's own fix
+introduced a new failure ("every frame is using raw-bitmap mode, no
+run-based content to pad") that the user hit on "very small" GIFs. Root
+cause: any single full-panel frame with detail/color everywhere (no flat
+region) forces raw-bitmap mode, which was entirely excluded from the
+CRC-length-tuning padding trick -- leaving nothing to pad with.**
+
+### Fixed
+- Raw-bitmap frames now pad themselves with harmless trailing filler bytes
+  when the CRC-length-tuning pass needs to nudge the total upload length
+  onto an already-solved `CRC_INIT` entry -- the raw-bitmap decoder is
+  confirmed to always read exactly `width*height` bytes and ignore
+  anything after, so appended filler is invisible to the renderer, the
+  same principle as the existing RLE run-splitting trick, just applied
+  differently. Unlike RLE padding (2 bytes/piece, capped by a run's
+  length), filler costs exactly 1 byte each with no capacity limit, so it
+  always succeeds whenever at least one frame is raw-bitmap mode --
+  fixing the exact case that broke, since that's precisely when the old
+  RLE-only mechanism had nothing eligible left to use.
+- `build_all()` gained a `raw_pad=(frame_index, filler_byte_count)`
+  parameter, applied alongside the existing `split_at` mechanism. The
+  CRC-tuning pass now prefers a raw-bitmap donor whenever one exists, and
+  only falls back to the original RLE run-splitting logic (unchanged,
+  including its even-delta and run-capacity constraints) when every frame
+  is RLE-mode -- the one case where a raw-bitmap donor isn't available.
+
+### Added
+- Tests: a direct regression test reproducing the reported bug (single
+  full-panel gradient frame, dithered, no donor frame -- previously raised
+  `ValueError`, now succeeds), a test confirming the padded blob's length
+  actually lands on a valid chunk-size remainder (not just that it didn't
+  raise), and a test confirming a raw-bitmap frame is preferred as the
+  padding donor over an available RLE frame with a large run.
+
+### Known gaps
+- **New hardware-untested assumption, additive to 0.8.5's**: whether
+  anything past the raw-bitmap decoder's confirmed `width*height`-byte
+  read window is inspected by some other, still poorly-understood
+  mechanism (e.g. the never-fully-decoded content validator) is unknown.
+  Recommend a hardware smoke test of a raw-bitmap frame with actual
+  appended filler bytes, alongside the still-outstanding raw-bitmap-mode
+  smoke test from 0.8.5.
+
 ## [0.8.5] - 2026-07-30
 
 **"Save to GIF": fixed a real hardware bug the user hit -- GIFs over ~100KB

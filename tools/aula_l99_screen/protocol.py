@@ -1566,7 +1566,9 @@ def dither_frame_floyd_steinberg(
     ramp-legal RGB565 value each pixel decodes to. So there is no "correct"
     algorithm to match here -- this is a source-side approximation that
     should look correct on real hardware since every output pixel is
-    guaranteed ramp-legal by construction. Unvalidated on real hardware.
+    guaranteed ramp-legal by construction. CONFIRMED on real hardware:
+    dithered content renders and animates correctly (user-reported and
+    re-tested after the raw-bitmap-mode fixes below).
 
     Quantization uses RAMP_*_LUT (a precomputed table) rather than calling
     nearest_ramp_value() directly, for speed. Output is deterministic and
@@ -1734,15 +1736,19 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     corner set can still be encoded -- every resulting pixel is quantized
     onto the device's fixed ramp instead of being limited to max(R,G,B) in
     {0, 255}. Default False preserves the original safe-colors-only
-    behavior exactly. Unvalidated on real hardware -- see
+    behavior exactly. CONFIRMED on real hardware -- see
     dither_frame_floyd_steinberg()'s docstring.
 
-    Note: dithered content tends to alternate colors every 1-3px, which can
-    starve the CRC_INIT-length-tuning pass above of the long solid run it
-    needs -- an image that's ENTIRELY dithered (no flat region anywhere)
-    may raise the "no large enough solid/uniform run" error even though
-    every pixel is otherwise ramp-legal. Keeping at least one sizable flat
-    region (even a solid black border) avoids this.
+    Note: dithered content tends to alternate colors every 1-3px, which
+    used to be able to starve the CRC_INIT-length-tuning pass above of the
+    long solid run it needs for an entirely-dithered (no flat region
+    anywhere) image. Now largely moot in practice: heavily-dithered
+    content that would have hit this almost always triggers raw-bitmap
+    mode instead (see "Mode selection" below), which pads itself and
+    doesn't need a donor run at all. Still theoretically possible in an
+    edge case where dithered RLE content stays just under the raw-bitmap
+    threshold with no large run of its own -- keeping at least one
+    sizable flat region (even a solid black border) avoids it entirely.
 
     Mode selection: each frame's content is normally RLE-encoded
     (mode_flag=GIF_MODE_RLE), matching every previously-validated capture.
@@ -1759,13 +1765,25 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     width*height bytes based on the frame's own width/height fields, so
     this sidesteps the overflow regardless of how large width*height is.
 
-    Caveat beyond the general "unvalidated on real hardware" one above:
-    unlike RLE mode (hardware-validated since 0.7.0), every prior
-    raw-bitmap hardware test was a small edit to an already-working
-    captured frame, never a frame built from scratch by this encoder --
-    this is genuinely newer, less-tested territory. A real hardware smoke
-    test of a large/colorful-enough image that actually forces this path
-    is recommended before trusting it.
+    CONFIRMED on real hardware (user-reported bug -> fixed -> re-tested):
+    a from-scratch raw-bitmap-mode frame (not just an edit to an existing
+    capture) renders correctly, including one built from a dithered image.
+    Previously this was genuinely untested beyond RLE mode's own
+    hardware-validated history since 0.7.0 -- now it's confirmed working,
+    not just theoretically sound.
+
+    CRC-length tuning (below) prefers padding a raw-bitmap frame with
+    harmless trailing filler bytes -- invisible to the decoder, which
+    always reads exactly width*height bytes regardless of what follows --
+    over the older RLE run-splitting trick, whenever at least one frame is
+    raw-bitmap mode. This fixes a real bug: a single frame with detail/
+    color variation everywhere (no flat region anywhere) forces raw-bitmap
+    mode with no run-based content to pad, which used to make tuning
+    impossible even for a "small" (few-frame) upload once resized to the
+    panel's full resolution. Also CONFIRMED on real hardware: the filler
+    bytes appended past the raw-bitmap decoder's declared width*height
+    read window are correctly ignored, not inspected by whatever the
+    still-poorly-understood content validator checks.
     """
     n = width * height
     for i, px in enumerate(frames_pixels):
@@ -1834,7 +1852,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
                 )
         return blob
 
-    def build_all(split_at=None):
+    def build_all(split_at=None, raw_pad=None):
         frame_bytes = []
         for fi, runs in enumerate(frames_runs):
             palette = frame_palettes[fi]
@@ -1842,6 +1860,8 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
 
             if frame_modes[fi]:
                 content = _gif_raw_bitmap_content(frames_pixels[fi], palette_index)
+                if raw_pad is not None and raw_pad[0] == fi:
+                    content = content + bytes(raw_pad[1])
                 mode_flag = GIF_MODE_RAW_BITMAP
             else:
                 frame_split = split_at[1:] if split_at and split_at[0] == fi else None
@@ -1900,29 +1920,38 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     base_remainder = len(baseline) % CHUNK_SIZE
 
     candidate_targets = sorted(set(CRC_INIT) | {0})
-    deltas = []
-    for target in candidate_targets:
-        delta = (target - base_remainder) % CHUNK_SIZE
-        if delta % 2 == 0:
-            deltas.append(delta)
-    deltas.sort()
+    deltas_any = sorted({(target - base_remainder) % CHUNK_SIZE for target in candidate_targets})
+    deltas_even = [d for d in deltas_any if d % 2 == 0]
 
-    if deltas and deltas[0] == 0:
+    if deltas_any and deltas_any[0] == 0:
         return _verify_and_return(baseline)
 
+    # Prefer padding a raw-bitmap frame with harmless trailing filler bytes
+    # (ignored by the decoder, which always reads exactly width*height bytes
+    # regardless of what follows -- see the mode-selection docstring above).
+    # Unlike RLE run-splitting, this has no capacity limit and isn't
+    # restricted to even deltas, so it always succeeds whenever at least one
+    # frame is raw-bitmap -- fixing the case that previously had no eligible
+    # padding donor at all.
+    raw_bitmap_frames = [fi for fi, raw in enumerate(frame_modes) if raw]
+    if raw_bitmap_frames and deltas_any:
+        return _verify_and_return(build_all(raw_pad=(raw_bitmap_frames[0], deltas_any[0])))
+
+    # No raw-bitmap frame at all -- fall back to the original RLE
+    # run-splitting trick, unchanged, including its even-delta and
+    # run-capacity constraints.
     eligible = {fi for fi, raw in enumerate(frame_modes) if not raw}
     largest = _gif_largest_run(frames_runs, eligible=eligible)
     if largest is None:
         raise ValueError(
             "no frame has a large enough solid/uniform run to tune the upload length onto "
-            "an already-solved CRC_INIT entry -- every frame is using raw-bitmap mode (no "
-            "run-based content to pad); add a bigger solid-color region to one frame"
+            "an already-solved CRC_INIT entry -- add a bigger solid-color region to one frame"
         )
     fi, ri, run_length = largest
     base_pieces = -(-run_length // 256)  # ceil
     capacity = run_length - base_pieces
 
-    for delta in deltas:
+    for delta in deltas_even:
         extra = delta // 2
         if extra <= capacity:
             return _verify_and_return(build_all(split_at=(fi, ri, base_pieces + extra)))
@@ -1930,8 +1959,8 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     raise ValueError(
         "no frame has a large enough solid/uniform run to tune the upload length onto "
         "an already-solved CRC_INIT entry -- add a bigger solid-color region to one frame "
-        f"(largest run found: {run_length} px, needed capacity: {deltas[0] // 2 if deltas else '?'} "
-        "extra pieces)"
+        f"(largest run found: {run_length} px, needed capacity: "
+        f"{deltas_even[0] // 2 if deltas_even else '?'} extra pieces)"
     )
 
 

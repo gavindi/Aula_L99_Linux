@@ -180,7 +180,7 @@ class ScreenTab(QWidget):
         layout.addLayout(delay_row)
 
         dither_row = QHBoxLayout()
-        self.dither_checkbox = QCheckBox("Dither (experimental -- not yet validated on real hardware)")
+        self.dither_checkbox = QCheckBox("Dither (confirmed working on real hardware)")
         self.dither_checkbox.setChecked(False)
         dither_row.addWidget(self.dither_checkbox)
         dither_row.addStretch(1)
@@ -395,9 +395,8 @@ class ScreenTab(QWidget):
                 QMessageBox.warning(
                     self, "Screen",
                     "These colors need dithering, which isn't supported -- every pixel "
-                    "must have R, G, or B at exactly 0 or 255. Check \"Dither\" to try "
-                    "encoding this anyway (experimental, unvalidated on real "
-                    "hardware):\n\n" + lines,
+                    "must have R, G, or B at exactly 0 or 255. Check \"Dither\" to "
+                    "encode this anyway (confirmed working on real hardware):\n\n" + lines,
                 )
                 return
 
