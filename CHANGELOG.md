@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-07-31
+
+**New `run.sh` at the repo root, launching the GUI without needing to
+remember its `tools/`-relative module invocation.**
+
+### Added
+- `run.sh`: resolves `tools/` relative to the script's own location (so it
+  works regardless of the caller's cwd, unlike the bare
+  `python3 -m aula_l99_gui.main` documented in `aula_l99_gui/README.md`,
+  which fails with `ModuleNotFoundError` unless run from `tools/` first).
+  Prefers `uv run --project aula_l99_gui` when `uv` is installed (the
+  README's recommended path -- handles the venv/deps automatically), falls
+  back to a manually-created `tools/.venv/bin/python3` if present, and
+  falls back again to plain `python3` otherwise. `exec`s the final command
+  so no wrapper shell process lingers, and forwards any args through.
+
 ## [0.9.3] - 2026-07-31
 
 **GUI: Touchscreen tab's GIF/animation workflow rebuilt around a persistent
