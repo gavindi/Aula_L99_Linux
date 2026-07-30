@@ -1489,6 +1489,108 @@ GIF_FRAME_PREFIX_SIZE = 528
 GIF_FRAME_MAGIC_A = bytes([0x4C, 0x54])
 GIF_FRAME_MAGIC_B = bytes([0x01, 0x03])
 
+# The full fixed dither ramp, characterized end-to-end in the comment block
+# above (see save_to_gif_14/15). Each 8-bit value here was chosen because it
+# reproduces its own RGB565 index exactly under rgb_to_rgb565()'s existing
+# truncation masks (value // 8 for R/B, value // 4 for G) -- a pixel already
+# sitting on one of these values needs zero changes to encode correctly.
+RAMP_R: tuple[int, ...] = (0, 49, 99, 156, 206, 255)
+RAMP_G: tuple[int, ...] = (0, 40, 85, 130, 170, 215, 255)
+RAMP_B: tuple[int, ...] = RAMP_R
+
+
+def nearest_ramp_value(value: float, ramp: tuple[int, ...]) -> int:
+    """Snap value (clamped to [0, 255]) to the nearest rung of ramp."""
+    value = 0.0 if value < 0 else 255.0 if value > 255 else value
+    best = ramp[0]
+    best_diff = abs(value - best)
+    for rung in ramp[1:]:
+        diff = abs(value - rung)
+        if diff < best_diff:
+            best, best_diff = rung, diff
+    return best
+
+
+def is_ramp_legal_color(r: int, g: int, b: int) -> bool:
+    """True if (r, g, b) already sits exactly on the device's fixed
+    per-channel ramp -- the generalization of is_safe_gif_color() that also
+    accepts dithered output, not just the always-safe corner subset. Every
+    is_safe_gif_color() color is also ramp-legal (0 and 255 are ramp rungs
+    on every channel), so this is strictly wider, never narrower.
+    """
+    return r in RAMP_R and g in RAMP_G and b in RAMP_B
+
+
+def dither_frame_floyd_steinberg(
+    pixels: list[tuple[int, int, int]], width: int
+) -> list[tuple[int, int, int]]:
+    """Classic raster-order Floyd-Steinberg error diffusion (7/16 right,
+    3/16 below-left, 5/16 below, 1/16 below-right), applied independently
+    per channel, quantizing each channel to the nearest rung of its own ramp
+    (RAMP_R/RAMP_G/RAMP_B) and diffusing the residual to not-yet-visited
+    neighbors.
+
+    This does NOT reproduce AULA's own undiscovered device-side algorithm --
+    disassembly of pic_scan.dll (see the comment block above) confirmed the
+    dithering decision isn't in that DLL at all, and the display chip itself
+    has no documented dithering of its own; it just displays whatever
+    ramp-legal RGB565 value each pixel decodes to. So there is no "correct"
+    algorithm to match here -- this is a source-side approximation that
+    should look correct on real hardware since every output pixel is
+    guaranteed ramp-legal by construction. Unvalidated on real hardware.
+
+    pixels: flat width*height list, raster order, one frame's worth.
+    width: needed to compute row-wrap offsets for the below-row diffusion
+    targets; must evenly divide len(pixels).
+
+    Returns a new list of ramp-legal (r, g, b) tuples, same length as
+    pixels; does not mutate the input.
+    """
+    n = len(pixels)
+    if width <= 0 or n % width != 0:
+        raise ValueError(f"width {width} doesn't evenly divide {n} pixels")
+    height = n // width
+
+    err_r = [0.0] * n
+    err_g = [0.0] * n
+    err_b = [0.0] * n
+    out: list[tuple[int, int, int]] = [(0, 0, 0)] * n
+
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            i = row + x
+            r0, g0, b0 = pixels[i]
+            r, g, b = r0 + err_r[i], g0 + err_g[i], b0 + err_b[i]
+
+            rq = nearest_ramp_value(r, RAMP_R)
+            gq = nearest_ramp_value(g, RAMP_G)
+            bq = nearest_ramp_value(b, RAMP_B)
+            out[i] = (rq, gq, bq)
+
+            er, eg, eb = r - rq, g - gq, b - bq
+            has_right = x + 1 < width
+            has_left = x - 1 >= 0
+            has_down = y + 1 < height
+
+            if has_right:
+                err_r[i + 1] += er * 7 / 16
+                err_g[i + 1] += eg * 7 / 16
+                err_b[i + 1] += eb * 7 / 16
+            if has_down:
+                if has_left:
+                    err_r[i + width - 1] += er * 3 / 16
+                    err_g[i + width - 1] += eg * 3 / 16
+                    err_b[i + width - 1] += eb * 3 / 16
+                err_r[i + width] += er * 5 / 16
+                err_g[i + width] += eg * 5 / 16
+                err_b[i + width] += eb * 5 / 16
+                if has_right:
+                    err_r[i + width + 1] += er * 1 / 16
+                    err_g[i + width + 1] += eg * 1 / 16
+                    err_b[i + width + 1] += eb * 1 / 16
+    return out
+
 
 def is_safe_gif_color(r: int, g: int, b: int) -> bool:
     """A color gets a direct, undithered palette slot only if its
@@ -1556,18 +1658,34 @@ def _gif_largest_run(frames_runs):
 
 def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
                     width: int = PANEL_WIDTH, height: int = PANEL_HEIGHT,
-                    delay: int | list[int] = 50) -> bytes:
+                    delay: int | list[int] = 50, dither: bool = False) -> bytes:
     """Build a from-scratch GIF blob for GIF_FLASH_BASE.
 
     frames_pixels: one list of (r,g,b) tuples per frame, each width*height
     long, in raster order. Raises ValueError for any color needing
-    dithering, or if no frame has a solid/uniform run large enough to
-    tune the upload length onto an already-solved CRC_INIT entry.
+    dithering (unless dither=True), or if no frame has a solid/uniform run
+    large enough to tune the upload length onto an already-solved
+    CRC_INIT entry.
 
     delay: a single value applied to every frame, or one value per frame
     (matching frames_pixels in length) -- the TOC's delay field is a
     per-entry field structurally, though every capture seen so far used
     the same value across all of one upload's frames.
+
+    dither: if True, run each frame through dither_frame_floyd_steinberg()
+    before validating colors, so images using colors outside the safe
+    corner set can still be encoded -- every resulting pixel is quantized
+    onto the device's fixed ramp instead of being limited to max(R,G,B) in
+    {0, 255}. Default False preserves the original safe-colors-only
+    behavior exactly. Unvalidated on real hardware -- see
+    dither_frame_floyd_steinberg()'s docstring.
+
+    Note: dithered content tends to alternate colors every 1-3px, which can
+    starve the CRC_INIT-length-tuning pass above of the long solid run it
+    needs -- an image that's ENTIRELY dithered (no flat region anywhere)
+    may raise the "no large enough solid/uniform run" error even though
+    every pixel is otherwise ramp-legal. Keeping at least one sizable flat
+    region (even a solid black border) avoids this.
     """
     n = width * height
     for i, px in enumerate(frames_pixels):
@@ -1581,14 +1699,24 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
         if len(delays) != len(frames_pixels):
             raise ValueError(f"delay list has {len(delays)} entries, expected {len(frames_pixels)}")
 
+    if dither:
+        frames_pixels = [dither_frame_floyd_steinberg(px, width) for px in frames_pixels]
+
+    gate = is_ramp_legal_color if dither else is_safe_gif_color
     bad: dict[tuple[int, int, int], int] = {}
     for px in frames_pixels:
         for color in px:
-            if not is_safe_gif_color(*color):
+            if not gate(*color):
                 bad[color] = bad.get(color, 0) + 1
     if bad:
         lines = "\n".join(f"  rgb{color}: {count} pixels"
                            for color, count in sorted(bad.items(), key=lambda kv: -kv[1]))
+        if dither:
+            raise ValueError(
+                "these colors aren't ramp-legal even after dithering -- this indicates a "
+                "bug in dither_frame_floyd_steinberg (it should only ever emit ramp "
+                "rungs), not a limitation of the source image:\n" + lines
+            )
         raise ValueError(
             "these colors need dithering, which this from-scratch encoder can't "
             "produce yet (only max(R,G,B) in {0, 255} is supported):\n" + lines
@@ -1625,6 +1753,9 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             header[14:16] = struct.pack("<H", 0x0100)  # RLE mode
             for i, color in enumerate(palette):
                 off = 16 + i * 2
+                # This caps the palette at (528-16)/2 = 256 slots. The full
+                # ramp only has 6*7*6 = 252 legal (R,G,B) combinations, so
+                # dither=True content can never structurally overflow this.
                 if off + 2 > GIF_FRAME_PREFIX_SIZE:
                     raise ValueError(
                         f"frame {fi}: {len(palette)} distinct colors is too many for the "

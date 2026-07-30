@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-07-30
+
+**"Save to GIF": added opt-in Floyd-Steinberg dithering, lifting the encoder's
+safe-colors-only restriction -- the first practical payoff of the ramp
+characterization and pic_scan.dll disassembly work from 0.7.2-0.8.2.**
+
+### Added
+- `protocol.py`: `RAMP_R`/`RAMP_G`/`RAMP_B` (the fixed dither ramp, now real
+  constants instead of only comment-block prose), `nearest_ramp_value()`,
+  `is_ramp_legal_color()` (a strict superset of `is_safe_gif_color()` --
+  every safe color is also ramp-legal), and `dither_frame_floyd_steinberg()`
+  -- classic raster-order Floyd-Steinberg, per-channel independent,
+  quantizing onto the known ramp. This is our own approximation, not a
+  reproduction of AULA's still-undiscovered device-side algorithm -- since
+  0.8.2 confirmed that algorithm isn't in `pic_scan.dll` at all, and the
+  display chip has no dithering of its own, the panel just deterministically
+  shows whatever ramp-legal value it's given, so any error-diffusion pattern
+  that lands on ramp rungs should look correct on hardware.
+- `build_gif_blob(..., dither: bool = False)`: opt-in, purely additive.
+  When true, dithers each frame before the existing color gate (now
+  `is_ramp_legal_color` instead of `is_safe_gif_color`); when false
+  (default), behavior is byte-for-byte unchanged from before this release.
+- `--dither` CLI flag (`cli.py`) and a "Dither (experimental)" checkbox
+  (`screen_tab.py`), both defaulting off. The GUI's existing pre-upload
+  safe-color check is skipped when the checkbox is checked (it would
+  otherwise reject almost any image before dithering ever runs).
+- `tools/aula_l99_screen/tests/`: the repo's first automated test suite
+  (pytest), covering ramp math, dithered-output legality, and a
+  before/after regression check that `dither=False` is unchanged.
+
+### Known gaps
+- **Unvalidated on real hardware** -- explicitly stated in the CLI help
+  text, GUI checkbox label, and `build_gif_blob()`'s docstring. A real
+  panel smoke test (upload a small dithered image, confirm it renders
+  as a reasonable approximation rather than triggering the fallback
+  animation) is recommended before trusting this path.
+- Fully-dithered images with no flat/solid region anywhere can starve the
+  pre-existing CRC_INIT-length-tuning pass of a long enough run to pad
+  onto a valid chunk length, raising the (pre-existing, unrelated) "no
+  large enough solid/uniform run" error -- noted in `build_gif_blob()`'s
+  docstring; keeping at least one sizable flat region (e.g. a solid
+  border) avoids it.
+- The device's own dithering algorithm is still not known -- this releases
+  a workable approximation, not a reproduction.
+
 ## [0.8.2] - 2026-07-30
 
 **"Save to GIF": traced the last untraced GIF-relevant export in

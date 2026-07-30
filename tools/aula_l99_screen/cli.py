@@ -18,10 +18,12 @@ The panel may need a restart before it redraws from flash.
 `--target gif` builds a from-scratch GIF from one or more images (one per
 frame) and is confirmed working on real hardware as of 0.7.0, but only for
 images using "safe" colors (max(R,G,B) exactly 0 or 255) -- anything else
-needs dithering, which isn't understood well enough yet to encode. See
-protocol.py's GIF_FLASH_BASE comment block and build_gif_blob() for the
-full story, including why some images may fail with a "no large enough
-solid run" error.
+needs dithering, which the device's own algorithm isn't understood well
+enough to reproduce. Pass `--dither` to run our own Floyd-Steinberg
+dithering instead and lift that restriction -- unvalidated on real
+hardware, so test carefully. See protocol.py's GIF_FLASH_BASE comment
+block and build_gif_blob() for the full story, including why some images
+may fail with a "no large enough solid run" error.
 """
 from __future__ import annotations
 
@@ -227,7 +229,8 @@ def cmd_upload(args: argparse.Namespace) -> int:
                     f"--gif-delay N to force one uniform value for every frame."
                 )
 
-        blob = protocol.build_gif_blob(frames, args.width, args.height, delay=delays)
+        blob = protocol.build_gif_blob(frames, args.width, args.height, delay=delays,
+                                       dither=args.dither)
         print(f"payload: {len(frames)} frame(s), delays={delays}  ({len(blob)} bytes)")
     else:
         if len(args.upload) != 1:
@@ -294,6 +297,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=None,
                         help="cap the number of frames extracted from a video file "
                              "(also derives --fps from the video's duration if --fps isn't given)")
+    parser.add_argument("--dither", action="store_true",
+                        help="for --target gif: apply Floyd-Steinberg dithering onto the "
+                             "device's fixed color ramp, allowing images with non-safe "
+                             "colors to be encoded instead of rejected. Default: off, "
+                             "matching the original safe-colors-only behavior confirmed on "
+                             "real hardware. This dithering path is NOT yet validated on "
+                             "real hardware -- test carefully before relying on it")
     parser.add_argument("--gap", type=float, default=0.005,
                         help="seconds between packets (default %(default)s)")
     parser.add_argument("--ignore-nak", action="store_true",

@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -177,6 +178,13 @@ class ScreenTab(QWidget):
         delay_row.addWidget(self.gif_delay_spin)
         delay_row.addStretch(1)
         layout.addLayout(delay_row)
+
+        dither_row = QHBoxLayout()
+        self.dither_checkbox = QCheckBox("Dither (experimental -- not yet validated on real hardware)")
+        self.dither_checkbox.setChecked(False)
+        dither_row.addWidget(self.dither_checkbox)
+        dither_row.addStretch(1)
+        layout.addLayout(dither_row)
 
         upload_button = QPushButton("Upload GIF")
         upload_button.clicked.connect(self._on_upload_gif)
@@ -373,25 +381,30 @@ class ScreenTab(QWidget):
         if frames is None:
             return
 
-        bad: dict[tuple[int, int, int], int] = {}
-        for pixels in frames:
-            for color in pixels:
-                if not screen_protocol.is_safe_gif_color(*color):
-                    bad[color] = bad.get(color, 0) + 1
-        if bad:
-            worst = sorted(bad.items(), key=lambda kv: -kv[1])[:10]
-            lines = "\n".join(f"  rgb{color}: {count} px" for color, count in worst)
-            QMessageBox.warning(
-                self, "Screen",
-                "These colors need dithering, which isn't supported -- every pixel "
-                "must have R, G, or B at exactly 0 or 255:\n\n" + lines,
-            )
-            return
+        dither = self.dither_checkbox.isChecked()
+
+        if not dither:
+            bad: dict[tuple[int, int, int], int] = {}
+            for pixels in frames:
+                for color in pixels:
+                    if not screen_protocol.is_safe_gif_color(*color):
+                        bad[color] = bad.get(color, 0) + 1
+            if bad:
+                worst = sorted(bad.items(), key=lambda kv: -kv[1])[:10]
+                lines = "\n".join(f"  rgb{color}: {count} px" for color, count in worst)
+                QMessageBox.warning(
+                    self, "Screen",
+                    "These colors need dithering, which isn't supported -- every pixel "
+                    "must have R, G, or B at exactly 0 or 255. Check \"Dither\" to try "
+                    "encoding this anyway (experimental, unvalidated on real "
+                    "hardware):\n\n" + lines,
+                )
+                return
 
         try:
             blob = screen_protocol.build_gif_blob(
                 frames, screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT,
-                delay=self.gif_delay_spin.value(),
+                delay=self.gif_delay_spin.value(), dither=dither,
             )
         except ValueError as exc:
             QMessageBox.critical(self, "Screen", str(exc))
