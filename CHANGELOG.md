@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.16] - 2026-08-01
+
+**Daemonised the GUI so it can live in the system tray/app indicator instead
+of exiting whenever the window closes. Tray mode now supports Show/Hide/Quit
+actions and an optional `--start-hidden` launch path, while the quit action
+performs a clean shutdown of background workers before leaving the process.**
+
+### Added
+- `tools/aula_l99_gui/main.py`: `--tray` to enable a system tray/app indicator
+  icon, `--start-hidden` to launch hidden into tray-only mode, and
+  `QApplication.setQuitOnLastWindowClosed(False)` so the process stays alive
+  without visible windows.
+- `tools/aula_l99_gui/main_window.py`: tray icon with Show/Hide/Quit menu actions,
+  close-on-hide behavior when tray mode is enabled, and explicit
+  `QCoreApplication.quit()` when quitting from the tray.
+- `tools/aula_l99_gui/main_window.py`: tray cleanup that hides the icon before
+  exit and ensures background thread shutdown completes cleanly.
+
 ## [0.9.15] - 2026-08-01
 
 **The User Lighting tab's Lighting Modes list now animates, and it takes two

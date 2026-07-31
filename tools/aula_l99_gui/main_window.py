@@ -1,14 +1,15 @@
 """Top-level window hosting the device, keyboard and screen tabs."""
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QIcon, QMovie, QPixmap
+from PySide6.QtCore import QCoreApplication, QRect, Qt
+from PySide6.QtGui import QAction, QIcon, QMovie, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QMenu,
     QStyle,
     QStyleOptionTab,
     QStylePainter,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QVBoxLayout,
     QWidget,
+    QSystemTrayIcon,
 )
 
 from . import theme
@@ -135,8 +137,12 @@ class TitleBar(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, tray_enabled: bool = False) -> None:
         super().__init__()
+        self._tray_enabled = tray_enabled
+        self._tray_quit_requested = False
+        self._tray_icon = None
+
         self.setWindowTitle("AULA L99 Control")
         # Frameless so the custom title bar below can stand in for the OS
         # one -- Qt can't skin native window chrome. Fixed size rather than
@@ -188,6 +194,8 @@ class MainWindow(QMainWindow):
         self._tabs.setIconSize(theme.TAB_ICON_SIZE)
 
         self._title_bar = TitleBar(self)
+        if self._tray_enabled:
+            self._create_tray_icon()
         self._keyboard_found = False
         self._screen_found = False
         self._keyboard_status = ""
@@ -259,6 +267,51 @@ class MainWindow(QMainWindow):
         # tab could show up-to-5s-stale state right after switching to it.
         if self._tabs.widget(current) is self._device_tab:
             self._device_tab.refresh_all()
+
+    def _create_tray_icon(self) -> None:
+        if self._tray_icon is not None:
+            return
+        self._tray_icon = QSystemTrayIcon(self)
+        self._tray_icon.setIcon(self.windowIcon())
+        self._tray_icon.setToolTip("AULA L99 Control")
+
+        tray_menu = QMenu(self)
+        show_action = QAction("Show", self)
+        show_action.triggered.connect(self._show_window)
+        tray_menu.addAction(show_action)
+
+        hide_action = QAction("Hide", self)
+        hide_action.triggered.connect(self.hide)
+        tray_menu.addAction(hide_action)
+
+        tray_menu.addSeparator()
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self._tray_quit)
+        tray_menu.addAction(quit_action)
+
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
+        self._tray_icon.show()
+
+    def _show_window(self) -> None:
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _tray_quit(self) -> None:
+        self._tray_quit_requested = True
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
+        self.close()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._show_window()
 
     def _on_keyboard_presence(self, status: str, _enabled: bool, found: bool) -> None:
         self._keyboard_found = found
@@ -334,6 +387,11 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        if self._tray_enabled and not self._tray_quit_requested:
+            self.hide()
+            event.ignore()
+            return
+
         # Colour polling isn't covered by the busy-check above (deliberately
         # -- it's frequent and lightweight, not worth nagging the user to
         # wait out), but its QThread still has to actually stop before this
@@ -342,4 +400,8 @@ class MainWindow(QMainWindow):
         # needs the same treatment.
         self._keyboard_tab.shutdown()
         self._user_lighting_tab.shutdown()
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
+        if self._tray_enabled and self._tray_quit_requested:
+            QCoreApplication.quit()
         event.accept()

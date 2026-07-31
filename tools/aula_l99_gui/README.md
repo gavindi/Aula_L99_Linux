@@ -35,7 +35,24 @@ python3 -m aula_l99_gui.main
 ```
 
 Running it from the repo root (`python3 -m aula_l99_gui.main` without `cd tools`
-first) will fail with `ModuleNotFoundError: No module named 'aula_l99_gui'`.
+first) will fail with `ModuleNotFoundError: No module named 'aula_l99_gui'.`
+
+### Tray mode
+
+The GUI can also run with a system tray/app indicator icon. When the tray mode
+is active, closing the window hides it instead of quitting the app.
+
+```bash
+cd tools
+python3 -m aula_l99_gui.main --tray
+```
+
+To start hidden and keep the app running in the tray:
+
+```bash
+cd tools
+python3 -m aula_l99_gui.main --tray --start-hidden
+```
 
 ## Using it
 
