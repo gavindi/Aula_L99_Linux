@@ -111,6 +111,119 @@ def test_rtc_transfer_wraps_the_block_in_a_session():
     assert transactions[2].outgoing == CAPTURED_BLOCK
 
 
+# Four audio spectrum blocks exactly as save_to_gif_17.pcapng captured them,
+# chosen to pin the band ordering rather than just the framing: the first is
+# the opening frame (energy only in the low bands), the last is a late frame
+# with the low bands silent and the high ones loud. If the levels were
+# reversed, or offset by one, or the block were three bytes shorter, at least
+# one of these would stop reproducing.
+CAPTURED_AUDIO = {
+    # packet 42, the first frame in the capture
+    "opening": (
+        "040864191e0c0401" + "00" * 56,
+        [25, 30, 12, 4, 1] + [0] * 18,
+    ),
+    # packet 200, energy at both ends of the spectrum at once
+    "split": (
+        "04086430381404000000000000000003000000000004030e0b28" + "00" * 38,
+        [48, 56, 20, 4, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 3, 14, 11, 40],
+    ),
+    # packet 1732, the broadest frame in the capture
+    "broad": (
+        "0408641e211808030303030b0c0b01011001" + "00" * 46,
+        [30, 33, 24, 8, 3, 3, 3, 3, 11, 12, 11, 1, 1, 16, 1] + [0] * 8,
+    ),
+    # packet 1770, the low bands silent -- the frame that fixes the direction
+    "high-only": (
+        "0408640000000000000000081b202018210b03" + "00" * 45,
+        [0] * 8 + [8, 27, 32, 32, 24, 33, 11, 3] + [0] * 7,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CAPTURED_AUDIO))
+def test_captured_audio_block_reproduced_exactly(name):
+    expected_hex, levels = CAPTURED_AUDIO[name]
+    expected = bytes.fromhex(expected_hex)
+    assert len(expected) == protocol.PACKET_SIZE
+    assert len(levels) == protocol.AUDIO_BAND_COUNT
+    assert protocol.build_audio_blocks(levels) == [expected]
+
+
+@pytest.mark.parametrize("name", sorted(CAPTURED_AUDIO))
+def test_captured_audio_block_round_trips(name):
+    expected_hex, levels = CAPTURED_AUDIO[name]
+    parsed, scale = protocol.parse_audio_block(bytes.fromhex(expected_hex))
+    assert parsed == levels
+    assert scale == protocol.AUDIO_SCALE_DEFAULT
+
+
+def test_audio_header_bytes_are_where_the_capture_put_them():
+    block = protocol.build_audio_blocks([1])[0]
+    assert block[protocol.AUDIO_OFF_MODE] == protocol.AUDIO_MODE_DEFAULT
+    assert block[protocol.AUDIO_OFF_STYLE] == protocol.AUDIO_STYLE_DEFAULT
+    assert block[protocol.AUDIO_OFF_SCALE] == protocol.AUDIO_SCALE_DEFAULT
+    assert block[protocol.AUDIO_OFF_LEVELS] == 1
+
+
+def test_audio_block_has_no_trailer():
+    """Every other outbound block in this protocol ends AA 55; this one does
+    not, in all 137 captured frames. Adding one would be the natural 'fix'."""
+    block = protocol.build_audio_blocks([100] * protocol.AUDIO_BAND_COUNT)[0]
+    assert block[protocol.TRAILER_OFFSET:] != protocol.TRAILER
+    tail_from = protocol.AUDIO_OFF_LEVELS + protocol.AUDIO_BAND_COUNT
+    assert block[tail_from:] == bytes(protocol.PACKET_SIZE - tail_from)
+
+
+def test_short_level_list_is_padded_with_silence():
+    """Driving one band and leaving the rest silent is how the bar-to-band
+    mapping gets confirmed on hardware, so it has to be a legal frame."""
+    assert protocol.build_audio_blocks([42]) == protocol.build_audio_blocks(
+        [42] + [0] * (protocol.AUDIO_BAND_COUNT - 1))
+
+
+def test_too_many_bands_rejected():
+    with pytest.raises(ValueError):
+        protocol.build_audio_blocks([0] * (protocol.AUDIO_BAND_COUNT + 1))
+
+
+def test_level_above_the_scale_byte_rejected():
+    with pytest.raises(ValueError):
+        protocol.build_audio_blocks([101])
+    # ...but the same level is fine once the scale says it can be.
+    assert protocol.build_audio_blocks([101], scale=200)[0][3] == 101
+
+
+def test_every_captured_level_fits_the_vendors_quantum():
+    """The vendor's levels are all floor(n * 8 / 5). Not enforced by the
+    builder, but if this ever fails the reading in the notes is wrong."""
+    numerator, denominator = protocol.AUDIO_LEVEL_QUANTUM
+    allowed = {n * numerator // denominator for n in range(256)}
+    for _, levels in CAPTURED_AUDIO.values():
+        assert set(levels) <= allowed
+
+
+def test_parse_audio_levels_accepts_commas_and_spaces():
+    assert protocol.parse_audio_levels("100,80,60") == [100, 80, 60]
+    assert protocol.parse_audio_levels("0 0 0 100") == [0, 0, 0, 100]
+    assert protocol.parse_audio_levels("100") == [100]
+    assert protocol.parse_audio_levels("0x64") == [100]
+    with pytest.raises(ValueError):
+        protocol.parse_audio_levels("100,loud")
+    with pytest.raises(ValueError):
+        protocol.parse_audio_levels("  ")
+
+
+def test_audio_frame_is_commit_then_command_then_block():
+    transactions = protocol.build_audio_frame([1, 2, 3])
+    assert [tx.name for tx in transactions] == ["commit", "audio", "audio-block0"]
+    assert transactions[1].outgoing[:2] == bytes([protocol.CMD_PREFIX, protocol.OP_AUDIO])
+    assert transactions[1].outgoing[8] == 1  # one data block follows
+    assert transactions[2].outgoing == protocol.build_audio_blocks([1, 2, 3])[0]
+    # No session framing on this path at all, unlike build_transfer().
+    assert not any(tx.name in ("begin", "end") for tx in transactions)
+
+
 def test_dongle_packet_without_monitor_data_is_the_prior_art_layout():
     packet = protocol.build_dongle_rtc_packet(CAPTURED_WHEN)
     assert len(packet) == protocol.DONGLE_PACKET_SIZE
@@ -131,3 +244,92 @@ def test_dongle_packet_with_monitor_data_uses_the_shifted_layout():
     trailer_at = protocol.RTC_OFF_HUMIDITY + shift + 1
     assert packet[trailer_at:trailer_at + 2] == protocol.TRAILER
     assert packet[-1] == protocol.checksum(packet[:-1])
+
+
+# One realtime-stream frame exactly as save_to_gif_18.pcapng captured it: the
+# 8 data blocks of opcode 0x20, concatenated. Everything the vendor app sent is
+# here -- the packed key order, the 83 unlit keys transmitted as black, the
+# zero padding past slot 84, and the absence of any AA 55 trailer. Only the
+# Pause key (0x73) is lit, at #050026.
+CAPTURED_STREAM_PAYLOAD = bytes.fromhex(
+    "0100000002000000030000000400000005000000060000000700000008000000"
+    "090000000a0000000b0000000c0000000d000000770000007000000071000000"
+    "7305002613000000140000001500000016000000170000001800000019000000"
+    "1a0000001b0000001c0000001d0000001e0000001f0000006700000075000000"
+    "25000000260000002700000028000000290000002a0000002b0000002c000000"
+    "2d0000002e0000002f0000003000000031000000430000007600000037000000"
+    "38000000390000003a0000003b0000003c0000003d0000003e0000003f000000"
+    "4000000041000000420000005500000079000000490000004a0000004b000000"
+    "4c0000004d0000004e0000004f00000050000000510000005200000053000000"
+    "5400000065000000780000005b0000005c0000005d0000005e00000060000000"
+    "6200000063000000640000006600000000000000000000000000000000000000"
+    + "00" * 160
+)
+CAPTURED_STREAM_COLORS = {0x73: (0x05, 0x00, 0x26)}
+
+
+def test_captured_stream_frame_reproduced_exactly():
+    blocks = protocol.build_stream_blocks(CAPTURED_STREAM_COLORS)
+    assert len(blocks) == protocol.STREAM_BLOCK_COUNT
+    assert all(len(block) == protocol.PACKET_SIZE for block in blocks)
+    assert b"".join(blocks) == CAPTURED_STREAM_PAYLOAD
+
+
+def test_stream_frame_carries_no_trailer():
+    """The one structural difference most likely to get 'fixed' by mistake."""
+    blocks = protocol.build_stream_blocks(CAPTURED_STREAM_COLORS)
+    assert not any(protocol.TRAILER in block for block in blocks)
+
+
+def test_stream_key_order_is_the_same_keys_as_the_matrix_layout():
+    assert len(protocol.STREAM_KEY_ORDER) == protocol.STREAM_KEY_COUNT
+    assert set(protocol.STREAM_KEY_ORDER) == set(protocol.KEY_IDS)
+    assert len(set(protocol.STREAM_KEY_ORDER)) == len(protocol.STREAM_KEY_ORDER)
+    # ...but not in the same order, which is the whole point of the constant.
+    assert protocol.STREAM_KEY_ORDER != protocol.KEY_IDS
+
+
+def test_unlit_keys_are_still_transmitted_with_their_id():
+    """Omitting a key from `colors` must not omit its slot -- that would shift
+    every key after it."""
+    blocks = protocol.build_stream_blocks({})
+    payload = b"".join(blocks)
+    for slot, key_id in enumerate(protocol.STREAM_KEY_ORDER):
+        offset = slot * protocol.BYTES_PER_KEY
+        assert payload[offset] == key_id
+        assert payload[offset + 1:offset + 4] == b"\x00\x00\x00"
+
+
+def test_padding_past_the_physical_keys_is_fully_zero():
+    payload = b"".join(protocol.build_stream_blocks(protocol.build_uniform_colors((1, 2, 3))))
+    padding_at = protocol.STREAM_KEY_COUNT * protocol.BYTES_PER_KEY
+    assert payload[padding_at:] == bytes(
+        (protocol.STREAM_SLOT_COUNT - protocol.STREAM_KEY_COUNT) * protocol.BYTES_PER_KEY)
+
+
+def test_parse_stream_blocks_round_trips_the_capture():
+    blocks = [CAPTURED_STREAM_PAYLOAD[i:i + protocol.PACKET_SIZE]
+              for i in range(0, len(CAPTURED_STREAM_PAYLOAD), protocol.PACKET_SIZE)]
+    colors = protocol.parse_stream_blocks(blocks)
+    assert colors[0x73] == (0x05, 0x00, 0x26)
+    assert set(colors) == set(protocol.KEY_IDS)
+    assert all(rgb == (0, 0, 0) for key_id, rgb in colors.items() if key_id != 0x73)
+
+
+def test_parse_stream_blocks_rejects_a_frame_in_a_different_order():
+    scrambled = bytearray(CAPTURED_STREAM_PAYLOAD)
+    scrambled[0] = 0x02  # slot 0 should hold key 0x01
+    blocks = [bytes(scrambled[i:i + protocol.PACKET_SIZE])
+              for i in range(0, len(scrambled), protocol.PACKET_SIZE)]
+    with pytest.raises(ValueError):
+        protocol.parse_stream_blocks(blocks)
+
+
+def test_stream_frame_has_no_session_framing_and_commits_last():
+    transactions = protocol.build_stream_frame(CAPTURED_STREAM_COLORS)
+    assert [tx.name for tx in transactions] == (
+        ["stream"] + [f"stream-block{i}" for i in range(8)] + ["commit"])
+    assert transactions[0].outgoing[:2] == bytes(
+        [protocol.CMD_PREFIX, protocol.OP_COLOR_STREAM])
+    assert transactions[0].outgoing[8] == protocol.STREAM_BLOCK_COUNT
+    assert transactions[1].outgoing == CAPTURED_STREAM_PAYLOAD[:protocol.PACKET_SIZE]

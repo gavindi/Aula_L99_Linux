@@ -5,6 +5,127 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13] - 2026-08-01
+
+**The panel's spectrum analyser turned out to be another host-side feed on the
+channel we already speak: the PC captures its own audio over WASAPI loopback,
+runs the FFT itself, and sends the keyboard 23 numbers at ~21 frames/s. All
+137 frames in the capture round-trip byte-for-byte. The one packet that looks
+like a command is a data block -- the device's own ack behaviour says so --
+and reading it the other way is what would send someone hunting for a
+block-count field that is really a bass level.**
+
+### Added
+- `protocol.OP_AUDIO` (`0x78`) with `build_audio_blocks()`,
+  `parse_audio_block()` and `build_audio_frame()`, decoded from
+  `wireshark_dumps/save_to_gif_17.pcapng`.
+- `AUDIO_BAND_COUNT` (23) and the offset/default constants for the block's
+  three header bytes, plus `AUDIO_FRAME_SECONDS` (0.047, the vendor app's
+  measured frame period) and `AUDIO_LEVEL_QUANTUM`.
+- `--spectrum LEVELS`, with `--spectrum-scale` and `--spectrum-hold`. Levels
+  are given explicitly rather than collected from a local audio device, for
+  the same reason `--rtc` takes numbers: driving one band at a time is what
+  makes the bar-to-band mapping confirmable on hardware.
+- `re_notes/audio_spectrum_block.md`: transaction shape, block layout, the
+  block-versus-command argument, the WASAPI cross-check, the quantisation
+  finding, and what the capture leaves untested.
+- Ten new tests, 16 cases with parametrisation. Four pin real captured frames
+  byte-for-byte, chosen so the band direction is pinned and not just the
+  framing: the opening frame is loud only in the low bands, and a late one is
+  silent below band 8.
+
+### Changed
+- `_run_sequence()` in the CLI split into itself plus `_run_transactions()`,
+  which takes an already-open transport. `--spectrum-hold` must not reopen the
+  device between frames -- that would be far slower than the vendor's 21/s and
+  would race the GUI's poll thread.
+
+### Notes
+- Not confirmed on hardware, unlike the system-monitor fields it sits next to.
+  Everything here is one capture plus a cross-check against
+  `DeviceDriver.exe`'s imports and GUIDs.
+- The block carries no `AA 55` trailer, making it the only outbound block in
+  the protocol without one. That is absence, not displacement: bytes 26..63
+  are zero in every frame. It is an obvious thing to "fix", so a test guards it.
+- Bytes 0..2 are constants only in the sense that one capture at one settings
+  state cannot show them varying. Byte 1 (`0x08`) collides with
+  `EFFECT_NAMES[0x08] == "spectrum"`, and byte 2 (`0x64`) is equally readable
+  as the full-scale denominator or as the Music Rhythm tab's Amplitude slider,
+  which is also a 0..100 control that would default to 100. Searching
+  `DeviceDriver.exe` for a byte store of those immediates found nothing, which
+  weakly favours the settings reading.
+- Every level the vendor ever sent is exactly `floor(n * 8 / 5)`, so the feed's
+  real resolution is ~63 steps and the 0..100 range is a scaling of it.
+- How the stream is enabled is still unknown -- the capture starts mid-stream,
+  with a spectrum block already readable back before the first `SET_REPORT`.
+  An RTC write interleaves into the loop without disturbing it, so this feed
+  and the clock do not need sequencing against each other.
+- Nothing is wired to this in the GUI. A real visualiser needs an audio source
+  and an FFT on the Linux side; the protocol work only covers where to send
+  the result.
+
+## [0.9.12] - 2026-08-01
+
+**A capture of the vendor app animating the keyboard from the host turned up a
+second, previously unknown colour-write path -- opcode `0x20`, streamed at ~17
+frames/s -- and it does not look like anything else on this channel: no
+session framing, a different key order, no terminator block. All 244 full
+frames in the capture now round-trip byte-for-byte through the new builders,
+but the capture only ever lit one key at a time, so the format is confirmed
+and the device's behaviour past one lit key is not.**
+
+### Added
+- `protocol.OP_COLOR_STREAM` (`0x20`) with `build_stream_blocks()`,
+  `parse_stream_blocks()` and `build_stream_frame()`, decoded from
+  `wireshark_dumps/save_to_gif_18.pcapng`.
+- `STREAM_KEY_ORDER`, the 84 key ids in the packed order this opcode wants:
+  the same set as `KEY_IDS`, sorted into visual reading order. That was
+  checked rather than eyeballed -- the capture's order reproduces exactly by
+  sorting the vendor layout XML's key rects by `(rect_top, rect_left)`. It is
+  hardcoded rather than derived, to keep `aula_l99_hacky` free of the GUI's
+  layout XML.
+- `STREAM_BLOCK_COUNT`, `STREAM_SLOT_COUNT`, `STREAM_KEY_COUNT` and
+  `STREAM_FRAME_SECONDS` (0.0587, the vendor app's measured frame period).
+- `re_notes/color_stream.md`: transaction shape, block layout, the key-order
+  derivation, the timing figures, and what the capture leaves untested.
+- Eight tests anchored on one real captured frame, guarding the three things
+  that differ from `OP_COLOR_SET` and would each be a plausible "fix":
+  the absent trailer, the packed order, and unlit keys still occupying a slot.
+
+### Fixed
+- **`build_color_transfer()`'s docstring claimed `0x23` was the only
+  colour-write path seen in any capture.** It no longer is. `0x23` is now
+  described as the persistent path, with the stream named as the one to use
+  for animation.
+- The module docstring presented begin/commit/end framing and the matrix block
+  layout as properties of the cable channel. They are properties of individual
+  opcodes: `0x20` has neither, and its commit comes *after* its data blocks
+  where the `0xF5` poll loop's comes before. Corrected in place, since reading
+  that section as a channel-wide rule is what would send someone looking for a
+  `begin` that is not there.
+
+### Notes
+- Volatility is inferred, not tested. 245 writes in 16 seconds is not
+  something flash would survive, which is what makes this the right path for a
+  live preview where `OP_COLOR_SET` (which survives a replug) is not -- but
+  confirming it needs one experiment: stream a frame, replug, look.
+- No `OP_EFFECT` appears anywhere in the capture, so the stream did not need
+  `EFFECT_CUSTOM` selected first the way the `0x23` path does. Whether it
+  overrides a running built-in effect, or is ignored while one runs, is
+  untested and worth checking against the known interaction where colour-query
+  polling silently reverts a running effect.
+- Within a frame the vendor app left ~2.8ms between data blocks, against the
+  ~36.7ms it uses between packets everywhere else. Same app, same machine, so
+  that 36.7ms is host-side, not a device requirement. `PACKET_GAP_SECONDS` is
+  unchanged; this is a second independent reason to think it is loose.
+- Nothing is wired to this yet. Driving it needs a loop rather than a one-shot
+  transaction, which is a different shape from every existing CLI flag, and
+  the GUI's live preview is still on the polling path.
+- The capture also carried four `0x28` writes with non-zero monitor data,
+  which decode cleanly against the offsets 0.9.11 established -- an
+  independent second confirmation of that block, from a capture taken for an
+  unrelated reason.
+
 ## [0.9.11] - 2026-08-01
 
 **A new capture located the touchscreen's CPU/GPU and weather readout, and it

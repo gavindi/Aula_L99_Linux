@@ -18,6 +18,11 @@ Cable path (0C45:800A, interface 3 -> /dev/hidrawN), CONFIRMED:
   - Data blocks flow out from the host for a write command (0x23) and back
     from the device for a query (0xF5); the header looks the same either way,
     so check the direction before assuming what a capture shows.
+  - Not every command on this channel is session-framed, and not every one
+    lays its blocks out the same way. The realtime colour stream (0x20) does
+    neither -- see re_notes/color_stream.md -- so treat the begin/commit/end
+    shape and the matrix block layout as properties of individual opcodes
+    rather than of the channel.
 
 Dongle path (05AC:024F), NOT CONFIRMED: 32-byte interrupt reports with a
 trailing sum(bytes[0:31]) & 0xFF checksum, inherited from prior art on the
@@ -49,6 +54,12 @@ OP_RTC = 0x28            # set the clock *and* the panel's system-monitor and
                          # weather readout -- one block carrying both. See the
                          # RTC block layout further down.
 OP_COLOR_SET = 0x23      # write per-key colour (9 blocks out)
+OP_COLOR_STREAM = 0x20   # stream per-key colour in real time (8 blocks out).
+                         # A second, quite different colour-write path: no
+                         # session framing, a packed key order instead of the
+                         # matrix layout, and no terminator block. The vendor
+                         # app drives it at ~17 frames/s to animate the
+                         # keyboard from the host. See re_notes/color_stream.md.
 OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # The vendor app polls this ~27x/s to drive its
                          # on-screen preview, which means lighting effects run
@@ -73,6 +84,10 @@ OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
 OP_EFFECT = 0x13         # select a built-in effect (1 block out)
 OP_SETTINGS_WRITE = 0x17 # apply the settings-panel block (1 block out); see
                          # re_notes/settings_write.md for the block layout
+OP_AUDIO = 0x78          # push one frame of audio spectrum levels (1 block
+                         # out). The host captures the PC's audio and does the
+                         # FFT; the device only receives 23 numbers. See the
+                         # audio block below and re_notes/audio_spectrum_block.md.
 OP_END = 0xF0            # close a session
 
 # --- built-in effects (opcode 0x13) ----------------------------------------
@@ -213,6 +228,92 @@ KEY_IDS = (
     0x70, 0x71, 0x73, 0x75, 0x76, 0x77, 0x78, 0x79,
 )
 
+# --- realtime colour stream (opcode 0x20) -----------------------------------
+# Decoded from save_to_gif_18.pcapng: 245 frames at ~17/s, animating one key
+# from the host. Same [key_id, R, G, B] quads as OP_COLOR_SET, but laid out
+# differently in three ways, all confirmed across every frame of that capture:
+#
+#   - 8 blocks, not 9, and none of them is a terminator: the payload is a flat
+#     array of STREAM_SLOT_COUNT quads spanning all 8 blocks at once, rather
+#     than one block per matrix row.
+#   - The first STREAM_KEY_COUNT slots are the physical keys packed with no
+#     gaps, in the order below; the remaining slots are zero padding.
+#   - No 0xAA 0x55 trailer anywhere. TRAILER_OFFSET would land mid-quad here,
+#     which is presumably why.
+STREAM_BLOCK_COUNT = 8
+STREAM_SLOT_COUNT = 128          # 8 blocks x 16 quads
+STREAM_KEY_COUNT = 84            # the physical keys; the rest is zero padding
+
+# The packed order. This is the same 84 ids as KEY_IDS, sorted into visual
+# reading order -- rows top to bottom, keys left to right within a row. That
+# was checked rather than eyeballed: it reproduces exactly by sorting the
+# vendor layout XML's key rects by (top, left), which is how a host-side
+# animation would want to walk the keyboard.
+STREAM_KEY_ORDER = (
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x77, 0x70, 0x71,
+    0x73, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x67, 0x75,
+    0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x43, 0x76, 0x37,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x55, 0x79, 0x49, 0x4A, 0x4B,
+    0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x65, 0x78, 0x5B, 0x5C, 0x5D, 0x5E, 0x60,
+    0x62, 0x63, 0x64, 0x66,
+)
+
+# The vendor app's frame period, for reference when driving this. Measured as
+# the median gap between consecutive 0x20 command headers; within a frame it
+# left only ~2.8ms between data blocks, far tighter than the ~36.7ms it uses
+# everywhere else, which is more evidence that PACKET_GAP_SECONDS is a host
+# artefact rather than a device requirement.
+STREAM_FRAME_SECONDS = 0.0587
+
+# --- audio spectrum block (opcode 0x78) -------------------------------------
+# Decoded from save_to_gif_17.pcapng: 137 frames at ~21/s feeding the panel's
+# spectrum analyser. Like the colour stream above, the host does all the work
+# -- it captures the PC's audio via WASAPI loopback and runs the FFT itself,
+# so what reaches the keyboard is 23 numbers and nothing else.
+#
+# The block is a data block, not a command, even though it happens to begin
+# 0x04. Two things say so: the device echoes it back verbatim with byte 3
+# still clear, exactly as it echoes the RTC data block, while every real
+# command in the same capture comes back with byte 3 = 0x01; and byte 8 (the
+# block-count field of a command) varies from 0 to 38 across frames, which is
+# not a block count.
+#
+# Layout, with every field below constant across all 137 captured frames:
+#     04 08 64 <23 levels> <38 zero bytes>
+# and no 0xAA 0x55 trailer, which makes this the only outbound block in the
+# protocol without one.
+AUDIO_BAND_COUNT = 23
+AUDIO_OFF_LEVELS = 3
+AUDIO_LEVEL_MAX = 100
+
+# Bytes 0..2. Named rather than inlined because two of the three are only
+# provisionally constants -- see re_notes/audio_spectrum_block.md. Byte 1
+# collides with EFFECT_NAMES[0x08] == "spectrum", which may be the Music
+# Rhythm tab's rhythm style leaking through, or may be coincidence. Byte 2 is
+# 100, which is either the full-scale denominator the levels are relative to
+# or that tab's Amplitude slider, also a 0..100 control. One capture at one
+# setting cannot tell those apart.
+AUDIO_OFF_MODE = 0
+AUDIO_OFF_STYLE = 1
+AUDIO_OFF_SCALE = 2
+AUDIO_MODE_DEFAULT = 0x04
+AUDIO_STYLE_DEFAULT = 0x08
+AUDIO_SCALE_DEFAULT = 0x64
+
+# The vendor app's frame period, measured as the median gap between
+# consecutive frames. Bands run low frequency to high: the opening frames of
+# the capture are loud at band 0 and silent above band 4, and one late frame
+# is silent below band 8, so the ordering is not in doubt.
+AUDIO_FRAME_SECONDS = 0.047
+
+# Every level the vendor app ever put on the wire, across both captures, is
+# exactly floor(n * 8 / 5) for some n -- 0, 1, 3, 4, 6, 8, 9, 11, 12, 14, ...
+# So its internal amplitude is a 0..62-ish integer scaled by 1.6 to reach 100,
+# and the real resolution of this feed is about 63 steps, not 101. Nothing
+# here enforces that; a level the app would never have produced is still a
+# legal byte as far as we know.
+AUDIO_LEVEL_QUANTUM = (8, 5)
+
 # -- dongle path (unconfirmed prior art) -------------------------------------
 DONGLE_PACKET_SIZE = 32
 SESSION_INIT_OUT = bytes.fromhex(
@@ -325,6 +426,24 @@ def parse_condition(value: str) -> int:
         raise ValueError(f"unknown condition {value!r}; expected a number or one of: {names}")
 
 
+def parse_audio_levels(value: str) -> list[int]:
+    """Parse a comma- or space-separated list of band levels.
+
+    Short lists are legal and are padded with silence by build_audio_blocks(),
+    so "100" is a valid frame meaning "band 0 only".
+    """
+    text = value.replace(",", " ").split()
+    if not text:
+        raise ValueError("no levels given")
+    levels = []
+    for band, item in enumerate(text):
+        try:
+            levels.append(int(item, 0))
+        except ValueError:
+            raise ValueError(f"band {band}: {item!r} is not a number")
+    return levels
+
+
 def build_command(opcode: int, block_count: int = 0) -> bytes:
     """A 64-byte command header. `block_count` is how many raw data blocks the
     host will send immediately afterwards."""
@@ -403,6 +522,150 @@ def build_color_query_commands() -> list[Transaction]:
                     retry_until_ack=True),
         Transaction("color-query", build_command(OP_COLOR_QUERY, COLOR_BLOCK_COUNT),
                     expect_reply=True, retry_until_ack=True),
+    ]
+
+
+def build_stream_blocks(colors: dict[int, tuple[int, int, int]]) -> list[bytes]:
+    """Build the 8 data blocks of one realtime-stream frame (opcode 0x20).
+
+    Unlike build_color_blocks(), the quads are packed into STREAM_KEY_ORDER
+    rather than placed at their matrix position, so a key missing from
+    `colors` is still transmitted -- as its own id with black -- because
+    leaving its slot out would shift every key after it. That is what the
+    vendor app does: every frame in the capture carried all 84 ids, with the
+    83 unlit keys sitting at 00 00 00.
+    """
+    for key_id, rgb in colors.items():
+        if key_id not in KEY_IDS:
+            raise ValueError(f"key id 0x{key_id:02X} is not a physical key on the L99")
+        if len(rgb) != 3 or not all(0 <= c <= 255 for c in rgb):
+            raise ValueError(f"bad colour for key 0x{key_id:02X}: {rgb!r}")
+
+    payload = bytearray(STREAM_SLOT_COUNT * BYTES_PER_KEY)
+    for slot, key_id in enumerate(STREAM_KEY_ORDER):
+        offset = slot * BYTES_PER_KEY
+        payload[offset] = key_id
+        payload[offset + 1:offset + 4] = bytes(colors.get(key_id, (0, 0, 0)))
+    return [bytes(payload[i:i + PACKET_SIZE])
+            for i in range(0, len(payload), PACKET_SIZE)]
+
+
+def parse_stream_blocks(blocks: list[bytes]) -> dict[int, tuple[int, int, int]]:
+    """Decode one stream frame. Inverse of build_stream_blocks().
+
+    Reads by slot position rather than trusting the id byte, so a frame whose
+    order differs from STREAM_KEY_ORDER shows up as a mismatch instead of
+    being silently accepted.
+    """
+    payload = b"".join(blocks)
+    expected = STREAM_SLOT_COUNT * BYTES_PER_KEY
+    if len(payload) != expected:
+        raise ValueError(f"expected {expected} bytes of stream payload, got {len(payload)}")
+
+    colors: dict[int, tuple[int, int, int]] = {}
+    for slot, key_id in enumerate(STREAM_KEY_ORDER):
+        offset = slot * BYTES_PER_KEY
+        if payload[offset] != key_id:
+            raise ValueError(
+                f"slot {slot} holds key 0x{payload[offset]:02X}, expected "
+                f"0x{key_id:02X}; this frame is not in STREAM_KEY_ORDER"
+            )
+        colors[key_id] = tuple(payload[offset + 1:offset + 4])
+    return colors
+
+
+def build_stream_frame(colors: dict[int, tuple[int, int, int]]) -> list[Transaction]:
+    """One frame of the realtime colour stream.
+
+    Deliberately not built on build_transfer(): the capture shows this path
+    carries no session framing at all. There is no begin and no end anywhere
+    in it, and the commit comes *after* the data blocks rather than before,
+    which is the opposite of the OP_COLOR_QUERY poll loop. Repeat this
+    sequence once per frame; the vendor app repeats it every
+    STREAM_FRAME_SECONDS.
+    """
+    blocks = build_stream_blocks(colors)
+    transactions = [
+        Transaction("stream", build_command(OP_COLOR_STREAM, len(blocks)),
+                    expect_reply=True, retry_until_ack=True),
+    ]
+    transactions += [
+        Transaction(f"stream-block{i}", block) for i, block in enumerate(blocks)
+    ]
+    transactions.append(Transaction("commit", build_command(OP_COMMIT), expect_reply=True,
+                                    retry_until_ack=True))
+    return transactions
+
+
+def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
+                       mode: int = AUDIO_MODE_DEFAULT,
+                       style: int = AUDIO_STYLE_DEFAULT) -> list[bytes]:
+    """The single data block of one audio spectrum frame (opcode 0x78).
+
+    `levels` is up to AUDIO_BAND_COUNT band magnitudes, low frequency first.
+    A short list is padded with zeroes, so passing one value drives band 0 and
+    leaves the rest silent -- which is the useful shape for working out which
+    bar of the panel is which band.
+
+    Levels are checked against `scale` rather than against AUDIO_LEVEL_MAX,
+    because no captured frame ever exceeded byte 2 and the honest reading of
+    that byte is "the value the levels are relative to". If `scale` really
+    turns out to be an unrelated amplitude setting, this check is too strict
+    and the fix is to drop it, not to widen it silently.
+    """
+    if len(levels) > AUDIO_BAND_COUNT:
+        raise ValueError(
+            f"at most {AUDIO_BAND_COUNT} bands, got {len(levels)}")
+    for byte_value, name in ((scale, "scale"), (mode, "mode"), (style, "style")):
+        if not 0 <= byte_value <= 0xFF:
+            raise ValueError(f"{name} must be 0..255, got {byte_value}")
+    for band, level in enumerate(levels):
+        if not 0 <= level <= scale:
+            raise ValueError(
+                f"band {band} level must be 0..{scale} (the scale byte), got {level}")
+
+    block = bytearray(PACKET_SIZE)
+    block[AUDIO_OFF_MODE] = mode
+    block[AUDIO_OFF_STYLE] = style
+    block[AUDIO_OFF_SCALE] = scale
+    block[AUDIO_OFF_LEVELS:AUDIO_OFF_LEVELS + len(levels)] = bytes(levels)
+    return [bytes(block)]
+
+
+def parse_audio_block(block: bytes) -> tuple[list[int], int]:
+    """Decode one audio frame into its levels and its scale byte.
+
+    Inverse of build_audio_blocks(). Returns all AUDIO_BAND_COUNT levels
+    including trailing zeroes, since a silent high band is a real reading
+    rather than absent data.
+    """
+    if len(block) != PACKET_SIZE:
+        raise ValueError(f"expected a {PACKET_SIZE}-byte block, got {len(block)}")
+    levels = list(block[AUDIO_OFF_LEVELS:AUDIO_OFF_LEVELS + AUDIO_BAND_COUNT])
+    return levels, block[AUDIO_OFF_SCALE]
+
+
+def build_audio_frame(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
+                      **kwargs) -> list[Transaction]:
+    """One frame of the audio spectrum feed.
+
+    Like build_stream_frame(), and unlike build_transfer(), this carries no
+    session framing -- but the commit sits *before* the command here rather
+    than after it, matching the captured cycle exactly:
+
+        commit -> 0x78 announcing one block -> the block
+
+    An RTC write interleaved cleanly into the middle of that loop in the
+    capture without disturbing it, so the two feeds do not need sequencing
+    against each other. Repeat this every AUDIO_FRAME_SECONDS to animate.
+    """
+    blocks = build_audio_blocks(levels, scale, **kwargs)
+    return [
+        Transaction("commit", build_command(OP_COMMIT), expect_reply=True,
+                    retry_until_ack=True),
+        Transaction("audio", build_command(OP_AUDIO, len(blocks)),
+                    expect_reply=True, retry_until_ack=True),
+        Transaction("audio-block0", blocks[0]),
     ]
 
 
@@ -486,9 +749,12 @@ def build_transfer(opcode: int, blocks: list[bytes], name: str) -> list[Transact
 def build_color_transfer(colors: dict[int, tuple[int, int, int]]) -> list[Transaction]:
     """Set per-key colours (opcode 0x23).
 
-    This is the only colour-write path seen in any capture. It presumably
-    writes flash, since the setting survives a replug, so avoid calling it in a
-    tight loop.
+    The persistent colour-write path: it presumably writes flash, since the
+    setting survives a replug, so avoid calling it in a tight loop. For
+    animation use build_stream_frame() (opcode 0x20) instead, which the vendor
+    app runs at ~17 frames/s -- a rate nothing would survive against flash, so
+    that path is almost certainly volatile. "Almost certainly" because nothing
+    here has been tested against a replug; all we have is the capture.
     """
     return build_transfer(OP_COLOR_SET, build_color_blocks(colors), "color")
 

@@ -60,7 +60,25 @@ Bytes 13..21 are the new part. `build_rtc_blocks()` zeroes all nine.
 | 20 | 0x00 = 0   | weather condition code |
 | 21 | 0x5F = 95  | humidity %          |
 
-Bytes 9, 11, 12 stay zero; purpose unknown.
+### The rest of the block is dead space
+
+Bytes 9, 11, 12 and 22..61 are not merely zero in this capture -- the vendor
+app never writes them at all. Its builder `memset`s the whole 65-byte buffer
+and then fills exactly offsets 0..8, 10, 13..21 and the 62..63 trailer, so 43
+of the 64 bytes are untouched. The clock plus the nine monitor values is the
+entire payload; there is no further parameter hiding in here.
+
+One lead in that space. The app calls `GetLocalTime` into a `SYSTEMTIME` and
+reads `wYear`, `wMonth`, `wDayOfWeek`, `wDay`, `wHour`, `wMinute`, `wSecond`
+from it -- but pointedly not `wMilliseconds`, which is right there in the same
+struct. Byte 9 is the one unwritten byte immediately after seconds. A
+sub-second field the firmware may accept but the app declines to fill is the
+obvious reading, though nothing tests it. Bytes 11..12, between weekday and
+CPU load, have no equivalent story: alignment padding is as likely as a field
+this app build doesn't use.
+
+Both caveats that apply everywhere in this note apply here too: one code path
+in one app build, and only view 1 has ever been exercised.
 
 ## Where the vendor app gets each field
 

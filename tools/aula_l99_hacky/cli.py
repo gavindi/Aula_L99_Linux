@@ -8,6 +8,7 @@ Usage:
     python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
     python3 -m aula_l99_hacky.cli --rtc
     python3 -m aula_l99_hacky.cli --rtc --cpu-load 42 --cpu-temp 55 --condition rain
+    python3 -m aula_l99_hacky.cli --spectrum 100 --spectrum-hold 3
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
 
 The colour and RTC commands are confirmed against real hardware on the wired
@@ -18,6 +19,11 @@ The same RTC packet carries the touchscreen's CPU/GPU and weather readout, so
 `--rtc` doubles as the way to drive that. Those fields are decoded from a
 single capture (re_notes/system_monitor_block.md); sending distinctive values
 and watching which cell of the panel changes is how to confirm them.
+
+`--spectrum` is the same idea for the panel's spectrum analyser: the host does
+the FFT and sends 23 band levels, so driving one band at a time is how to
+confirm which bar is which. Decoded from one capture and not yet tested on
+hardware -- see re_notes/audio_spectrum_block.md.
 
 A udev rule granting the logged-in user access to the keyboard's hidraw nodes
 is usually already in place, so root is typically not needed.
@@ -82,36 +88,42 @@ def _acked(tx: protocol.Transaction, reply: bytes) -> bool:
 
 def _run_sequence(device, transactions, args) -> int:
     """Run a cable-path transaction list, checking each reply acks its opcode."""
-    failures = 0
     with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
-        for tx in transactions:
-            attempts = protocol.SESSION_OPEN_RETRIES if tx.retry_until_ack else 1
-            reply = None
-            for attempt in range(1, attempts + 1):
-                try:
-                    reply = _run_cable(transport, tx, args.debug, args.gap)
-                except OSError as exc:
-                    # The keyboard is busy (an effect is running); it recovers.
-                    if attempt == attempts:
-                        raise
-                    if args.debug:
-                        print(f"{tx.name}: attempt {attempt} failed ({exc.strerror}), retrying")
-                    time.sleep(protocol.RETRY_DELAY_SECONDS)
-                    continue
-                if reply is None or _acked(tx, reply):
-                    break
-                if attempt < attempts:
-                    if args.debug:
-                        print(f"{tx.name}: attempt {attempt} not acked "
-                              f"({reply[:4].hex()}), retrying")
-                    time.sleep(protocol.RETRY_DELAY_SECONDS)
+        return _run_transactions(transport, transactions, args)
 
-            if reply is None:
+
+def _run_transactions(transport, transactions, args) -> int:
+    """The body of _run_sequence, on an already-open transport. Split out for
+    the frame loops, which must not reopen the device between frames."""
+    failures = 0
+    for tx in transactions:
+        attempts = protocol.SESSION_OPEN_RETRIES if tx.retry_until_ack else 1
+        reply = None
+        for attempt in range(1, attempts + 1):
+            try:
+                reply = _run_cable(transport, tx, args.debug, args.gap)
+            except OSError as exc:
+                # The keyboard is busy (an effect is running); it recovers.
+                if attempt == attempts:
+                    raise
+                if args.debug:
+                    print(f"{tx.name}: attempt {attempt} failed ({exc.strerror}), retrying")
+                time.sleep(protocol.RETRY_DELAY_SECONDS)
                 continue
-            if not _acked(tx, reply):
-                print(f"{tx.name}: WARNING no ack for opcode "
-                      f"0x{tx.outgoing[1]:02x}, got {reply[:4].hex()}", file=sys.stderr)
-                failures += 1
+            if reply is None or _acked(tx, reply):
+                break
+            if attempt < attempts:
+                if args.debug:
+                    print(f"{tx.name}: attempt {attempt} not acked "
+                          f"({reply[:4].hex()}), retrying")
+                time.sleep(protocol.RETRY_DELAY_SECONDS)
+
+        if reply is None:
+            continue
+        if not _acked(tx, reply):
+            print(f"{tx.name}: WARNING no ack for opcode "
+                  f"0x{tx.outgoing[1]:02x}, got {reply[:4].hex()}", file=sys.stderr)
+            failures += 1
     return failures
 
 
@@ -269,6 +281,38 @@ def cmd_rtc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spectrum(args: argparse.Namespace) -> int:
+    device = find_l99()
+    if not _require_cable(device, "the audio spectrum feed"):
+        return 1
+
+    try:
+        levels = protocol.parse_audio_levels(args.spectrum)
+        transactions = protocol.build_audio_frame(levels, args.spectrum_scale)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    shown = " ".join(str(level) for level in levels)
+    print(f"using {device.path}; spectrum bands [{shown}] "
+          f"of {args.spectrum_scale}"
+          + (f", held for {args.spectrum_hold}s" if args.spectrum_hold else ""))
+
+    # One frame is all the protocol asks for, but a single frame may only be
+    # on screen for a frame period, so --spectrum-hold resends it. The
+    # transport stays open across frames: reopening it per frame would be far
+    # slower than the vendor's ~21/s and would race the GUI's poll thread.
+    deadline = time.monotonic() + args.spectrum_hold
+    failures = 0
+    with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
+        while True:
+            failures += _run_transactions(transport, transactions, args)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(protocol.AUDIO_FRAME_SECONDS)
+    return 1 if failures else 0
+
+
 def cmd_send_hex(args: argparse.Namespace) -> int:
     device = find_l99()
     payload = protocol.parse_hex_packet(args.send_hex)
@@ -318,6 +362,25 @@ def build_parser() -> argparse.ArgumentParser:
                         help="set the keyboard's clock, and the panel's monitor "
                              "readout if any of the fields below are given")
     parser.add_argument("--send-hex", metavar="HEX", help="send one raw packet and print the reply")
+
+    # The panel's spectrum analyser. Levels are explicit for the same reason
+    # the monitor fields are: driving one band at a time is how the bar-to-band
+    # mapping gets confirmed. See re_notes/audio_spectrum_block.md.
+    audio = parser.add_argument_group(
+        "audio spectrum",
+        f"Push one frame of band levels to the panel's spectrum analyser. "
+        f"Up to {protocol.AUDIO_BAND_COUNT} values, low frequency first; "
+        f"anything omitted is silent.")
+    audio.add_argument("--spectrum", metavar="LEVELS",
+                       help="band levels, e.g. '100,80,60' or '0 0 0 100'")
+    audio.add_argument("--spectrum-scale", type=int,
+                       default=protocol.AUDIO_SCALE_DEFAULT, metavar="N",
+                       help="the value levels are relative to (default "
+                            "%(default)s; the vendor app only ever sent 100)")
+    audio.add_argument("--spectrum-hold", type=float, default=0.0, metavar="SECS",
+                       help="keep resending the frame for this long (default "
+                            "%(default)s, one frame only); a single frame may "
+                            "not stay on screen long enough to see")
 
     # The system-monitor and weather fields the RTC block carries. Anything
     # omitted is sent as zero, which is what the vendor app sends when it has
@@ -384,6 +447,8 @@ def main() -> int:
             return cmd_read_color(args)
         if args.rtc:
             return cmd_rtc(args)
+        if args.spectrum:
+            return cmd_spectrum(args)
         if args.send_hex:
             return cmd_send_hex(args)
     except FileNotFoundError as exc:
