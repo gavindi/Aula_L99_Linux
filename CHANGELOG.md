@@ -5,6 +5,77 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11] - 2026-08-01
+
+**A new capture located the touchscreen's CPU/GPU and weather readout, and it
+was never a touchscreen protocol at all: it rides in nine bytes of the
+keyboard's own clock packet, which we had been sending zeroed the whole time.
+`aula_l99_hacky` can now set them, and every field is confirmed on
+hardware -- but the same find contradicted the dongle packet already in the
+file, and that conflict is unresolvable without a dongle to test.**
+
+### Added
+- `--rtc` gained the system-monitor fields the panel displays: `--cpu-load`,
+  `--cpu-temp`, `--gpu-load`, `--gpu-temp`, `--air-temp`, `--day-high`,
+  `--night-low`, `--condition`, `--humidity`, plus `--view`. Anything omitted
+  is sent as zero, which is exactly what the vendor app sends when it has
+  nothing to report, so a bare `--rtc` is still a plain clock write.
+- `protocol.MonitorData`, a frozen nine-field value type validating on
+  construction, and `parse_condition()` accepting either a name
+  (`cloudy`/`clear`/`light-snow`/`thunder`/`rain`/`heavy-snow`) or a number.
+  `--list-conditions` prints the table, mirroring `--list-effects`.
+- Named offset constants for the whole `0x28` block, replacing the bare
+  indices both RTC builders were written with.
+- `re_notes/system_monitor_block.md`: the full decode -- transaction shape,
+  field table, where the vendor app sources each value
+  (`OpenHardwareMonitorServer.exe` via `data.ini` for hardware, a weather API
+  for the rest), and the condition-code mapping.
+- First tests for this package, `tools/aula_l99_hacky/tests/`, following the
+  `conftest.py` path-insert pattern `aula_l99_screen/tests/` already uses. The
+  one that carries the weight reproduces the captured block byte-for-byte from
+  the nine values, pinning every offset to the vendor app's real output rather
+  than to a reading of its disassembly.
+
+### Fixed
+- **`settings_write.md` had concluded the monitor feed was a separate,
+  uncaptured protocol on the panel's CDC-ACM port.** Wrong, and wrong in an
+  instructive way: the panel *is* a separate USB device, but that says nothing
+  about which device the host sends the data to. The keyboard receives it on
+  the channel we already speak and forwards it. The old section is marked
+  superseded rather than deleted, with the bad inference named.
+- Byte 1 of the RTC block was hardcoded `0x01` as a constant. The vendor app
+  computes it as the selected screen view's index plus one -- 1 only because
+  the first view was selected in every capture. Now the `view` parameter.
+
+### Changed
+- `build_rtc_blocks()`, `build_rtc_transfer()` and `build_dongle_rtc_packet()`
+  take an optional `MonitorData` and `view`, defaulting to the all-zero,
+  view-1 block. Verified byte-identical to the previous output, so the GUI's
+  "Set Clock to Now" is untouched -- it still writes a clock and nothing else.
+- `build_dongle_rtc_packet()` now switches layout depending on whether monitor
+  data was supplied, which is damage control rather than design. The vendor's
+  own dongle code path places these fields at +4 from the cable offsets, but
+  the F75 MAX prior art this packet was built from implies +3, and its `AA 55`
+  trailer sits exactly where the +4 reading puts the first monitor byte. No
+  splice of the two is a packet either source supports, so a clock-only write
+  keeps the prior-art bytes untouched and a monitor write uses the vendor
+  layout. The `+4` reading is the better bet -- it is this device's own code,
+  not another keyboard's -- but no L99 dongle has ever been tested.
+
+### Notes
+- The nine field assignments started as inference from a single capture
+  cross-checked against `DeviceDriver.exe`, then were confirmed by writing a
+  distinctive value to each and reading the panel. Explicit CLI values rather
+  than live `psutil`/`hwmon` readings is what made that check possible, and is
+  why the tool takes numbers instead of collecting them.
+- Still unconfirmed: what a `--view` above 1 does, and whether the panel reads
+  a negative temperature as signed (`--air-temp -5` sends `0xFB` because that
+  is what the vendor app would send, not because the result was observed).
+- The GUI does not populate these fields yet. Doing so needs a stats source
+  and, given that colour-query polling already disturbs running effects, a
+  monitor write sequenced behind the poll thread the way 0.9.8's
+  `_pending_write` queue handles RTC writes.
+
 ## [0.9.10] - 2026-08-01
 
 **"Set Clock to Now" and the colour-poll interval moved to the Config tab,

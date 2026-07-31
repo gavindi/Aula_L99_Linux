@@ -1,9 +1,14 @@
 # aula_l99_hacky
 
 Linux tool for the AULA L99's vendor HID channel (`0C45:800A` wired, `05AC:024F` 2.4G
-dongle). This only covers the **keyboard-side HID protocol** — the touchscreen is a
+dongle). This covers the **keyboard-side HID protocol** — the touchscreen is a
 separate `EEEF:268A` USB-serial device, already documented in
 [Salamor/aula-l99-open-widgets](https://github.com/Salamor/aula-l99-open-widgets).
+
+One exception to that split: the panel's CPU/GPU and weather readout arrives
+over *this* channel, not the panel's own serial port, riding in the RTC packet
+(`0x28`) for the keyboard to forward. See
+[re_notes/system_monitor_block.md](re_notes/system_monitor_block.md).
 
 ## Status
 
@@ -11,8 +16,17 @@ Confirmed on real hardware (wired `0C45:800A`, interface 3):
 
 - Session framing, writing per-key RGB, reading per-key RGB back, selecting
   built-in effects, and the RTC-set command.
+- The nine system-monitor and weather bytes of the `0x28` block — CPU/GPU load
+  and temperature, current/high/low temperature, weather condition, humidity —
+  each verified by writing a distinctive value and reading the panel.
 - Every packet builder in `protocol.py` reproduces the vendor app's own packets
   byte-for-byte — see "Verifying against a capture" below.
+
+Decoded but **not** confirmed on hardware: byte 1 of the `0x28` block being a
+screen-view index rather than a constant. Only view 1 has ever been used, so
+what a higher value does is unknown. Nor is it known whether the panel reads a
+negative temperature as signed — `--air-temp -5` sends `0xFB` because that is
+what the vendor app would send, not because the result was observed.
 
 Not yet known: macros, and the meaning of byte 8 of the effect payload.
 Effects run on the keyboard itself — the vendor app
@@ -47,6 +61,13 @@ python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
 # set the keyboard's clock
 python3 -m aula_l99_hacky.cli --rtc
 
+# the same packet drives the touchscreen's monitor readout; omitted fields
+# are sent as zero, which is what the vendor app sends with nothing to report
+python3 -m aula_l99_hacky.cli --list-conditions
+python3 -m aula_l99_hacky.cli --rtc \
+    --cpu-load 42 --cpu-temp 55 --gpu-load 10 --gpu-temp 48 \
+    --air-temp 26 --day-high 34 --night-low 25 --condition rain --humidity 95
+
 # test a candidate packet from your own capture
 python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09"
 ```
@@ -67,7 +88,7 @@ reply:    04 <opcode> 00 01 ...                                (byte 3 = ack)
 | Opcode | Meaning | Blocks |
 |--------|---------------------------------------------|--------|
 | `0x18` | begin session                                | 0 |
-| `0x28` | set RTC — `00 01 5a`, then Y M D h m s, weekday | 1 |
+| `0x28` | set RTC *and* the panel's monitor readout — `00 VV 5a`, then Y M D h m s, weekday, then CPU/GPU load and temperature and the weather fields | 1 |
 | `0x23` | write per-key colour                         | 9 out |
 | `0xF5` | read back current per-key colour             | 9 in |
 | `0x02` | commit; reply returns 16 bits at offset 4    | 0 |

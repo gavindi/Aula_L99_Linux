@@ -7,11 +7,17 @@ Usage:
     python3 -m aula_l99_hacky.cli --read-color
     python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
     python3 -m aula_l99_hacky.cli --rtc
+    python3 -m aula_l99_hacky.cli --rtc --cpu-load 42 --cpu-temp 55 --condition rain
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
 
 The colour and RTC commands are confirmed against real hardware on the wired
 0C45:800A path. `--send-hex` remains the slot for testing a candidate packet
 pulled from a fresh capture of the vendor app.
+
+The same RTC packet carries the touchscreen's CPU/GPU and weather readout, so
+`--rtc` doubles as the way to drive that. Those fields are decoded from a
+single capture (re_notes/system_monitor_block.md); sending distinctive values
+and watching which cell of the panel changes is how to confirm them.
 
 A udev rule granting the logged-in user access to the keyboard's hidraw nodes
 is usually already in place, so root is typically not needed.
@@ -205,21 +211,59 @@ def cmd_effect(args: argparse.Namespace) -> int:
     return 1 if _run_sequence(device, transactions, args) else 0
 
 
+def _monitor_from_args(args: argparse.Namespace) -> protocol.MonitorData:
+    """Build the monitor payload; an omitted flag stays zero, as in a
+    clock-only write."""
+    return protocol.MonitorData(
+        cpu_load=args.cpu_load or 0,
+        cpu_temp=args.cpu_temp or 0,
+        gpu_load=args.gpu_load or 0,
+        gpu_temp=args.gpu_temp or 0,
+        air_temp=args.air_temp or 0,
+        day_high=args.day_high or 0,
+        night_low=args.night_low or 0,
+        condition=protocol.parse_condition(args.condition) if args.condition else 0,
+        humidity=args.humidity or 0,
+    )
+
+
 def cmd_rtc(args: argparse.Namespace) -> int:
     device = find_l99()
     now = datetime.now()
 
+    try:
+        monitor = _monitor_from_args(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    what = f"setting clock to {now:%Y-%m-%d %H:%M:%S}"
+    if args.view != 1:
+        what += f" on screen view {args.view}"
+    if not monitor.is_empty:
+        what += (f"; cpu {monitor.cpu_load}% {monitor.cpu_temp}deg, "
+                 f"gpu {monitor.gpu_load}% {monitor.gpu_temp}deg, "
+                 f"weather {monitor.air_temp}deg (high {monitor.day_high}, "
+                 f"low {monitor.night_low}), condition {monitor.condition}, "
+                 f"humidity {monitor.humidity}%")
+
     if device.is_cable:
-        print(f"using {device.path}; setting clock to {now:%Y-%m-%d %H:%M:%S}")
-        transactions = protocol.build_rtc_transfer(now)
+        print(f"using {device.path}; {what}")
+        transactions = protocol.build_rtc_transfer(now, monitor, args.view)
         return 1 if _run_sequence(device, transactions, args) else 0
 
+    if not monitor.is_empty:
+        print("warning: the dongle's monitor-field offsets are unverified and "
+              "conflict with its prior-art clock layout; see "
+              "build_dongle_rtc_packet", file=sys.stderr)
+    print(f"using {device.path}; {what}")
     with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
         transport.drain()
         for tx in protocol.build_dongle_handshake():
             _run_dongle(transport, tx, args.debug)
         rtc = protocol.Transaction(
-            "rtc-set", protocol.build_dongle_rtc_packet(now), True, protocol.RTC_SET_ACK
+            "rtc-set", protocol.build_dongle_rtc_packet(now, monitor), True,
+            protocol.RTC_SET_ACK
         )
         _run_dongle(transport, rtc, args.debug)
     return 0
@@ -270,8 +314,36 @@ def build_parser() -> argparse.ArgumentParser:
                         help="effect speed %(default)s (1=slowest, 5=fastest)")
     parser.add_argument("--brightness", type=int, default=protocol.EFFECT_BRIGHTNESS_MAX,
                         help="effect brightness (1..5, default %(default)s)")
-    parser.add_argument("--rtc", action="store_true", help="set the keyboard's clock")
+    parser.add_argument("--rtc", action="store_true",
+                        help="set the keyboard's clock, and the panel's monitor "
+                             "readout if any of the fields below are given")
     parser.add_argument("--send-hex", metavar="HEX", help="send one raw packet and print the reply")
+
+    # The system-monitor and weather fields the RTC block carries. Anything
+    # omitted is sent as zero, which is what the vendor app sends when it has
+    # nothing to report. See re_notes/system_monitor_block.md.
+    monitor = parser.add_argument_group(
+        "system-monitor fields (used with --rtc)",
+        "Values the touchscreen displays. Range -128..255; negatives are sent "
+        "as two's complement, matching what the vendor app puts on the wire, "
+        "though whether the panel renders them as signed is untested.")
+    monitor.add_argument("--cpu-load", type=int, metavar="PCT", help="CPU load per cent")
+    monitor.add_argument("--cpu-temp", type=int, metavar="DEG", help="CPU temperature")
+    monitor.add_argument("--gpu-load", type=int, metavar="PCT", help="GPU load per cent")
+    monitor.add_argument("--gpu-temp", type=int, metavar="DEG", help="GPU temperature")
+    monitor.add_argument("--air-temp", type=int, metavar="DEG",
+                         help="current outside temperature")
+    monitor.add_argument("--day-high", type=int, metavar="DEG", help="forecast day high")
+    monitor.add_argument("--night-low", type=int, metavar="DEG", help="forecast night low")
+    monitor.add_argument("--condition", metavar="NAME",
+                         help="weather condition by name or number "
+                              "(see --list-conditions)")
+    monitor.add_argument("--humidity", type=int, metavar="PCT", help="humidity per cent")
+    monitor.add_argument("--view", type=int, default=1, metavar="N",
+                         help="screen-view index the values apply to "
+                              "(default %(default)s; only 1 has ever been captured)")
+    parser.add_argument("--list-conditions", action="store_true",
+                        help="show the known weather condition codes and exit")
     parser.add_argument("--timeout", type=float, default=1.0, help="reply read timeout in seconds")
     parser.add_argument("--gap", type=float, default=protocol.PACKET_GAP_SECONDS,
                         help="seconds to wait between packets (default %(default)s); "
@@ -293,6 +365,13 @@ def main() -> int:
                 mark = "confirmed" if eid in protocol.EFFECT_CONFIRMED else "untested"
                 print(f"  0x{eid:02X}  {ename:<18} {mark}")
             print("\nIds are the 1-based position in the vendor app's effect list.")
+            return 0
+        if args.list_conditions:
+            for name, code in sorted(protocol.WEATHER_CONDITIONS.items(),
+                                     key=lambda item: item[1]):
+                print(f"  {code}  {name}")
+            print("\nCode 0 is ambiguous: the vendor app leaves it there both for "
+                  "'cloudy'\nand for a condition string it did not recognise.")
             return 0
         if args.handshake:
             return cmd_handshake(args)

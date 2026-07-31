@@ -24,10 +24,14 @@ trailing sum(bytes[0:31]) & 0xFF checksum, inherited from prior art on the
 AULA F75 MAX (Simon-Martens/F75_Initializer). No L99 dongle has been tested,
 and the wired device's format differs, so treat it as a starting guess.
 
-Still unidentified: opcodes 0x13 and 0x00. The 16-bit value the commit reply
-carries at offset 4 is confirmed to be a plain monotonic sequence counter
-(increments by exactly 1 per commit regardless of payload content), not a
-checksum as previously guessed here -- see re_notes/settings_write.md.
+Still unidentified: opcode 0x00. The 16-bit value the commit reply carries at
+offset 4 is confirmed to be a plain monotonic sequence counter (increments by
+exactly 1 per commit regardless of payload content), not a checksum as
+previously guessed here -- see re_notes/settings_write.md.
+
+The panel's CPU/GPU and weather readout is not a protocol of its own: it rides
+in the OP_RTC block below, on this same channel. See
+re_notes/system_monitor_block.md.
 """
 from __future__ import annotations
 
@@ -41,7 +45,9 @@ PACKET_SIZE = 64
 CMD_PREFIX = 0x04
 OP_BEGIN = 0x18          # open a session
 OP_COMMIT = 0x02         # apply; reply carries 16 bits at offset 4
-OP_RTC = 0x28            # set the keyboard's clock (1 data block)
+OP_RTC = 0x28            # set the clock *and* the panel's system-monitor and
+                         # weather readout -- one block carrying both. See the
+                         # RTC block layout further down.
 OP_COLOR_SET = 0x23      # write per-key colour (9 blocks out)
 OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # The vendor app polls this ~27x/s to drive its
@@ -121,6 +127,59 @@ EFFECT_NAMES[EFFECT_CUSTOM] = "custom (per-key)"
 TRAILER = bytes([0xAA, 0x55])
 TRAILER_OFFSET = 62
 
+# --- RTC / system-monitor block (opcode 0x28) -------------------------------
+# One block carries the clock, the CPU/GPU readings and the weather readout.
+# Bytes 0..12 are confirmed against wall-clock time in a capture. Bytes 13..21
+# were decoded from save_to_gif_16.pcapng cross-checked against
+# DeviceDriver.exe, then confirmed on hardware by writing a distinctive value
+# to each field and reading the panel -- see re_notes/system_monitor_block.md.
+RTC_TAG = 0x5A
+RTC_OFF_VIEW = 1        # selected screen-view index, 1-based (see build_rtc_blocks)
+RTC_OFF_TAG = 2
+RTC_OFF_YEAR = 3        # year since 2000
+RTC_OFF_MONTH = 4
+RTC_OFF_DAY = 5
+RTC_OFF_HOUR = 6
+RTC_OFF_MINUTE = 7
+RTC_OFF_SECOND = 8
+RTC_OFF_WEEKDAY = 10    # Sunday = 0
+RTC_OFF_CPU_LOAD = 13   # per cent
+RTC_OFF_CPU_TEMP = 14
+RTC_OFF_GPU_LOAD = 15   # per cent
+RTC_OFF_GPU_TEMP = 16
+RTC_OFF_AIR_TEMP = 17   # current outside temperature
+RTC_OFF_DAY_HIGH = 18
+RTC_OFF_NIGHT_LOW = 19
+RTC_OFF_CONDITION = 20
+RTC_OFF_HUMIDITY = 21   # per cent
+
+# The vendor app maps its weather provider's Chinese condition text onto these
+# codes by substring search. Code 0 is ambiguous: it means "cloudy", but it is
+# also what an unrecognised condition string leaves behind, since that is the
+# initial value.
+WEATHER_CONDITIONS = {
+    "cloudy": 0,
+    "clear": 1,
+    "light-snow": 2,
+    "thunder": 3,
+    "rain": 4,
+    "heavy-snow": 5,
+}
+
+# The dongle's RTC packet carries the same fields 4 bytes later than the cable
+# block does. UNVERIFIED on two counts: no dongle has ever been tested, and the
+# offsets come from a code path in DeviceDriver.exe that has never been
+# captured on any device.
+RTC_DONGLE_SHIFT = 4
+
+# Every monitor field is one byte. The vendor reaches them via _wtoi followed
+# by a low-byte store, so it wraps rather than validating; we accept the signed
+# range too because air temperature and the night low go below zero in winter.
+# Whether the panel *renders* those as signed is untested -- all we know is
+# what the vendor app would have put on the wire.
+MONITOR_VALUE_MIN = -128
+MONITOR_VALUE_MAX = 255
+
 # Byte 3 of a reply is an ack flag the device sets once it has processed the
 # command.
 ACK_OFFSET = 3
@@ -191,6 +250,42 @@ class Transaction:
     retry_until_ack: bool = False
 
 
+@dataclass(frozen=True)
+class MonitorData:
+    """The nine system-monitor/weather values the RTC block carries.
+
+    All default to zero, which is what the block looked like in every capture
+    taken before save_to_gif_16 -- so a default instance reproduces the
+    clock-only block the vendor app sends when it has nothing to report.
+    """
+    cpu_load: int = 0
+    cpu_temp: int = 0
+    gpu_load: int = 0
+    gpu_temp: int = 0
+    air_temp: int = 0
+    day_high: int = 0
+    night_low: int = 0
+    condition: int = 0
+    humidity: int = 0
+
+    def __post_init__(self) -> None:
+        for field_name in self.__dataclass_fields__:
+            encode_monitor_value(getattr(self, field_name), field_name)
+
+    @property
+    def is_empty(self) -> bool:
+        return all(getattr(self, f) == 0 for f in self.__dataclass_fields__)
+
+
+def encode_monitor_value(value: int, name: str = "value") -> int:
+    """One monitor field as the byte that goes on the wire."""
+    if not MONITOR_VALUE_MIN <= value <= MONITOR_VALUE_MAX:
+        raise ValueError(
+            f"{name} must be {MONITOR_VALUE_MIN}..{MONITOR_VALUE_MAX}, got {value}"
+        )
+    return value & 0xFF
+
+
 def checksum(payload: bytes) -> int:
     """Dongle-path checksum. Not used by the cable path, which has no checksum
     byte in any captured packet."""
@@ -216,6 +311,18 @@ def parse_rgb(value: str) -> tuple[int, int, int]:
         raise ValueError(f"expected 6 hex digits (RRGGBB), got {value!r}")
     raw = bytes.fromhex(text)
     return (raw[0], raw[1], raw[2])
+
+
+def parse_condition(value: str) -> int:
+    """Parse a weather condition given either by name or as a number."""
+    text = value.strip().lower()
+    if text in WEATHER_CONDITIONS:
+        return WEATHER_CONDITIONS[text]
+    try:
+        return int(text, 0)
+    except ValueError:
+        names = ", ".join(sorted(WEATHER_CONDITIONS))
+        raise ValueError(f"unknown condition {value!r}; expected a number or one of: {names}")
 
 
 def build_command(opcode: int, block_count: int = 0) -> bytes:
@@ -299,29 +406,60 @@ def build_color_query_commands() -> list[Transaction]:
     ]
 
 
-def build_rtc_blocks(when: datetime) -> list[bytes]:
+def _write_monitor_fields(buffer: bytearray, monitor: MonitorData, shift: int = 0) -> None:
+    """Place the nine monitor bytes, optionally shifted for the dongle layout."""
+    for offset, value, name in (
+        (RTC_OFF_CPU_LOAD, monitor.cpu_load, "cpu_load"),
+        (RTC_OFF_CPU_TEMP, monitor.cpu_temp, "cpu_temp"),
+        (RTC_OFF_GPU_LOAD, monitor.gpu_load, "gpu_load"),
+        (RTC_OFF_GPU_TEMP, monitor.gpu_temp, "gpu_temp"),
+        (RTC_OFF_AIR_TEMP, monitor.air_temp, "air_temp"),
+        (RTC_OFF_DAY_HIGH, monitor.day_high, "day_high"),
+        (RTC_OFF_NIGHT_LOW, monitor.night_low, "night_low"),
+        (RTC_OFF_CONDITION, monitor.condition, "condition"),
+        (RTC_OFF_HUMIDITY, monitor.humidity, "humidity"),
+    ):
+        buffer[offset + shift] = encode_monitor_value(value, name)
+
+
+def build_rtc_blocks(when: datetime, monitor: MonitorData | None = None,
+                     view: int = 1) -> list[bytes]:
     """The single data block of the RTC-set command.
 
-    Layout confirmed against wall-clock time in a capture:
-        00 01 5a YY MM DD hh mm ss 00 WD 00...  with AA 55 at bytes 62..63
+    Bytes 0..12 confirmed against wall-clock time in two captures:
+        00 VV 5a YY MM DD hh mm ss 00 WD 00...  with AA 55 at bytes 62..63
     where YY is the year since 2000 and WD is the weekday (Sunday = 0). The
     weekday reading comes from a single sample, so it is the least certain
     field here; the keyboard may well ignore it.
+
+    `view` is byte 1, which an earlier reading of this block took for a
+    constant 0x01. The vendor app computes it as the index of the selected
+    screen view in its own list, plus one, so 1 means "the first view" -- which
+    is why it looked constant. Only view 1 has ever been captured; what higher
+    values do is untested.
+
+    `monitor` fills bytes 13..21 with the CPU/GPU and weather readout the panel
+    displays; each field was confirmed on hardware by writing a distinctive
+    value and reading the panel. Omitting it leaves them zero, which is the
+    block every capture before save_to_gif_16 showed.
     """
     year = when.year - 2000
     if not 0 <= year <= 255:
         raise ValueError(f"year {when.year} cannot be encoded as year-since-2000")
+    if not 0 <= view <= 255:
+        raise ValueError(f"view must be 0..255, got {view}")
 
     block = bytearray(PACKET_SIZE)
-    block[1] = 0x01
-    block[2] = 0x5A
-    block[3] = year
-    block[4] = when.month
-    block[5] = when.day
-    block[6] = when.hour
-    block[7] = when.minute
-    block[8] = when.second
-    block[10] = when.isoweekday() % 7
+    block[RTC_OFF_VIEW] = view
+    block[RTC_OFF_TAG] = RTC_TAG
+    block[RTC_OFF_YEAR] = year
+    block[RTC_OFF_MONTH] = when.month
+    block[RTC_OFF_DAY] = when.day
+    block[RTC_OFF_HOUR] = when.hour
+    block[RTC_OFF_MINUTE] = when.minute
+    block[RTC_OFF_SECOND] = when.second
+    block[RTC_OFF_WEEKDAY] = when.isoweekday() % 7
+    _write_monitor_fields(block, monitor or MonitorData())
     block[TRAILER_OFFSET:TRAILER_OFFSET + 2] = TRAILER
     return [bytes(block)]
 
@@ -394,8 +532,9 @@ def build_effect_transfer(effect_id: int, **kwargs) -> list[Transaction]:
     return build_transfer(OP_EFFECT, build_effect_blocks(effect_id, **kwargs), "effect")
 
 
-def build_rtc_transfer(when: datetime) -> list[Transaction]:
-    return build_transfer(OP_RTC, build_rtc_blocks(when), "rtc")
+def build_rtc_transfer(when: datetime, monitor: MonitorData | None = None,
+                       view: int = 1) -> list[Transaction]:
+    return build_transfer(OP_RTC, build_rtc_blocks(when, monitor, view), "rtc")
 
 
 def build_cable_handshake() -> list[Transaction]:
@@ -418,19 +557,56 @@ def build_dongle_handshake() -> list[Transaction]:
     ]
 
 
-def build_dongle_rtc_packet(when: datetime) -> bytes:
+def build_dongle_rtc_packet(when: datetime, monitor: MonitorData | None = None) -> bytes:
     """RTC-set for the 32-byte dongle format. Unconfirmed prior art; the cable
-    path uses build_rtc_blocks() instead."""
+    path uses build_rtc_blocks() instead.
+
+    Two mutually incompatible layouts are in play here, and this function picks
+    between them, which is ugly but honest:
+
+    - With no monitor data (the default) it emits the F75_Initializer prior-art
+      packet unchanged: tag at 4..5, clock at 6..11, AA 55 at 17..18.
+    - With monitor data it switches to the layout read out of DeviceDriver.exe's
+      own dongle path: the cable block shifted +RTC_DONGLE_SHIFT, so tag at
+      5..6, clock at 7..12, monitor at 17..25, AA 55 at 26..27.
+
+    Those two disagree by one byte throughout, and the prior art's trailer sits
+    exactly where the vendor layout puts the first monitor field, so there is no
+    splice of the two that either source supports. At least one reading is
+    wrong. The prior art is from a *different keyboard* (AULA F75 MAX) while the
+    vendor layout is this device's own code, which argues for the latter -- but
+    the vendor dongle path has never been captured, and no L99 dongle has ever
+    been tested at all, so neither is confirmed. Whichever you try first, expect
+    to have to try the other.
+    """
     year = when.year - 2000
     if not 0 <= year <= 255:
         raise ValueError(f"year {when.year} cannot be encoded as year-since-2000")
 
-    body = bytes(
-        [
-            0x0C, 0x10, 0x00, 0x00, 0x01, 0x5A,
-            year, when.month, when.day, when.hour, when.minute, when.second,
-            0x00, 0x05, 0x00, 0x00, 0x00, 0xAA, 0x55,
-        ]
-        + [0x00] * 12
-    )
-    return finalize_dongle_packet(body)
+    if monitor is None or monitor.is_empty:
+        body = bytes(
+            [
+                0x0C, 0x10, 0x00, 0x00, 0x01, 0x5A,
+                year, when.month, when.day, when.hour, when.minute, when.second,
+                0x00, 0x05, 0x00, 0x00, 0x00, 0xAA, 0x55,
+            ]
+            + [0x00] * 12
+        )
+        return finalize_dongle_packet(body)
+
+    shift = RTC_DONGLE_SHIFT
+    body = bytearray(DONGLE_PACKET_SIZE - 1)
+    body[0:4] = bytes([0x0C, 0x10, 0x00, 0x00])
+    body[RTC_OFF_VIEW + shift] = 0x01
+    body[RTC_OFF_TAG + shift] = RTC_TAG
+    body[RTC_OFF_YEAR + shift] = year
+    body[RTC_OFF_MONTH + shift] = when.month
+    body[RTC_OFF_DAY + shift] = when.day
+    body[RTC_OFF_HOUR + shift] = when.hour
+    body[RTC_OFF_MINUTE + shift] = when.minute
+    body[RTC_OFF_SECOND + shift] = when.second
+    body[RTC_OFF_WEEKDAY + shift] = when.isoweekday() % 7
+    _write_monitor_fields(body, monitor, shift)
+    trailer_at = RTC_OFF_HUMIDITY + shift + 1
+    body[trailer_at:trailer_at + 2] = TRAILER
+    return finalize_dongle_packet(bytes(body))

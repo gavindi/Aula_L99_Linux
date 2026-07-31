@@ -90,11 +90,19 @@ capture that reads back only one or two profile slots in isolation, since
 
 ## Not applicable to the touchscreen / system-monitor feature
 
-Confirmed while investigating `system_monitor_2.pcapng`: the touchscreen is
-a *separate* `EEEF:268A` CDC-ACM USB-serial device (`/dev/ttyACMn`), already
-covered by `tools/aula_l99_screen`. It does not go through this HID
-feature-report channel at all, so none of the opcodes above apply to
-CPU/GPU/weather data -- that protocol is still uncaptured.
+**Superseded -- see `system_monitor_block.md`.** The conclusion below was
+drawn from `system_monitor_2.pcapng`, which turns out to contain nothing but
+device enumeration. `save_to_gif_16.pcapng` shows the CPU/GPU/weather feed
+does travel over this HID feature-report channel after all: it is nine extra
+bytes in the `OP_RTC` (0x28) data block, which we had only ever captured with
+those bytes idle. There is no separate touchscreen protocol for it.
+
+The part that still holds: the touchscreen is a separate `EEEF:268A` CDC-ACM
+USB-serial device (`/dev/ttyACMn`), covered by `tools/aula_l99_screen`, and
+none of the `0x17`/`0x11`/`0x27` opcodes above have anything to do with the
+monitor data. What was wrong was the inference that the panel being a separate
+device meant the *data* had to reach it over that device's own port -- the
+keyboard receives it and forwards it.
 
 ## Tooling note
 
