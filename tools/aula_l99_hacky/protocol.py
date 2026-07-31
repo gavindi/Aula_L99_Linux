@@ -24,8 +24,10 @@ trailing sum(bytes[0:31]) & 0xFF checksum, inherited from prior art on the
 AULA F75 MAX (Simon-Martens/F75_Initializer). No L99 dongle has been tested,
 and the wired device's format differs, so treat it as a starting guess.
 
-Still unidentified: opcodes 0x13 and 0x00, and the 16-bit value the commit
-returns at offset 4 (most likely a checksum over the upload).
+Still unidentified: opcodes 0x13 and 0x00. The 16-bit value the commit reply
+carries at offset 4 is confirmed to be a plain monotonic sequence counter
+(increments by exactly 1 per commit regardless of payload content), not a
+checksum as previously guessed here -- see re_notes/settings_write.md.
 """
 from __future__ import annotations
 
@@ -63,6 +65,8 @@ OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # all 9 are real rows (0x00-0x8F), the 9th simply
                          # has no physical keys mapped into it.
 OP_EFFECT = 0x13         # select a built-in effect (1 block out)
+OP_SETTINGS_WRITE = 0x17 # apply the settings-panel block (1 block out); see
+                         # re_notes/settings_write.md for the block layout
 OP_END = 0xF0            # close a session
 
 # --- built-in effects (opcode 0x13) ----------------------------------------
