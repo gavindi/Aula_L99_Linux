@@ -26,13 +26,14 @@ class KeyRect:
     height: int
 
 
-def _parse(path) -> tuple[int, int, dict[int, KeyRect]]:
+def _parse(path) -> tuple[int, int, dict[int, KeyRect], dict[int, int]]:
     root = ET.parse(path).getroot()
     keyboard = root.find("Keyboard")
     width = int(keyboard.get("width"))
     height = int(keyboard.get("height"))
 
     rects: dict[int, KeyRect] = {}
+    hid_by_key_id: dict[int, int] = {}
     for key in keyboard.find("KeyItems").findall("key"):
         key_id = int(key.get("light_index"))
         rects[key_id] = KeyRect(
@@ -43,11 +44,20 @@ def _parse(path) -> tuple[int, int, dict[int, KeyRect]]:
             width=int(key.get("rect_width")),
             height=int(key.get("rect_height")),
         )
-    return width, height, rects
+        hid_by_key_id[key_id] = int(key.get("code"), 16)
+    return width, height, rects, hid_by_key_id
 
 
-LAYOUT_WIDTH, LAYOUT_HEIGHT, KEY_RECTS = _parse(theme.LAYOUT_XML)
+LAYOUT_WIDTH, LAYOUT_HEIGHT, KEY_RECTS, HID_BY_KEY_ID = _parse(theme.LAYOUT_XML)
+
+# The vendor's saved-lighting XML identifies keys by `code` (the HID usage
+# code) rather than by light_index, so anything reading those files has to come
+# back through here. The two are one-to-one across all 84 keys.
+KEY_ID_BY_HID = {hid: key_id for key_id, hid in HID_BY_KEY_ID.items()}
 
 assert set(KEY_RECTS) == set(kb_protocol.KEY_IDS), (
     "rgb-keyboard.xml's light_index set no longer matches protocol.KEY_IDS"
+)
+assert len(KEY_ID_BY_HID) == len(HID_BY_KEY_ID), (
+    "rgb-keyboard.xml has duplicate key codes -- HID <-> key_id is no longer one-to-one"
 )

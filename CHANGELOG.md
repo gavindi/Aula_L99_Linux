@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9] - 2026-08-01
+
+**User Lighting tab gained a saved-lighting file library, reading and
+writing the vendor's own `customlight` XML format -- and the half-finished
+version of it that was sitting in the working tree turned out to be keyed on
+the wrong number entirely: the vendor's files identify keys by HID usage
+code, not by the `light_index`/`key_id` the protocol speaks.**
+
+### Added
+- User Lighting tab: a "Saved Lighting" panel down the left side, listing
+  `*.xml` under `<AppDataLocation>/User_Lighting` (same
+  `QStandardPaths`-based convention the Touchscreen tab's
+  `Customized_Animation` library already uses). Selecting a file *only*
+  loads it -- it paints the overlay with the file's colours and arms "Apply
+  to Keyboard", but writes nothing, so browsing the list can't disturb what
+  the keyboard is currently showing. "Save Current" prompts for a name
+  (defaulting to the next free `UserLightingN`) and confirms before
+  overwriting.
+- `_load_lighting_xml()` / `_save_lighting_xml()`: the vendor
+  `customlight` format, round-tripped against the shipped
+  `Windows/UserLighting1.xml.xml` sample. Files we write open in the vendor
+  app; files it writes load here.
+- `key_layout.py` gained `HID_BY_KEY_ID`/`KEY_ID_BY_HID`, parsed from the
+  same layout XML's `code` attribute, plus an import-time assert that the
+  mapping is still one-to-one.
+- What "Save Current" saves is the last full 84-key table this tab knows
+  about, from whichever of an apply, a "Read Current Colours" or a loaded
+  file happened most recently -- new `_key_colors` state, kept in step by
+  all three paths. With none of them having happened yet, the only colour
+  the tab can honestly claim is the one in the picker, so it saves that
+  uniformly.
+
+### Fixed
+- **Saved-lighting files were being keyed on the wrong number**: the
+  work-in-progress code read and wrote `keycode` as though it were
+  `protocol.KEY_IDS`. It isn't -- the vendor file's `keycode="58"` is the
+  HID usage code (0x3A, F1), while the protocol's key id for that key comes
+  from the layout XML's `light_index`. Confirmed one-to-one across all 84
+  keys, in both directions, against the vendor sample file. Left as-was,
+  every load and save would have silently scrambled the key mapping.
+- `AttributeError: 'UserLightingTab' object has no attribute
+  '_on_save_current'` on startup -- a button wired to a handler that was
+  never written, which took the whole GUI down before the main window
+  appeared.
+- `_refresh_file_list` was defined twice (the second shadowing the first),
+  `QStandardPaths` was used without being imported, and
+  `defusedxml.ElementTree` was used to *build* XML -- it only re-exports the
+  parsing half of `ElementTree`, so `ET.Element`/`SubElement`/`ElementTree`
+  don't exist on it. Parsing (the half with an attack surface) stays on
+  `defusedxml`; building uses the stdlib module.
+
+### Changed
+- The `EFFECT_CUSTOM`-then-colour-transfer pair that every per-key write
+  needs is now one `_build_custom_transactions()` helper, rather than being
+  spelled out at each call site.
+
 ## [0.9.8] - 2026-07-31
 
 **GUI: the keyboard layout image gained real uses across three tabs -- a

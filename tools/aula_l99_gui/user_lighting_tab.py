@@ -9,14 +9,21 @@ its own separate copy of the same controls in lighting_tab.py).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import pathlib
+import xml.etree.ElementTree as ET
+
+import defusedxml.ElementTree as safe_ET
+from PySide6.QtCore import QStandardPaths, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -28,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
+from . import key_layout
 from .color_wheel import ColorWheel
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
@@ -51,6 +59,76 @@ PRESET_COLORS = [
 # built-in effect that cycles its own colors rather than taking one.
 COLORFUL_EFFECT_ID = 0x06
 
+FILE_PANEL_WIDTH = 220
+
+# What the vendor app writes into <lightinfo> for a per-key preset. Nothing
+# ever sends these to the keyboard -- they exist so a file we save still opens
+# in the vendor app.
+LIGHTINFO_SPEED = "15"
+# `lightmode` is 4 on every item of every vendor-saved file seen so far; its
+# other values are unknown, so saves just reproduce it.
+ITEM_LIGHTMODE = "4"
+
+
+def _user_lighting_dir() -> pathlib.Path:
+    base = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppDataLocation
+    )
+    save_dir = pathlib.Path(base) / "User_Lighting"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    return save_dir
+
+
+def _next_lighting_name(save_dir: pathlib.Path) -> str:
+    best = 0
+    for path in save_dir.glob("UserLighting*.xml"):
+        digits = path.stem[len("UserLighting"):]
+        if digits.isdigit():
+            best = max(best, int(digits))
+    return f"UserLighting{best + 1}"
+
+
+def _load_lighting_xml(path: pathlib.Path) -> dict[int, tuple[int, int, int]]:
+    """Parse a vendor `customlight` file into {key_id: rgb}.
+
+    The file keys its items by HID usage code, not by the light_index/key_id
+    the protocol speaks, so every keycode goes back through key_layout. Items
+    naming a code this keyboard doesn't have are skipped rather than fatal --
+    the format is shared across vendor models.
+    """
+    root = safe_ET.parse(path).getroot()
+    if root.tag != "customlight":
+        raise ValueError(f"not a customlight file (root is <{root.tag}>)")
+
+    colors: dict[int, tuple[int, int, int]] = {}
+    keyinfo = root.find("keyinfo")
+    for item in [] if keyinfo is None else keyinfo.findall("item"):
+        key_id = key_layout.KEY_ID_BY_HID.get(int(item.get("keycode", "-1")))
+        if key_id is None:
+            continue
+        rgb = int(item.get("rgbvalue", "0"))
+        colors[key_id] = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
+    return colors
+
+
+def _save_lighting_xml(
+    path: pathlib.Path, colors: dict[int, tuple[int, int, int]]
+) -> None:
+    root = ET.Element("customlight")
+    ET.SubElement(root, "lightinfo", name=path.stem, speed=LIGHTINFO_SPEED)
+    keyinfo = ET.SubElement(root, "keyinfo")
+    for key_id in kb_protocol.KEY_IDS:
+        red, green, blue = colors.get(key_id, (0, 0, 0))
+        ET.SubElement(
+            keyinfo,
+            "item",
+            keycode=str(key_layout.HID_BY_KEY_ID[key_id]),
+            lightmode=ITEM_LIGHTMODE,
+            rgbvalue=str((red << 16) | (green << 8) | blue),
+            type="0",
+        )
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
 
 class UserLightingTab(QWidget):
     busy_changed = Signal(bool)
@@ -69,26 +147,138 @@ class UserLightingTab(QWidget):
         self._selected_key: int | None = None
         self._read_worker = None
         self._read_thread = None
+        # Last full 84-key table this tab knows about, from whichever of an
+        # apply, a colour read or a loaded file happened most recently. Saving
+        # writes this; None means nothing has established one yet.
+        self._key_colors: dict[int, tuple[int, int, int]] | None = None
+        self._file_colors: dict[int, tuple[int, int, int]] | None = None
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
+        self._refresh_file_list()
 
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
+        layout.addWidget(self._build_file_panel())
 
+        controls = QVBoxLayout()
         overlay_row = QHBoxLayout()
         overlay_row.addStretch(1)
         overlay_row.addWidget(self._build_overlay())
         overlay_row.addStretch(1)
-        layout.addLayout(overlay_row)
+        controls.addLayout(overlay_row)
 
-        layout.addWidget(self._build_color_group())
+        controls.addWidget(self._build_color_group())
 
         self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
-        layout.addStretch(1)
+        controls.addWidget(self.progress_bar)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+    def _build_file_panel(self) -> QGroupBox:
+        group = QGroupBox("Saved Lighting")
+        group.setMaximumWidth(FILE_PANEL_WIDTH)
+        layout = QVBoxLayout(group)
+
+        self.file_list = QListWidget()
+        self.file_list.currentItemChanged.connect(self._on_file_selected)
+        layout.addWidget(self.file_list)
+
+        self.apply_file_button = QPushButton("Apply to Keyboard")
+        self.apply_file_button.clicked.connect(self._on_apply_file)
+        self.apply_file_button.setEnabled(False)
+        layout.addWidget(self.apply_file_button)
+
+        save_button = QPushButton("Save Current")
+        save_button.clicked.connect(self._on_save_current)
+        layout.addWidget(save_button)
+
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self._refresh_file_list)
+        layout.addWidget(refresh_button)
+
+        return group
+
+    # -- saved lighting files ----------------------------------------------
+
+    def _refresh_file_list(self) -> None:
+        self.file_list.clear()
+        for path in sorted(_user_lighting_dir().glob("*.xml"), key=lambda p: p.name.lower()):
+            item = QListWidgetItem(path.stem)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self.file_list.addItem(item)
+
+    def _on_file_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        # Selecting only loads -- it paints the overlay and arms "Apply to
+        # Keyboard" without writing anything, so browsing the list can't
+        # disturb what the keyboard is currently showing.
+        self._file_colors = None
+        if current is not None:
+            path = pathlib.Path(current.data(Qt.ItemDataRole.UserRole))
+            try:
+                colors = _load_lighting_xml(path)
+            except (OSError, ValueError, ET.ParseError) as exc:
+                self._debug_log.append("User Lighting", f"-- load {path.name} failed: {exc}")
+                QMessageBox.critical(self, "Load Error", f"Could not read {path.name}:\n{exc}")
+            else:
+                self._file_colors = colors
+                self._key_colors = dict(colors)
+                self.overlay.set_swatches(colors)
+                self._debug_log.append(
+                    "User Lighting", f"-- loaded {path.name}: {len(colors)} keys"
+                )
+        self._sync_actions()
+
+    def _on_apply_file(self) -> None:
+        if self._file_colors is None:
+            return
+        # Keys the file didn't mention are written as off rather than left
+        # alone: build_color_transfer always sends the whole 84-key table, so
+        # there is no "unchanged" to leave them at.
+        colors = {key_id: (0, 0, 0) for key_id in kb_protocol.KEY_IDS}
+        colors.update(self._file_colors)
+        self._key_colors = colors
+        self.overlay.set_swatches(colors)
+        self._run_transactions(self._build_custom_transactions(colors))
+
+    def _on_save_current(self) -> None:
+        save_dir = _user_lighting_dir()
+        name, accepted = QInputDialog.getText(
+            self, "Save Lighting", "Name:", text=_next_lighting_name(save_dir)
+        )
+        name = name.strip()
+        if not accepted or not name:
+            return
+
+        path = save_dir / f"{name}.xml"
+        if path.exists():
+            confirm = QMessageBox.question(
+                self, "Save Lighting", f"{path.name} already exists. Overwrite it?"
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+
+        # Nothing has established a full table yet (no apply, read or load this
+        # session), so the only colour this tab can honestly claim is the one
+        # in the picker.
+        colors = self._key_colors or kb_protocol.build_uniform_colors(self.rgb())
+        try:
+            _save_lighting_xml(path, colors)
+        except OSError as exc:
+            self._debug_log.append("User Lighting", f"-- save {path.name} failed: {exc}")
+            QMessageBox.critical(self, "Save Error", f"Could not write {path.name}:\n{exc}")
+            return
+
+        self._debug_log.append("User Lighting", f"-- saved {path.name}")
+        self._refresh_file_list()
+        for row in range(self.file_list.count()):
+            if self.file_list.item(row).text() == path.stem:
+                self.file_list.setCurrentRow(row)
+                break
 
     def _build_color_group(self) -> QGroupBox:
         group = QGroupBox()
@@ -214,6 +404,7 @@ class UserLightingTab(QWidget):
         self.apply_selected_button.setEnabled(
             enabled and self._selected_key is not None and not self.colorful_checkbox.isChecked()
         )
+        self.apply_file_button.setEnabled(enabled and self._file_colors is not None)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -265,20 +456,24 @@ class UserLightingTab(QWidget):
                 COLORFUL_EFFECT_ID, rgb=self.rgb(),
                 speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
             )
+            self._key_colors = None
         else:
-            # Per protocol.py's own note on EFFECT_CUSTOM: the vendor app
-            # always selects custom (per-key) mode alongside a colour
-            # upload, seen whenever its per-key editor was open. Without it
-            # the keyboard can still be mid-built-in-effect and ignore the
-            # colour write.
-            custom_mode = kb_protocol.build_effect_transfer(
-                kb_protocol.EFFECT_CUSTOM, rgb=self.rgb(),
-                speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
-            )
             colors = kb_protocol.build_uniform_colors(self.rgb())
-            transactions = custom_mode + kb_protocol.build_color_transfer(colors)
+            transactions = self._build_custom_transactions(colors)
+            self._key_colors = colors
         self.overlay.clear_swatches()
         self._run_transactions(transactions)
+
+    def _build_custom_transactions(self, colors: dict[int, tuple[int, int, int]]) -> list:
+        # Per protocol.py's own note on EFFECT_CUSTOM: the vendor app always
+        # selects custom (per-key) mode alongside a colour upload, seen
+        # whenever its per-key editor was open. Without it the keyboard can
+        # still be mid-built-in-effect and ignore the colour write.
+        custom_mode = kb_protocol.build_effect_transfer(
+            kb_protocol.EFFECT_CUSTOM, rgb=self.rgb(),
+            speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
+        )
+        return custom_mode + kb_protocol.build_color_transfer(colors)
 
     @property
     def is_busy(self) -> bool:
@@ -362,11 +557,8 @@ class UserLightingTab(QWidget):
 
         device_path = self._selector.current_path()
         colors[self._selected_key] = self.rgb()
-        custom_mode = kb_protocol.build_effect_transfer(
-            kb_protocol.EFFECT_CUSTOM, rgb=self.rgb(),
-            speed=kb_protocol.EFFECT_SPEED_DEFAULT, brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
-        )
-        transactions = custom_mode + kb_protocol.build_color_transfer(colors)
+        self._key_colors = dict(colors)
+        transactions = self._build_custom_transactions(colors)
 
         self.progress_bar.setRange(0, max(len(transactions), 1))
         self.progress_bar.setValue(0)
@@ -403,4 +595,5 @@ class UserLightingTab(QWidget):
             QMessageBox.critical(self, "Keyboard Error", error)
         else:
             self._debug_log.append("User Lighting", "-- read current colours: ok")
+            self._key_colors = dict(colors)
             self.overlay.set_swatches(colors)
