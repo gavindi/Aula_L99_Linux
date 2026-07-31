@@ -1,6 +1,12 @@
-"""Keyboard tab: sets the keyboard's onboard RTC to the host's current time,
-and shows a live view of each key's current colour, polled at a
+"""Keyboard tab: a live view of each key's current colour, polled at a
 user-adjustable interval (default 100ms).
+
+The two controls that used to sit under that view -- "Set Clock to Now" and
+the poll interval -- are on the Config tab now, driving this tab through
+`set_clock_now()`/`set_poll_interval()`. The work itself stays here rather
+than moving with them: the poll thread lives here, and so does the
+write-behind-an-in-flight-read queue that keeps an RTC write from racing it
+for the same hidraw handle.
 
 Split out from lighting_tab.py, which is also keyed off the keyboard's
 DeviceSelector but hosts the color/effect controls under the Lighting tab.
@@ -11,13 +17,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QGroupBox,
     QHBoxLayout,
-    QLabel,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +45,10 @@ MAX_POLL_INTERVAL_MS = 5000
 
 class KeyboardTab(QWidget):
     busy_changed = Signal(bool)
+    # (value, maximum) for whichever tab is hosting the button that started
+    # the write -- the Config tab, since this one no longer has any controls
+    # of its own to put a progress bar under.
+    write_progress = Signal(int, int)
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
@@ -53,7 +58,6 @@ class KeyboardTab(QWidget):
         self._worker = None
         self._busy = False
         self._device_ready = False
-        self._action_buttons: list[QPushButton] = []
         self._poll_worker = None
         self._poll_thread = None
         self._poll_busy = False
@@ -73,47 +77,18 @@ class KeyboardTab(QWidget):
         overlay_row.addWidget(self._build_overlay())
         overlay_row.addStretch(1)
         layout.addLayout(overlay_row)
-
         layout.addStretch(1)
-        layout.addWidget(self._build_rtc_group())
-        layout.addWidget(self._build_poll_group())
-
-        self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
 
         self._poll_timer = QTimer(self)
-        self._poll_timer.setInterval(self.poll_interval_spin.value())
+        self._poll_timer.setInterval(DEFAULT_POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._on_poll_tick)
         self._poll_timer.start()
-        self.poll_interval_spin.valueChanged.connect(self._poll_timer.setInterval)
 
     def _build_overlay(self) -> KeyboardOverlay:
         overlay = KeyboardOverlay()
         overlay.setVisible(False)
         self.overlay = overlay
         return overlay
-
-    def _build_rtc_group(self) -> QGroupBox:
-        group = QGroupBox()
-        row = QHBoxLayout(group)
-        button = QPushButton("Set Clock to Now")
-        button.clicked.connect(self._on_set_rtc)
-        row.addWidget(button)
-        self._action_buttons.append(button)
-        row.addStretch(1)
-        return group
-
-    def _build_poll_group(self) -> QGroupBox:
-        group = QGroupBox("Colour Polling")
-        row = QHBoxLayout(group)
-        row.addWidget(QLabel("Update every (ms):"))
-        self.poll_interval_spin = QSpinBox()
-        self.poll_interval_spin.setRange(MIN_POLL_INTERVAL_MS, MAX_POLL_INTERVAL_MS)
-        self.poll_interval_spin.setSingleStep(50)
-        self.poll_interval_spin.setValue(DEFAULT_POLL_INTERVAL_MS)
-        row.addWidget(self.poll_interval_spin)
-        row.addStretch(1)
-        return group
 
     # -- device handling --------------------------------------------------
 
@@ -122,20 +97,10 @@ class KeyboardTab(QWidget):
         self.overlay.setVisible(enabled)
         if not enabled:
             self.overlay.clear_swatches()
-        self._sync_actions()
-
-    def _sync_actions(self) -> None:
-        # Gating on `_busy` as well as device availability matters because the
-        # Device tab's Refresh stays clickable during an operation -- without
-        # it, a mid-transaction refresh would re-arm these buttons.
-        enabled = self._device_ready and not self._busy
-        for button in self._action_buttons:
-            button.setEnabled(enabled)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.busy_changed.emit(busy)
-        self._sync_actions()
 
     def set_external_busy(self, busy: bool) -> None:
         """Called by MainWindow with whether *any* tab is mid-upload -- colour
@@ -145,8 +110,14 @@ class KeyboardTab(QWidget):
 
     # -- actions ------------------------------------------------------------
 
-    def _on_set_rtc(self) -> None:
+    def set_clock_now(self) -> None:
+        """Set the keyboard's onboard RTC to the host's current time. Called
+        from the Config tab's button."""
         self._run_transactions(kb_protocol.build_rtc_transfer(datetime.now()))
+
+    def set_poll_interval(self, interval_ms: int) -> None:
+        """Retune colour polling live, from the Config tab's spin box."""
+        self._poll_timer.setInterval(interval_ms)
 
     @property
     def is_busy(self) -> bool:
@@ -161,8 +132,7 @@ class KeyboardTab(QWidget):
             return
 
         self._set_busy(True)
-        self.progress_bar.setMaximum(max(len(transactions), 1))
-        self.progress_bar.setValue(0)
+        self.write_progress.emit(0, max(len(transactions), 1))
         self._debug_log.clear()
 
         if self._poll_busy:
@@ -186,8 +156,7 @@ class KeyboardTab(QWidget):
         self._thread.finished.connect(self._on_thread_stopped)
 
     def _on_progress(self, index: int, total: int, name: str, acked: bool) -> None:
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(index + 1)
+        self.write_progress.emit(index + 1, total)
         self._debug_log.append("Keyboard", f"{name}: {'ok' if acked else 'NOT ACKED'}")
 
     def _on_finished(self, success: bool, message: str) -> None:

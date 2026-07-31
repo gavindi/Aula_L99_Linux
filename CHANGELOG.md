@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.10] - 2026-08-01
+
+**"Set Clock to Now" and the colour-poll interval moved to the Config tab,
+leaving the Keyboard tab as purely the live per-key colour view -- the
+controls moved, but the work behind them deliberately stayed put, because
+the tab they left is the one that owns the poll thread an RTC write has to
+be sequenced behind.**
+
+### Changed
+- Config tab now hosts a "Keyboard Clock" group ("Set Clock to Now" plus the
+  progress bar for it) and the "Colour Polling" interval, above the existing
+  debug log -- both are settings rather than content, which is what the tab
+  is for. It takes the keyboard's `DeviceSelector` for the first time, to
+  gate the button on a keyboard actually being present.
+- Keyboard tab is now just the overlay: its RTC and poll group boxes,
+  progress bar, and the `_action_buttons`/`_sync_actions` pair that had
+  nothing left to enable are gone.
+- The RTC write and the poll timer still live in `KeyboardTab`, reached via
+  new `set_clock_now()`/`set_poll_interval()`. Running the write from the
+  Config tab instead would have meant a second, unsequenced opener of the
+  same hidraw handle alongside the poll thread -- exactly the race 0.9.8's
+  `_pending_write` queue fixed. Config is pure UI: it forwards
+  `set_clock_requested`/`poll_interval_changed` and renders progress from a
+  new `KeyboardTab.write_progress(value, maximum)` signal, since the write
+  it starts belongs to another tab and so never shows up in its own
+  `is_busy`. Its button gates on MainWindow's existing all-tabs busy
+  aggregate for the same reason.
+
 ## [0.9.9] - 2026-08-01
 
 **User Lighting tab gained a saved-lighting file library, reading and

@@ -157,7 +157,13 @@ class MainWindow(QMainWindow):
         self._lighting_tab = LightingTab(self._device_tab.keyboard, self._debug_log)
         self._user_lighting_tab = UserLightingTab(self._device_tab.keyboard, self._debug_log)
         self._touchscreen_tab = TouchscreenTab(self._device_tab.screen, self._debug_log)
-        self._config_tab = ConfigTab(self._debug_log)
+        self._config_tab = ConfigTab(self._device_tab.keyboard, self._debug_log)
+        # The Config tab hosts the controls; KeyboardTab still does the work,
+        # since it owns the poll thread an RTC write has to be sequenced
+        # behind (see its module docstring).
+        self._config_tab.set_clock_requested.connect(self._keyboard_tab.set_clock_now)
+        self._config_tab.poll_interval_changed.connect(self._keyboard_tab.set_poll_interval)
+        self._keyboard_tab.write_progress.connect(self._config_tab.show_write_progress)
 
         self._tabs = QTabWidget()
         self._tabs.setTabBar(SidebarTabBar())
@@ -294,6 +300,9 @@ class MainWindow(QMainWindow):
         # colour-query read with it could confuse the firmware's stateful
         # begin/commit/end session.
         self._keyboard_tab.set_external_busy(busy)
+        # Same aggregate gates the Config tab's Set Clock button: the write it
+        # starts belongs to KeyboardTab, so this tab never sees it as its own.
+        self._config_tab.set_external_busy(busy)
 
     def paintEvent(self, event) -> None:
         theme.paint_background(self, self._background)
