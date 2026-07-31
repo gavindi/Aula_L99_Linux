@@ -13,7 +13,7 @@ from __future__ import annotations
 import pathlib
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QFontDatabase, QPainter, QPixmap
 
 ASSETS = pathlib.Path(__file__).resolve().parent / "assets"
 THEME = ASSETS / "skins" / "theme1"
@@ -35,6 +35,16 @@ LOADING_GIF = THEME / "loading.gif"
 LOADING_GIF_SIZE = QSize(100, 100)
 KEYBOARD_LAYOUT_IMAGE = THEME / "keyboard" / "img_keyboard_layout.png"
 LAYOUT_XML = ASSETS / "layouts" / "rgb-keyboard.xml"
+
+# The vendor's own Open Sans, shipped so the app renders identically wherever it
+# runs instead of inheriting whatever sans the platform happens to have.
+FONT_DIR = pathlib.Path(__file__).resolve().parent / "font"
+FONT_REGULAR = FONT_DIR / "OpenSans-Regular.ttf"
+
+# Width of a tab's left-hand list pane -- the User Lighting tab's saved-lighting
+# and mode lists, and the Lighting tab's effect list. Shared so those panes line
+# up at the same width when switching between the two tabs.
+SIDE_PANEL_WIDTH = 220
 
 TITLE_BAR_HEIGHT = 40
 TITLE_BAR_BG = "rgba(10, 10, 12, 235)"
@@ -104,7 +114,23 @@ def paint_background(widget, source: QPixmap) -> None:
     painter.drawPixmap(0, 0, pixmap)
 
 
-def stylesheet() -> str:
+def load_font() -> str:
+    """Register the bundled Open Sans and return the family name Qt gave it.
+
+    Returns "" if the file is missing or Qt rejects it, so a broken install
+    falls back to the platform font rather than to an unresolvable family.
+    """
+    font_id = QFontDatabase.addApplicationFont(str(FONT_REGULAR))
+    if font_id == -1:
+        return ""
+    families = QFontDatabase.applicationFontFamilies(font_id)
+    return families[0] if families else ""
+
+
+def stylesheet(font_family: str = "") -> str:
+    # QSS font properties beat QApplication.setFont, so the family has to appear
+    # here too or the app font is ignored for every styled widget.
+    font_rule = f'\n    font-family: "{font_family}";' if font_family else ""
     return f"""
 /* Let the window's background image show through the containers. */
 QMainWindow, QTabWidget::pane, QTabBar, QWidget#DeviceTab {{
@@ -122,7 +148,7 @@ QTabWidget::tab-bar {{
 
 QWidget {{
     color: {TEXT};
-    font-size: 12px;
+    font-size: 14px;{font_rule}
 }}
 QWidget:disabled {{
     color: {TEXT_DISABLED};
@@ -156,6 +182,14 @@ QGroupBox::title {{
     left: 10px;
     padding: 0 6px;
     color: {ACCENT};
+}}
+/* For a section heading *inside* a group box, where nesting a second
+   QGroupBox just to get its title styling would add a frame's worth of
+   margins around the content. Matches the title rule above. */
+QLabel#SectionTitle {{
+    color: {ACCENT};
+    font-weight: bold;
+    padding: 6px 6px 2px 0;
 }}
 
 /* Buttons: 100x30 pill, 4 states. The 20px side slices keep the rounded caps

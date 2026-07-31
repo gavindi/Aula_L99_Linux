@@ -218,6 +218,11 @@ class MainWindow(QMainWindow):
             self._user_lighting_tab, self._touchscreen_tab, self._config_tab,
         ):
             tab.busy_changed.connect(self._on_any_busy_changed)
+        # A User Lighting animation isn't "busy" -- it runs for minutes and
+        # must not raise the loading overlay or block closing -- but colour
+        # polling still has to stand off while it owns the hidraw handle, so it
+        # goes through the same handler.
+        self._user_lighting_tab.streaming_changed.connect(self._on_any_busy_changed)
 
         central = QWidget()
         central_layout = QVBoxLayout(central)
@@ -299,7 +304,7 @@ class MainWindow(QMainWindow):
         # be holding the keyboard's hidraw handle open, and interleaving a
         # colour-query read with it could confuse the firmware's stateful
         # begin/commit/end session.
-        self._keyboard_tab.set_external_busy(busy)
+        self._keyboard_tab.set_external_busy(busy or self._user_lighting_tab.is_streaming)
         # Same aggregate gates the Config tab's Set Clock button: the write it
         # starts belongs to KeyboardTab, so this tab never sees it as its own.
         self._config_tab.set_external_busy(busy)
@@ -332,6 +337,9 @@ class MainWindow(QMainWindow):
         # Colour polling isn't covered by the busy-check above (deliberately
         # -- it's frequent and lightweight, not worth nagging the user to
         # wait out), but its QThread still has to actually stop before this
-        # window gets torn down, or Qt aborts the process on exit.
+        # window gets torn down, or Qt aborts the process on exit. A User
+        # Lighting animation is outside that check for the same reason and
+        # needs the same treatment.
         self._keyboard_tab.shutdown()
+        self._user_lighting_tab.shutdown()
         event.accept()

@@ -5,6 +5,118 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.15] - 2026-08-01
+
+**The User Lighting tab's Lighting Modes list now animates, and it takes two
+different mechanisms to do it because the hardware only offers one: a
+whole-keyboard mode is a built-in effect selection *and nothing else* -- the
+per-key colour upload that used to ride along with it repainted all 84 keys
+the instant the effect started, which is exactly the "it changes colour but
+never moves" symptom -- while a single key has no built-in effect to select at
+all, so its animation is computed here and streamed over `OP_COLOR_STREAM` at
+~17 frames/s. Confirmed animating on hardware both ways.**
+
+### Added
+- `aula_l99_gui/stream_effects.py`: the mode table plus six pure animators
+  (`breathing`, `colour_cycle`, `rainbow_wave`, `currents`, `revolving`,
+  `starlight`) and `build_frame()`, which returns the full 84-key table with
+  only the chosen keys animated. `KEY_POSITIONS` normalises the layout XML's
+  key rects so the position-dependent effects have geometry to read.
+- `workers.ColorStreamWorker`, the animation counterpart to `KeyboardWorker`:
+  the transport stays open for the whole run, each frame comes from a
+  `frame_fn(elapsed)` callable rather than a list fixed up front, and nothing
+  is retried -- a frame that misses its ack is stale 59ms later, so resending
+  it would only push the next one back. `STREAM_GAP_SECONDS` (3ms) because a
+  frame is 12 packets and `PACKET_GAP_SECONDS` would take twice the frame
+  period on its own.
+- "Stop Effect" on the User Lighting tab, and `UserLightingTab.shutdown()` for
+  the same reason `KeyboardTab` has one: a QThread still running when the
+  window tears down aborts the process.
+- `theme.SIDE_PANEL_WIDTH` and a `QLabel#SectionTitle` rule, for a section
+  heading inside a group box that wants the group-box title's accent without a
+  nested frame's margins.
+- `compile.sh`: byte-compiles everything under `tools/`. Most of this code only
+  runs with a keyboard plugged in, so a typo in a rarely-taken branch would
+  otherwise wait for the hardware to be in front of someone.
+
+### Changed
+- "Apply to All Keys" honours the armed mode instead of ignoring it, and
+  clears this tab's cached colour table when it does -- the firmware owns the
+  colours from that point, and claiming otherwise would let "Save Current"
+  write a stale table.
+- "Apply to Selected Key" keeps its read-modify-write first stage, and stage 2
+  now branches: an animated mode starts the stream with the read table as its
+  base, a static one still writes it.
+- `Lighting` tab: the effect list moved into a full-height column of its own
+  (it was under the keyboard image, in a row worth about a third of the
+  window, so 21 effects scrolled), at the same fixed width as the User
+  Lighting tab's list panes.
+- `MainWindow` treats a running animation as a reason to pause colour polling
+  but not as "busy" -- it runs for minutes, so raising the loading overlay or
+  refusing to close the window over it would both be wrong.
+- Global QSS font size 12px -> 14px.
+
+### Fixed
+- Selecting a lighting mode had no effect on "Apply to All Keys", which always
+  sent `EFFECT_CUSTOM` plus a colour upload.
+- `build_selected_key_transactions()` paired an effect selection with a single
+  stream frame. One frame is not an animation, and that frame's 84 colours
+  landed on top of the effect that had just been selected. Removed rather than
+  repaired: nothing about it was salvageable.
+
+### Notes
+- The host-side animators are what these names look like *on this side*. They
+  are not reproductions of the firmware's own effects -- nothing can read those
+  out -- so the same mode on the whole keyboard and on one key will not match
+  beyond the name.
+- "Starlight" has no effect id that works here, so it is host-animated even for
+  a whole-keyboard apply. That is also why it is the one mode where the
+  whole-keyboard path streams 84 keys rather than selecting anything.
+- Whether the stream overrides a *running* built-in effect is still untested
+  (0.9.12 flagged it). The single-key path sidesteps the question: its colour
+  read runs first, and `OP_COLOR_QUERY` is already known to knock the keyboard
+  out of a running effect.
+- Speed and brightness come from the protocol defaults; this tab has no
+  sliders for them the way the Lighting tab does.
+- The animation's colour and mode are snapshotted when it starts, since the
+  frame function runs on the stream thread. Changing either mid-animation does
+  nothing until the next apply, which restarts the stream.
+- The rewritten `aula_l99_gui/tests/test_user_lighting_tab.py` has not been
+  executed -- only the hardware behaviour was checked.
+
+## [0.9.14] - 2026-08-01
+
+**The GUI now ships and uses the vendor's own Open Sans instead of inheriting
+whatever sans the platform hands it -- and setting it takes two calls, not one:
+Qt stylesheet font properties override `QApplication.setFont`, so a family set
+only through `setFont` is silently discarded for every widget the stylesheet
+touches, which is all of them.**
+
+### Added
+- `theme.FONT_DIR` / `theme.FONT_REGULAR` pointing at
+  `tools/aula_l99_gui/font/OpenSans-Regular.ttf`, the vendor TTFs that were
+  already sitting in the tree unused.
+- `theme.load_font()`, registering the TTF with
+  `QFontDatabase.addApplicationFont` and returning the family name read back
+  out of the file rather than a hardcoded `"Open Sans"`.
+
+### Changed
+- `theme.stylesheet()` takes an optional `font_family` and emits a
+  `font-family` line in the global `QWidget` rule only when it is non-empty.
+- `main()` loads the font before constructing any widget, then sets both the
+  application font and the stylesheet. `QFont(family, -1)` leaves the point
+  size unset so sizing stays with the existing QSS `font-size: 12px`.
+
+### Notes
+- A missing or rejected TTF returns `""` and the app falls back to the platform
+  font with no `font-family` in the stylesheet -- an empty family there would
+  be worse than not setting one.
+- Only the Regular face is registered, so `font-weight: bold` still renders as
+  Qt-synthesised bold. `Light`, `Semibold` and `ExtraBold` sit next to it
+  unloaded if the synthetic weight ever looks wrong.
+- Verified offscreen: 25 labels in a real `MainWindow` resolve to Open Sans at
+  12px, bold still bold, and the missing-file path exits cleanly on Noto Sans.
+
 ## [0.9.13] - 2026-08-01
 
 **The panel's spectrum analyser turned out to be another host-side feed on the

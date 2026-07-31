@@ -6,6 +6,18 @@ actually lit on the hardware right now.
 Entirely self-contained -- its color state and Colorful checkbox affect only
 this tab's own Apply actions, not the Lighting tab's Run Effect (which has
 its own separate copy of the same controls in lighting_tab.py).
+
+The Lighting Modes list makes an apply animated, and the two apply buttons
+reach that by different routes, because the hardware only offers one of them:
+
+- Whole keyboard: select the built-in effect (OP_EFFECT) and let the firmware
+  run it. Nothing else is sent -- in particular no per-key colour upload,
+  which would immediately paint over whatever the effect had started.
+- One key: the firmware has no per-key effect to select, so the animation is
+  computed here (stream_effects.py) and streamed frame by frame over
+  OP_COLOR_STREAM, holding the other 83 keys at their current colours. That
+  runs for as long as the effect is on -- "Stop Effect" ends it, and so does
+  closing the window.
 """
 from __future__ import annotations
 
@@ -35,13 +47,20 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
-from . import key_layout
+from . import key_layout, stream_effects, theme
 from .color_wheel import ColorWheel
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
 from .keyboard_overlay import KeyboardOverlay
-from .workers import CallableResultWorker, KeyboardWorker, read_colors, start_worker
+from .stream_effects import LightingMode
+from .workers import (
+    CallableResultWorker,
+    ColorStreamWorker,
+    KeyboardWorker,
+    read_colors,
+    start_worker,
+)
 
 # Preset swatches: red, orange, yellow, green, blue, cyan, magenta, white.
 PRESET_COLORS = [
@@ -59,7 +78,13 @@ PRESET_COLORS = [
 # built-in effect that cycles its own colors rather than taking one.
 COLORFUL_EFFECT_ID = 0x06
 
-FILE_PANEL_WIDTH = 220
+FILE_PANEL_WIDTH = theme.SIDE_PANEL_WIDTH
+
+# How long to give the stream thread to notice it has been stopped. One frame
+# plus its I/O is the real figure (~60ms); this is only a ceiling for the case
+# where the device has stopped answering and the transport is sitting on its
+# own timeout.
+STREAM_STOP_WAIT_MS = 3000
 
 # What the vendor app writes into <lightinfo> for a per-key preset. Nothing
 # ever sends these to the keyboard -- they exist so a file we save still opens
@@ -130,8 +155,47 @@ def _save_lighting_xml(
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
+def merge_selected_key_colors(
+    colors: dict[int, tuple[int, int, int]],
+    selected_key: int | None,
+    rgb: tuple[int, int, int],
+) -> dict[int, tuple[int, int, int]]:
+    updated = dict(colors)
+    if selected_key is not None:
+        updated[selected_key] = rgb
+    return updated
+
+
+def resolve_apply_colors(
+    colors: object,
+    selected_key: int | None,
+    rgb: tuple[int, int, int],
+    fallback_colors: dict[int, tuple[int, int, int]] | None = None,
+) -> dict[int, tuple[int, int, int]]:
+    if isinstance(colors, dict) and set(colors) == set(kb_protocol.KEY_IDS):
+        return merge_selected_key_colors(colors, selected_key, rgb)
+
+    if isinstance(fallback_colors, dict):
+        if set(fallback_colors) == set(kb_protocol.KEY_IDS):
+            return merge_selected_key_colors(fallback_colors, selected_key, rgb)
+        fallback = {key_id: (0, 0, 0) for key_id in kb_protocol.KEY_IDS}
+        fallback.update(fallback_colors)
+        return merge_selected_key_colors(fallback, selected_key, rgb)
+
+    fallback = {key_id: (0, 0, 0) for key_id in kb_protocol.KEY_IDS}
+    if selected_key is not None:
+        fallback[selected_key] = rgb
+    return fallback
+
+
 class UserLightingTab(QWidget):
     busy_changed = Signal(bool)
+    # Kept separate from busy_changed deliberately: a host-side animation runs
+    # for minutes, so it must not raise the window's loading overlay or block
+    # closing the app the way a transfer does. What it *does* need is the
+    # Keyboard tab's colour poll held off, since the stream owns the hidraw
+    # handle for its whole run -- see MainWindow._on_any_busy_changed.
+    streaming_changed = Signal(bool)
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
@@ -145,8 +209,13 @@ class UserLightingTab(QWidget):
         self._action_buttons: list[QPushButton] = []
         self._color_pickers: list[QWidget] = []
         self._selected_key: int | None = None
+        self._mode: LightingMode | None = None
+        self._pending_apply_mode: LightingMode | None = None
         self._read_worker = None
         self._read_thread = None
+        self._stream_worker = None
+        self._stream_thread = None
+        self._streaming = False
         # Last full 84-key table this tab knows about, from whichever of an
         # apply, a colour read or a loaded file happened most recently. Saving
         # writes this; None means nothing has established one yet.
@@ -198,6 +267,33 @@ class UserLightingTab(QWidget):
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self._refresh_file_list)
         layout.addWidget(refresh_button)
+
+        # Lighting Modes. Picking one only arms it; the Apply buttons below
+        # are still what sends anything, so the list can be browsed without
+        # disturbing what the keyboard is showing -- same rule as the file
+        # list above it.
+        mode_label = QLabel("Lighting Modes")
+        mode_label.setObjectName("SectionTitle")  # accent, like a group-box title
+        layout.addWidget(mode_label)
+        self.mode_list = QListWidget()
+        for mode in stream_effects.LIGHTING_MODES:
+            item = QListWidgetItem(mode.name)
+            item.setData(Qt.ItemDataRole.UserRole, mode.name)
+            self.mode_list.addItem(item)
+        # Tall enough for every mode with no scrollbar -- sizeHintForRow reads
+        # the real row height (font metrics plus the QSS item padding), so this
+        # stays right if either changes. Same idiom as the Lighting tab's
+        # effect list.
+        row_height = self.mode_list.sizeHintForRow(0)
+        frame = 2 * self.mode_list.frameWidth()
+        self.mode_list.setFixedHeight(row_height * self.mode_list.count() + frame)
+        self.mode_list.itemClicked.connect(self._on_mode_selected)
+        layout.addWidget(self.mode_list)
+
+        self.stop_effect_button = QPushButton("Stop Effect")
+        self.stop_effect_button.clicked.connect(self._on_stop_effect)
+        self.stop_effect_button.setEnabled(False)
+        layout.addWidget(self.stop_effect_button)
 
         return group
 
@@ -448,6 +544,10 @@ class UserLightingTab(QWidget):
     # -- actions ------------------------------------------------------------
 
     def _on_apply_color(self) -> None:
+        self._stop_stream()
+        if self._mode is not None:
+            self._apply_mode_to_all(self._mode)
+            return
         if self.colorful_checkbox.isChecked():
             # Colorful cycles its own colors and ignores a custom per-key
             # upload (that's why the pickers are disabled while it's
@@ -461,6 +561,30 @@ class UserLightingTab(QWidget):
             colors = kb_protocol.build_uniform_colors(self.rgb())
             transactions = self._build_custom_transactions(colors)
             self._key_colors = colors
+        self.overlay.clear_swatches()
+        self._run_transactions(transactions)
+
+    def _apply_mode_to_all(self, mode: LightingMode) -> None:
+        if mode.effect_id is None:
+            # No built-in effect for this one (Starlight), so it gets the same
+            # host-side treatment a single key does, just across all 84.
+            self._start_stream(mode, set(kb_protocol.KEY_IDS), self._key_colors or {})
+            return
+
+        # An effect selection and nothing else. Sending a colour upload
+        # alongside it -- which is what _build_custom_transactions does, and
+        # what this used to fall through to -- repaints all 84 keys the instant
+        # the effect starts, which is exactly the "it changes colour but never
+        # animates" symptom.
+        transactions = kb_protocol.build_effect_transfer(
+            mode.effect_id,
+            rgb=self.rgb(),
+            speed=kb_protocol.EFFECT_SPEED_DEFAULT,
+            brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX,
+        )
+        # The firmware owns the colours now, so this tab no longer knows what
+        # is lit; claiming otherwise would let Save Current write a stale table.
+        self._key_colors = None
         self.overlay.clear_swatches()
         self._run_transactions(transactions)
 
@@ -480,6 +604,9 @@ class UserLightingTab(QWidget):
         return self._busy
 
     def _run_transactions(self, transactions: list) -> None:
+        # Any one-shot write has to have the device to itself: an animation
+        # holds the hidraw handle open for its whole run.
+        self._stop_stream()
         if self._busy:
             return
         device_path = self._selector.current_path()
@@ -525,10 +652,11 @@ class UserLightingTab(QWidget):
         # Single-key colour changes need read-modify-write: build_color_transfer
         # writes the *entire* 84-key table, so a bare {key: rgb} dict would
         # blank every other key. Stage 1 reads the current table; stage 2
-        # (_on_read_for_apply_finished) merges the one change and writes it
-        # back. Busy spans both stages -- only the stage-2 write's
-        # thread.finished clears it, so this stage deliberately does not wire
-        # up _on_thread_stopped.
+        # (_on_read_for_apply_finished) merges the one change and either writes
+        # it back or hands it to the animation as its base. Busy spans both
+        # stages -- only stage 2 clears it, so this stage deliberately does not
+        # wire up _on_thread_stopped.
+        self._stop_stream()
         if self._busy or self._selected_key is None:
             return
         device_path = self._selector.current_path()
@@ -540,26 +668,44 @@ class UserLightingTab(QWidget):
         self.progress_bar.setRange(0, 0)
         self._debug_log.clear()
 
+        self._pending_apply_mode = self._mode
+
         self._read_worker = CallableResultWorker(lambda: read_colors(device_path))
         self._read_worker.finished.connect(self._on_read_for_apply_finished)
         self._read_thread = start_worker(self._read_worker)
+        return  # The rest happens in _on_read_for_apply_finished
 
     def _on_read_for_apply_finished(self, colors: object, error: str) -> None:
-        if error or set(colors) != set(kb_protocol.KEY_IDS):
-            message = error or (
-                f"incomplete colour read ({len(colors)}/{len(kb_protocol.KEY_IDS)} keys) "
-                f"-- refusing to write, since a partial table would blank the rest"
-            )
-            self._debug_log.append("User Lighting", f"-- read failed: {message}")
-            QMessageBox.critical(self, "Keyboard Error", message)
+        device_path = self._selector.current_path()
+        mode = self._pending_apply_mode
+        self._pending_apply_mode = None
+
+        if error or not isinstance(colors, dict) or set(colors) != set(kb_protocol.KEY_IDS):
+            if self._key_colors is not None and set(self._key_colors) == set(kb_protocol.KEY_IDS):
+                self._debug_log.append(
+                    "User Lighting",
+                    "-- colour read incomplete; using the last known full table",
+                )
+            else:
+                self._debug_log.append(
+                    "User Lighting",
+                    f"-- colour read incomplete ({len(colors) if isinstance(colors, dict) else 0}/{len(kb_protocol.KEY_IDS)} keys); using a fallback table",
+                )
+
+        key_rgb = mode.static_rgb if mode is not None and mode.static_rgb else self.rgb()
+        colors = resolve_apply_colors(colors, self._selected_key, key_rgb, self._key_colors)
+        self._key_colors = dict(colors)
+
+        if mode is not None and mode.animates:
+            # The read that just finished is also what clears the way for the
+            # stream: OP_COLOR_QUERY is known to knock the keyboard out of a
+            # running built-in effect (confirmed on hardware), so by here
+            # nothing is fighting the frames for the LEDs.
             self._set_busy(False)
+            self._start_stream(mode, {self._selected_key}, colors)
             return
 
-        device_path = self._selector.current_path()
-        colors[self._selected_key] = self.rgb()
-        self._key_colors = dict(colors)
         transactions = self._build_custom_transactions(colors)
-
         self.progress_bar.setRange(0, max(len(transactions), 1))
         self.progress_bar.setValue(0)
         self.overlay.clear_swatches()
@@ -571,6 +717,7 @@ class UserLightingTab(QWidget):
         self._thread.finished.connect(self._on_thread_stopped)
 
     def _on_read_colors(self) -> None:
+        self._stop_stream()
         if self._busy:
             return
         device_path = self._selector.current_path()
@@ -597,3 +744,113 @@ class UserLightingTab(QWidget):
             self._debug_log.append("User Lighting", "-- read current colours: ok")
             self._key_colors = dict(colors)
             self.overlay.set_swatches(colors)
+
+    def _on_mode_selected(self, item: QListWidgetItem) -> None:
+        mode = stream_effects.MODE_BY_NAME.get(item.data(Qt.ItemDataRole.UserRole))
+        if mode is self._mode:
+            # Clicking the armed mode again disarms it, which is the only way
+            # back to a plain colour apply once one has been picked.
+            self._mode = None
+            self.mode_list.clearSelection()
+            self._debug_log.append("User Lighting", "-- lighting mode cleared")
+            return
+
+        self._mode = mode
+        if mode.effect_id is None:
+            detail = "host-animated only (no built-in effect)"
+        else:
+            detail = f"effect 0x{mode.effect_id:02X}"
+        self._debug_log.append("User Lighting", f"-- lighting mode armed: {mode.name} ({detail})")
+
+    # -- host-side animation ------------------------------------------------
+
+    def _start_stream(
+        self,
+        mode: LightingMode,
+        animated_keys: set[int],
+        base_colors: dict[int, tuple[int, int, int]],
+    ) -> None:
+        """Animate `animated_keys` from this side, holding the rest of the
+        keyboard at `base_colors`, until something stops it."""
+        self._stop_stream()  # only ever one stream on the device at a time
+        device_path = self._selector.current_path()
+        if device_path is None:
+            QMessageBox.warning(self, "Keyboard", "No device selected.")
+            return
+
+        # Everything the frame function reads is snapshotted here: it runs on
+        # the stream thread, where touching this tab's live state (the picker,
+        # the selection) would be a data race. Changing the colour or the mode
+        # mid-animation therefore does nothing until the next apply, which
+        # restarts the stream with a fresh snapshot.
+        base = {key_id: base_colors.get(key_id, (0, 0, 0)) for key_id in kb_protocol.KEY_IDS}
+        keys = set(animated_keys)
+        animator = mode.animator
+        rgb = self.rgb()
+
+        def frame_fn(elapsed: float) -> dict[int, tuple[int, int, int]]:
+            return stream_effects.build_frame(base, keys, animator, rgb, elapsed)
+
+        self.progress_bar.setRange(0, 0)  # indeterminate: the stream has no end
+        self._stream_worker = ColorStreamWorker(device_path, frame_fn)
+        self._stream_worker.frame.connect(self.overlay.set_swatches)
+        self._stream_worker.finished.connect(self._on_stream_finished)
+        self._stream_thread = start_worker(self._stream_worker)
+        self._set_streaming(True)
+        self._debug_log.append(
+            "User Lighting",
+            f"-- streaming {mode.name} on {len(keys)} key(s) at "
+            f"{1 / kb_protocol.STREAM_FRAME_SECONDS:.0f} frames/s",
+        )
+
+    def _stop_stream(self) -> None:
+        """Stop the animation and wait for its thread, so the device is free
+        before whatever comes next opens it. A no-op when nothing is running.
+
+        Blocking the GUI thread here is deliberate: the wait is one frame plus
+        its I/O (~60ms), and every alternative means threading a continuation
+        through every caller for a delay too short to see.
+        """
+        if not self._streaming:
+            return
+        self._stream_worker.stop()
+        if self._stream_thread is not None:
+            self._stream_thread.wait(STREAM_STOP_WAIT_MS)
+        self._set_streaming(False)
+
+    def _on_stream_finished(self, success: bool, message: str) -> None:
+        self._debug_log.append("User Lighting", f"-- {message}")
+        self._set_streaming(False)
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(1 if success else 0)
+        if not success:
+            text = message
+            if "permission" in message.lower():
+                text = f"{message}\n\n{KEYBOARD_PERMISSION_HINT}"
+            QMessageBox.critical(self, "Keyboard Error", text)
+
+    def _set_streaming(self, streaming: bool) -> None:
+        if streaming == self._streaming:
+            return
+        self._streaming = streaming
+        self.stop_effect_button.setEnabled(streaming)
+        self.streaming_changed.emit(streaming)
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._streaming
+
+    def _on_stop_effect(self) -> None:
+        self._stop_stream()
+        # The keyboard holds the last frame streamed, which is an arbitrary
+        # point in the animation. Put the base colours back so stopping lands
+        # somewhere predictable rather than mid-breath.
+        if self._key_colors is not None:
+            self.overlay.set_swatches(self._key_colors)
+            self._run_transactions(self._build_custom_transactions(self._key_colors))
+
+    def shutdown(self) -> None:
+        """Stop the animation thread before the window is torn down -- Qt
+        aborts the process if a QThread is still running at that point (the
+        same reason KeyboardTab has one of these)."""
+        self._stop_stream()

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
+from . import theme
 from .color_wheel import ColorWheel
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
@@ -56,6 +57,10 @@ PRESET_COLORS = [
 # kb_protocol.EFFECT_NAMES[0x06] == "colourful" -- confirmed by capture, the
 # built-in effect that cycles its own colors rather than taking one.
 COLORFUL_EFFECT_ID = 0x06
+
+# Rows the effect list is guaranteed, before the layout hands it the tab's
+# spare height.
+EFFECT_LIST_MIN_ROWS = 8
 
 
 class LightingTab(QWidget):
@@ -80,22 +85,25 @@ class LightingTab(QWidget):
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        # The effect list is a column of its own spanning the full height of
+        # the tab, with the keyboard image and the controls stacked beside it.
+        # It used to sit under the image, in a row that gave it about a third
+        # of the window -- not enough for 21 effects, so it scrolled.
+        layout = QHBoxLayout(self)
+        layout.addWidget(self._build_effect_list_group())
 
+        column = QVBoxLayout()
         overlay_row = QHBoxLayout()
         overlay_row.addStretch(1)
         overlay_row.addWidget(self._build_overlay())
         overlay_row.addStretch(1)
-        layout.addLayout(overlay_row)
+        column.addLayout(overlay_row)
 
-        main_row = QHBoxLayout()
-        main_row.addWidget(self._build_effect_list_group())
-        main_row.addLayout(self._build_controls_column(), stretch=1)
-        layout.addLayout(main_row)
+        column.addLayout(self._build_controls_column())
 
         self.progress_bar = QProgressBar()
-        layout.addWidget(self.progress_bar)
-        layout.addStretch(1)
+        column.addWidget(self.progress_bar)
+        layout.addLayout(column, stretch=1)
 
     def _build_overlay(self) -> KeyboardOverlay:
         overlay = KeyboardOverlay()
@@ -105,22 +113,26 @@ class LightingTab(QWidget):
 
     def _build_effect_list_group(self) -> QGroupBox:
         group = QGroupBox()
+        # Same width as the User Lighting tab's list panes, so the left edge of
+        # the window doesn't jump when switching between the two tabs.
+        group.setFixedWidth(theme.SIDE_PANEL_WIDTH)
         layout = QVBoxLayout(group)
 
         self.effect_list = QListWidget()
-        self.effect_list.setMinimumWidth(220)
         for effect_id, name in sorted(kb_protocol.EFFECT_NAMES.items()):
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, effect_id)
             self.effect_list.addItem(item)
         self.effect_list.setCurrentRow(0)
         self.effect_list.itemDoubleClicked.connect(self._on_run_effect)
-        # Sized to fit every row with no scrollbar -- sizeHintForRow reads
-        # actual row height (font metrics + the QSS item padding), so this
-        # stays correct if either changes.
+        # A floor of EFFECT_LIST_MIN_ROWS rows only -- the list is the full
+        # height of the tab now (see _build_ui), so the space it actually gets
+        # comes from the window, not from this. Keeping the floor small means a
+        # shorter window squeezes nothing: it just scrolls, as it must.
         row_height = self.effect_list.sizeHintForRow(0)
         frame = 2 * self.effect_list.frameWidth()
-        self.effect_list.setMinimumHeight(row_height * self.effect_list.count() + frame)
+        rows = min(EFFECT_LIST_MIN_ROWS, self.effect_list.count())
+        self.effect_list.setMinimumHeight(row_height * rows + frame)
         layout.addWidget(self.effect_list)
 
         return group
@@ -143,6 +155,11 @@ class LightingTab(QWidget):
         run_button.clicked.connect(self._on_run_effect)
         column.addWidget(run_button)
         self._action_buttons.append(run_button)
+
+        # The row's stretch belongs to the effect list, not to the gaps between
+        # these controls -- this keeps them packed at the top the way the
+        # trailing stretch in _build_ui used to.
+        column.addStretch(1)
 
         return column
 

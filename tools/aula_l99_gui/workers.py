@@ -21,6 +21,19 @@ from aula_l99_screen import protocol as screen_protocol
 from aula_l99_screen.device import SerialTransport
 
 
+# Intra-frame packet gap for the colour stream, well under
+# kb_protocol.PACKET_GAP_SECONDS: a frame is 12 packets, so 10ms apiece would
+# take twice the vendor's whole 58.7ms frame period. The capture left ~2.8ms
+# between a frame's data blocks (re_notes/color_stream.md), and 2ms was already
+# enough on the test unit for the one-shot paths.
+STREAM_GAP_SECONDS = 0.003
+
+# Only every Nth frame goes to the GUI's preview overlay. The stream itself
+# runs at ~17 frames/s; repainting the layout image that often buys nothing a
+# third of it doesn't.
+PREVIEW_EVERY_N_FRAMES = 3
+
+
 def start_worker(worker: QObject) -> QThread:
     """Move `worker` onto a new QThread and start it.
 
@@ -92,6 +105,83 @@ class KeyboardWorker(QObject):
                 failures == 0,
                 "ok" if failures == 0 else f"{failures} transaction(s) not acked",
             )
+        except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
+            self.finished.emit(False, str(exc))
+
+
+class ColorStreamWorker(QObject):
+    """Drives the realtime colour stream (opcode 0x20) in a loop until stopped
+    -- the animation path, where KeyboardWorker is the one-shot path.
+
+    Three things make it a different shape from KeyboardWorker rather than a
+    flag on it:
+
+    - The transport stays open for the whole animation. Reopening it per frame
+      could not keep up with the vendor app's ~17 frames/s, and would give the
+      Keyboard tab's colour poll a gap to slip into on every single frame.
+    - The frames aren't known up front: `frame_fn(elapsed_seconds)` computes
+      each one as it goes. It runs on *this* thread, so it must be pure -- no
+      widget access, no shared mutable state.
+    - Nothing is retried. A frame that misses its ack is stale
+      STREAM_FRAME_SECONDS later, so resending it would push every later frame
+      back rather than fix anything; the loop just carries on to the next one.
+    """
+
+    frame = Signal(object)  # colors dict, for the GUI's preview overlay
+    finished = Signal(bool, str)
+
+    def __init__(self, device_path: str, frame_fn: Callable[[float], dict],
+                 period: float = kb_protocol.STREAM_FRAME_SECONDS,
+                 gap: float = STREAM_GAP_SECONDS, timeout: float = 1.0,
+                 preview_every: int = PREVIEW_EVERY_N_FRAMES):
+        super().__init__()
+        self._device_path = device_path
+        self._frame_fn = frame_fn
+        self._period = period
+        self._gap = gap
+        self._timeout = timeout
+        self._preview_every = max(preview_every, 1)
+        self._stop = False
+
+    def stop(self) -> None:
+        """Ask the loop to finish after the frame it is on.
+
+        Called straight from the GUI thread rather than through a queued
+        signal: this worker's thread is inside `run()` for the whole animation
+        and never returns to its event loop, so a queued slot would not be
+        delivered until the loop had already ended. A lone bool assignment is
+        safe to do that way; anything more would not be.
+        """
+        self._stop = True
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            frames = late = 0
+            started = time.monotonic()
+            with HidrawTransport(self._device_path, timeout_seconds=self._timeout) as transport:
+                while not self._stop:
+                    frame_started = time.monotonic()
+                    colors = self._frame_fn(frame_started - started)
+                    for tx in kb_protocol.build_stream_frame(colors):
+                        transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+                        time.sleep(self._gap)
+                        if tx.expect_reply:
+                            transport.get_feature(
+                                kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)
+                            time.sleep(self._gap)
+                    frames += 1
+                    if frames % self._preview_every == 0:
+                        self.frame.emit(colors)
+                    remaining = self._period - (time.monotonic() - frame_started)
+                    if remaining > 0:
+                        time.sleep(remaining)
+                    else:
+                        late += 1
+            message = f"stream stopped after {frames} frames"
+            if late:
+                message += f" ({late} over the {self._period * 1000:.0f}ms frame budget)"
+            self.finished.emit(True, message)
         except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
             self.finished.emit(False, str(exc))
 
