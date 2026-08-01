@@ -6,3 +6,9 @@ cli.py — --list, --handshake, --rtc (a real, testable command against your har
 All three modules compile and the CLI's --help renders correctly; I obviously can't exercise the actual HID I/O without the keyboard attached. The README documents the capture workflow for the still-missing piece (RGB/lighting commands — nobody has published those for 0C45:800A yet, only the RTC/session framing).
 
 Next real step is on you: get Wireshark+USBPcap running against the vendor driver, capture one isolated lighting change, and run it through --send-hex here.
+
+cd /home/ggraham/Projects/Aula_L99/tools && python3 -m py_compile aula_l99_gui/touchscreen_tab.py && echo COMPILE_OK
+echo "---"
+grep -n "_build_single_image_group\|_on_choose_image\|_on_upload_image\|SINGLE_IMAGE_TARGETS\|target_combo\|image_preview" aula_l99_gui/touchscreen_tab.py
+echo "---leftover check done---"
+grep -n "_on_upload_gif\b" aula_l99_gui/touchscreen_tab.py

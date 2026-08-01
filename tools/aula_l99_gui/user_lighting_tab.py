@@ -58,6 +58,7 @@ from .workers import (
     CallableResultWorker,
     ColorStreamWorker,
     KeyboardWorker,
+    _coerce_read_colors,
     read_colors,
     start_worker,
 )
@@ -670,7 +671,10 @@ class UserLightingTab(QWidget):
 
         self._pending_apply_mode = self._mode
 
-        self._read_worker = CallableResultWorker(lambda: read_colors(device_path))
+        fallback_colors = self._key_colors
+        self._read_worker = CallableResultWorker(
+            lambda: read_colors(device_path, fallback=fallback_colors)
+        )
         self._read_worker.finished.connect(self._on_read_for_apply_finished)
         self._read_thread = start_worker(self._read_worker)
         return  # The rest happens in _on_read_for_apply_finished
@@ -729,7 +733,10 @@ class UserLightingTab(QWidget):
         self.progress_bar.setRange(0, 0)
         self._debug_log.clear()
 
-        self._read_worker = CallableResultWorker(lambda: read_colors(device_path))
+        fallback_colors = self._key_colors
+        self._read_worker = CallableResultWorker(
+            lambda: read_colors(device_path, fallback=fallback_colors)
+        )
         self._read_worker.finished.connect(self._on_read_colors_finished)
         self._read_thread = start_worker(self._read_worker)
         self._read_thread.finished.connect(self._on_thread_stopped)
@@ -741,9 +748,16 @@ class UserLightingTab(QWidget):
             self._debug_log.append("User Lighting", f"-- read failed: {error}")
             QMessageBox.critical(self, "Keyboard Error", error)
         else:
-            self._debug_log.append("User Lighting", "-- read current colours: ok")
-            self._key_colors = dict(colors)
-            self.overlay.set_swatches(colors)
+            normalized = _coerce_read_colors(colors, self._key_colors)
+            if set(normalized) != set(kb_protocol.KEY_IDS):
+                self._debug_log.append(
+                    "User Lighting",
+                    "-- read current colours incomplete; using the last known full table",
+                )
+            else:
+                self._debug_log.append("User Lighting", "-- read current colours: ok")
+            self._key_colors = dict(normalized)
+            self.overlay.set_swatches(normalized)
 
     def _on_mode_selected(self, item: QListWidgetItem) -> None:
         mode = stream_effects.MODE_BY_NAME.get(item.data(Qt.ItemDataRole.UserRole))

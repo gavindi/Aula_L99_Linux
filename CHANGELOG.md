@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.17] - 2026-08-01
+
+**Improved the User Lighting colour-read flow so the overlay no longer depends on a single, sometimes partial read. The helper now short-circuits quickly, validates that it received a full 84-key table, and falls back to the last known full table when the hardware reply is incomplete.**
+
+### Changed
+- `tools/aula_l99_gui/workers.py`: `read_colors()` now accepts a fallback table and preserves the last known full table when the latest read is partial.
+- `tools/aula_l99_gui/user_lighting_tab.py`: both the "Read Current Colours" action and the single-key apply flow now reuse the fallback table instead of accepting an incomplete result.
+- `tools/aula_l99_gui/tests/test_user_lighting_tab.py`: added regression coverage for partial-read fallback behavior.
+
 ## [0.9.16] - 2026-08-01
 
 **Daemonised the GUI so it can live in the system tray/app indicator instead

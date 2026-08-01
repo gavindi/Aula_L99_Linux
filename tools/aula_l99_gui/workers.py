@@ -186,28 +186,108 @@ class ColorStreamWorker(QObject):
             self.finished.emit(False, str(exc))
 
 
-def read_colors(device_path: str, timeout: float = 1.0,
-                 gap: float = kb_protocol.PACKET_GAP_SECONDS,
-                 ) -> dict[int, tuple[int, int, int]]:
-    """Read the keyboard's current per-key colours -- the GUI-side companion to
-    aula_l99_hacky/cli.py's cmd_read_color, minus its printing and retry loop
-    (this is a read path, not the flaky write path retry_until_ack guards
-    against). Meant to run inside a CallableResultWorker closure, off the GUI
-    thread. Raises on transport/HID failure."""
-    with HidrawTransport(device_path, timeout_seconds=timeout) as transport:
+def _is_acked(tx, reply: bytes | bytearray | None) -> bool:
+    return (
+        isinstance(reply, (bytes, bytearray))
+        and len(reply) >= kb_protocol.ACK_OFFSET + 1
+        and reply[0] == kb_protocol.CMD_PREFIX
+        and reply[1] == tx.outgoing[1]
+        and bool(reply[kb_protocol.ACK_OFFSET] & kb_protocol.ACK_FLAG)
+    )
+
+
+def _coerce_read_colors(
+    colors: object,
+    fallback: dict[int, tuple[int, int, int]] | None = None,
+) -> dict[int, tuple[int, int, int]]:
+    if isinstance(colors, dict) and set(colors) == set(kb_protocol.KEY_IDS):
+        return dict(colors)
+    if isinstance(fallback, dict) and set(fallback) == set(kb_protocol.KEY_IDS):
+        return dict(fallback)
+    return dict(colors) if isinstance(colors, dict) else {}
+
+
+def _read_colors_from_transport(
+    transport,
+    gap: float = kb_protocol.PACKET_GAP_SECONDS,
+    attempts: int = 2,
+    retry_delay: float = 0.02,
+    fallback: dict[int, tuple[int, int, int]] | None = None,
+) -> dict[int, tuple[int, int, int]]:
+    """Read the keyboard's current per-key colours, retrying briefly if the
+    first query comes back incomplete or the device is still busy."""
+    last_colors: dict[int, tuple[int, int, int]] = {}
+    drain = getattr(transport, "drain", None)
+    if callable(drain):
+        drain()
+
+    colors: dict[int, tuple[int, int, int]] = {}
+    for attempt in range(attempts):
+        framed_ok = True
         for tx in kb_protocol.build_color_query_commands():
-            transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
-            time.sleep(gap)
-            if tx.expect_reply:
-                transport.get_feature(kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)
+            tx_attempts = 2 if tx.retry_until_ack else 1
+            reply = None
+            for _ in range(tx_attempts):
+                transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                 time.sleep(gap)
+                if not tx.expect_reply:
+                    reply = None
+                    break
+                reply = transport.get_feature(kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+                time.sleep(gap)
+                if _is_acked(tx, reply):
+                    break
+                if tx_attempts > 1:
+                    time.sleep(kb_protocol.RETRY_DELAY_SECONDS)
+
+            if tx.expect_reply and not _is_acked(tx, reply):
+                framed_ok = False
+                break
+
+        if not framed_ok:
+            if callable(drain):
+                drain()
+            if attempt < attempts - 1:
+                time.sleep(retry_delay)
+            continue
 
         blocks = []
         for _ in range(kb_protocol.COLOR_BLOCK_COUNT):
             block = transport.get_feature(kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
             time.sleep(gap)
             blocks.append(block)
-    return kb_protocol.parse_color_blocks(blocks)
+
+        colors = kb_protocol.parse_color_blocks(blocks)
+        if set(colors) == set(kb_protocol.KEY_IDS):
+            return _coerce_read_colors(colors, fallback)
+        if callable(drain):
+            drain()
+        if attempt < attempts - 1:
+            time.sleep(retry_delay)
+    return _coerce_read_colors(colors, fallback)
+
+
+def read_colors(
+    device_path: str,
+    timeout: float = 0.2,
+    gap: float = kb_protocol.PACKET_GAP_SECONDS,
+    attempts: int = 2,
+    retry_delay: float = 0.02,
+    fallback: dict[int, tuple[int, int, int]] | None = None,
+) -> dict[int, tuple[int, int, int]]:
+    """Read the keyboard's current per-key colours -- the GUI-side companion to
+    aula_l99_hacky/cli.py's cmd_read_color, minus its printing and retry loop
+    (this is a read path, not the flaky write path retry_until_ack guards
+    against). Meant to run inside a CallableResultWorker closure, off the GUI
+    thread. Raises on transport/HID failure."""
+    with HidrawTransport(device_path, timeout_seconds=timeout) as transport:
+        return _read_colors_from_transport(
+            transport,
+            gap=gap,
+            attempts=attempts,
+            retry_delay=retry_delay,
+            fallback=fallback,
+        )
 
 
 class CallableResultWorker(QObject):

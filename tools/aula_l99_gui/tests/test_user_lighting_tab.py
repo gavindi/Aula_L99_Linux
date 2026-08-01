@@ -8,7 +8,29 @@ from aula_l99_gui.user_lighting_tab import (
     merge_selected_key_colors,
     resolve_apply_colors,
 )
+from aula_l99_gui.workers import _read_colors_from_transport
 from aula_l99_hacky import protocol as kb_protocol
+
+
+class FakeTransport:
+    def __init__(self, reply_batches: list[list[bytes]]):
+        self._reply_batches = list(reply_batches)
+        self._drain_calls = 0
+
+    def drain(self):
+        self._drain_calls += 1
+        return []
+
+    def set_feature(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def get_feature(self, report_id: int, size: int) -> bytes:
+        if not self._reply_batches:
+            raise AssertionError("unexpected get_feature call")
+        batch = self._reply_batches.pop(0)
+        if not batch:
+            raise AssertionError("missing queued reply")
+        return batch.pop(0)
 
 
 def test_merge_selected_key_colors_preserves_existing_keys():
@@ -106,3 +128,22 @@ def test_starlight_twinkles_keys_out_of_step_with_each_other():
     )
 
     assert len(set(frame.values())) > 1
+
+
+def test_read_colors_falls_back_to_the_last_full_table_when_the_read_is_partial():
+    fallback = {key_id: (1, 2, 3) for key_id in kb_protocol.KEY_IDS}
+    reply_batches = []
+    for _ in kb_protocol.build_color_query_commands():
+        reply_batches.append([bytes([0x00, kb_protocol.CMD_PREFIX, 0x00, 0x01])])
+    blocks = []
+    for _ in range(kb_protocol.COLOR_BLOCK_COUNT):
+        block = bytearray(64)
+        block[0] = 0x01
+        block[1:4] = b"\x01\x02\x03"
+        blocks.append(bytes(block))
+    reply_batches.append(blocks)
+    transport = FakeTransport(reply_batches)
+
+    colors = _read_colors_from_transport(transport, attempts=1, fallback=fallback)
+
+    assert colors == fallback
