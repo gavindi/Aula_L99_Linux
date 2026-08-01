@@ -8,6 +8,8 @@ and weather readout, its audio spectrum analyser, keyboard settings, and
 uploading images and animated GIFs to the panel — plus a PySide6 GUI that
 ties it all together.
 
+![The GUI's Device tab, wearing the vendor's own skin](screenshots/00-HomeDevice.png)
+
 Everything here was derived from USB captures of the vendor's
 `DeviceDriver.exe`, static analysis of its DLLs and firmware updaters, and
 byte-level experimentation against real hardware. No vendor code runs on
@@ -85,15 +87,32 @@ against the live panel — the full lab notebook is in the tool's
 A desktop app wrapping both CLIs' protocol modules directly (no
 shelling-out), wearing the vendor's own extracted skin artwork. Six tabs:
 
-- **Device** — hidraw/serial discovery and selection
-- **Keyboard** — connection test, all-keys colour, clock set
-- **Lighting** — the 20 built-in effects with speed/brightness, and a live
-  preview that mirrors the keyboard's actual LED state
-- **User Lighting** — per-key colour editing on a rendered keyboard overlay,
-  plus host-animated effects (breathing, rainbow wave, starlight, …)
-  streamed at ~17 fps for single keys the firmware can't animate itself
-- **Touchscreen** — image and GIF upload with live packet-by-packet progress
-- **Config** — polling and app settings
+**Device** — hidraw/serial discovery and selection
+
+![Device tab](screenshots/00-HomeDevice.png)
+
+**Keyboard** — connection test, all-keys colour, clock set
+
+![Keyboard tab](screenshots/01-KeyboardMacros.png)
+
+**Lighting** — the 20 built-in effects with speed/brightness, and a live
+preview that mirrors the keyboard's actual LED state
+
+![Lighting tab](screenshots/02-Lighting.png)
+
+**User Lighting** — per-key colour editing on a rendered keyboard overlay,
+plus host-animated effects (breathing, rainbow wave, starlight, …)
+streamed at ~17 fps for single keys the firmware can't animate itself
+
+![User Lighting tab](screenshots/03-UserLighting.png)
+
+**Touchscreen** — image and GIF upload with live packet-by-packet progress
+
+![Touchscreen tab](screenshots/04-Touchscreen1.png)
+
+**Config** — polling and app settings
+
+![Config tab](screenshots/09-Config.png)
 
 Supports system-tray/app-indicator mode (`--tray`, `--start-hidden`).
 
