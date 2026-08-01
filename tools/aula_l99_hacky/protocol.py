@@ -24,10 +24,18 @@ Cable path (0C45:800A, interface 3 -> /dev/hidrawN), CONFIRMED:
     shape and the matrix block layout as properties of individual opcodes
     rather than of the channel.
 
-Dongle path (05AC:024F), NOT CONFIRMED: 32-byte interrupt reports with a
-trailing sum(bytes[0:31]) & 0xFF checksum, inherited from prior art on the
-AULA F75 MAX (Simon-Martens/F75_Initializer). No L99 dongle has been tested,
-and the wired device's format differs, so treat it as a starting guess.
+Dongle path (05AC:024F, interface 3 -> /dev/hidrawN), CONFIRMED on an L99:
+   - 32-byte interrupt reports (not feature reports) with a trailing
+     sum(bytes[0:31]) & 0xFF checksum. The handshake and RTC-set below are the
+     F75_Initializer prior art, and both worked on the L99 dongle unchanged:
+     the session-init and session-query probes get their expected replies, and
+     an RTC write returns the prior-art ack.
+   - Byte 11 of the session-init reply is a per-device firmware/build version,
+     not link state: 0x08 on the F75 MAX prior art, 0x29 on the L99 dongle
+     under test, stable across sessions and unchanged before/after the
+     keyboard pairs. Reply comparisons must not require it to match.
+   - The keyboard's own reports (keystrokes) arrive on a different interface
+     (0), not this vendor channel.
 
 Still unidentified: opcode 0x00. The 16-bit value the commit reply carries at
 offset 4 is confirmed to be a plain monotonic sequence counter (increments by
@@ -314,13 +322,22 @@ AUDIO_FRAME_SECONDS = 0.047
 # legal byte as far as we know.
 AUDIO_LEVEL_QUANTUM = (8, 5)
 
-# -- dongle path (unconfirmed prior art) -------------------------------------
+# -- dongle path (prior art, confirmed on the L99) ---------------------------
 DONGLE_PACKET_SIZE = 32
+
+# Byte 11 of the session-init reply is a per-device firmware/build version,
+# not link state: 0x08 on the AULA F75 MAX prior art, 0x29 on the L99 dongle
+# under test, stable across sessions and unchanged before/after pairing. So it
+# must be excluded from reply comparisons -- see dongle_replies_match().
+SESSION_INIT_VERSION_BYTE = 11
+
 SESSION_INIT_OUT = bytes.fromhex(
     "0200000000000000000000000000000000000000000000000000000000000002"
 )
+# The reply below is the L99 dongle's own bytes, byte 11 = 0x29 included. The
+# F75_Initializer capture of the same probe differs only at byte 11 (0x08).
 SESSION_INIT_IN = bytes.fromhex(
-    "02000040300000450c0a800801ffff0000000000000000000000000000000054"
+    "02000040300000450c0a802901ffff0000000000000000000000000000000075"
 )
 SESSION_QUERY_OUT = bytes.fromhex(
     "2001000000000000000000000000000000000000000000000000000000000021"
@@ -397,6 +414,30 @@ def finalize_dongle_packet(body: bytes) -> bytes:
     if len(body) != DONGLE_PACKET_SIZE - 1:
         raise ValueError(f"body must be {DONGLE_PACKET_SIZE - 1} bytes, got {len(body)}")
     return body + bytes([checksum(body)])
+
+
+def dongle_replies_match(reply: bytes, expected: bytes) -> bool:
+    """Whether a dongle-path reply is the expected one.
+
+    The only tolerated differences are SESSION_INIT_VERSION_BYTE and the
+    trailing checksum byte that necessarily follows it: the F75 prior art
+    showed the version byte differing between keyboards, and since the checksum
+    covers it, those two bytes change together. The reply's own checksum is
+    still validated, so a corrupt reply is never accepted. For any packet that
+    is not session-init the version byte is zero in both, so the comparison can
+    only pass if the whole reply matches.
+    """
+    if reply == expected:
+        return True
+    if len(reply) != DONGLE_PACKET_SIZE or len(expected) != DONGLE_PACKET_SIZE:
+        return False
+    if reply[-1] != checksum(reply[:-1]):
+        return False
+    return (
+        reply[:SESSION_INIT_VERSION_BYTE] == expected[:SESSION_INIT_VERSION_BYTE]
+        and reply[SESSION_INIT_VERSION_BYTE + 1:-1]
+        == expected[SESSION_INIT_VERSION_BYTE + 1:-1]
+    )
 
 
 def parse_hex_packet(value: str) -> bytes:

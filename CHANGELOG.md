@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.23] - 2026-08-02
+
+**The 2.4G dongle path is now confirmed on real hardware.** Previously it was
+untested prior art inherited from the AULA F75 MAX; plugging the L99's own
+dongle (`05AC:024F`, interface 3) in and running the probes showed the
+handshake works unchanged and an RTC-set returns the prior-art ack. The one
+discrepancy — byte 11 of the session-init reply, `0x29` here vs `0x08` on the
+F75 — is a stable per-device firmware/build version, not link state: identical
+across sessions and before/after the keyboard pairs. The tool's old exact-match
+check therefore flagged every dongle run as a warning; it now compares with
+that byte (and the checksum byte that necessarily follows it) excluded, while
+still validating the reply's checksum.
+
+### Added
+- `tools/aula_l99_hacky/protocol.py`: `dongle_replies_match()` and
+  `SESSION_INIT_VERSION_BYTE`, with the dongle-path docstring updated from
+  "NOT CONFIRMED" to confirmed on the L99.
+- `tools/aula_l99_hacky/tests/test_protocol.py`: tests pinning `SESSION_INIT_IN`
+  to the real dongle's bytes and the version-byte tolerance of
+  `dongle_replies_match()` (version byte and its checksum may differ; anything
+  else must not, and a corrupt checksum is rejected).
+
+### Changed
+- `tools/aula_l99_hacky/protocol.py`: `SESSION_INIT_IN` corrected to the L99
+  dongle's own reply (byte 11 `0x08` → `0x29`, checksum `0x54` → `0x75`).
+- `tools/aula_l99_hacky/cli.py`: `_run_dongle()` uses `dongle_replies_match()`,
+  so `--handshake`/`--rtc` on the dongle no longer print a spurious
+  "reply did not match the value from prior art" warning; module docstring and
+  the cable-only guard message now say the dongle implements handshake + RTC-set.
+- Both READMEs: the dongle path is listed as confirmed (handshake + RTC-set),
+  with the session-init version byte documented and the still-untested dongle
+  colour/effect/settings commands listed as open work.
+
 ## [0.9.22] - 2026-08-02
 
 **`compile.sh`'s whole-tree syntax check no longer trips over the GUI's own

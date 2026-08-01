@@ -22,6 +22,17 @@ Confirmed on real hardware (wired `0C45:800A`, interface 3):
 - Every packet builder in `protocol.py` reproduces the vendor app's own packets
   byte-for-byte — see "Verifying against a capture" below.
 
+Also confirmed on real hardware (2.4G dongle `05AC:024F`, interface 3):
+
+- The F75_Initializer dongle probes work on the L99 dongle unchanged: the
+  session-init and session-query packets get their expected replies, and an
+  RTC-set returns the prior-art ack (`0C 10 00 00 … 1C`). Byte 11 of the
+  session-init reply is a per-device firmware version — `0x08` on the F75 MAX,
+  `0x29` on the L99 dongle under test — stable across sessions and unchanged
+  before/after the keyboard pairs, so `dongle_replies_match()` does not require
+  it to match. Keystrokes from a paired keyboard arrive on interface 0, not
+  this vendor channel.
+
 Decoded but **not** confirmed on hardware: byte 1 of the `0x28` block being a
 screen-view index rather than a constant. Only view 1 has ever been used, so
 what a higher value does is unknown. Nor is it known whether the panel reads a
@@ -31,8 +42,11 @@ what the vendor app would send, not because the result was observed.
 Not yet known: macros, and the meaning of byte 8 of the effect payload.
 Effects run on the keyboard itself — the vendor app
 polls `0xF5` ~27x/s to mirror the keyboard's current LED state in its preview,
-rather than driving the lighting from the PC. The dongle path has never been
-tested at all; its constants are inherited guesses from the AULA F75 MAX.
+rather than driving the lighting from the PC. On the dongle, only the handshake
+and RTC-set have been tested: its colour/effect/settings commands still await a
+capture of the vendor app driving the dongle (its 32-byte framing differs from
+the cable's 64-byte blocks), and the RTC block's monitor-field offsets remain
+unverified against the dongle.
 
 ## Usage
 

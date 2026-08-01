@@ -13,8 +13,10 @@ Usage:
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
 
 The colour and RTC commands are confirmed against real hardware on the wired
-0C45:800A path. `--send-hex` remains the slot for testing a candidate packet
-pulled from a fresh capture of the vendor app.
+0C45:800A path. The dongle (05AC:024F, interface 3) is confirmed for its
+handshake and RTC-set: the F75_Initializer probes get their expected replies
+and an RTC write returns the prior-art ack. `--send-hex` remains the slot for
+testing a candidate packet pulled from a fresh capture of the vendor app.
 
 The same RTC packet carries the touchscreen's CPU/GPU and weather readout, so
 `--rtc` doubles as the way to drive that. Those fields are decoded from a
@@ -79,7 +81,7 @@ def _run_dongle(transport: HidrawTransport, tx: protocol.Transaction, debug: boo
         print(f"{tx.name}: out={outgoing.hex()}")
     reply = transport.read_report(max_length=protocol.DONGLE_PACKET_SIZE)
     print(f"{tx.name}: in ={reply.hex()}")
-    if tx.expected_reply is not None and reply != tx.expected_reply:
+    if tx.expected_reply is not None and not protocol.dongle_replies_match(reply, tx.expected_reply):
         print(f"{tx.name}: WARNING reply did not match the value from prior art", file=sys.stderr)
     return reply
 
@@ -134,7 +136,8 @@ def _run_transactions(transport, transactions, args) -> int:
 def _require_cable(device, what: str):
     if not device.is_cable:
         print(f"{what} is only implemented for the wired 0C45:800A path; "
-              f"the dongle's packet format has never been captured.", file=sys.stderr)
+              f"the dongle path currently implements only the handshake and "
+              f"RTC-set.", file=sys.stderr)
         return False
     return True
 

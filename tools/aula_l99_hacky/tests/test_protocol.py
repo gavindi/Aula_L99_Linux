@@ -333,3 +333,27 @@ def test_stream_frame_has_no_session_framing_and_commits_last():
         [protocol.CMD_PREFIX, protocol.OP_COLOR_STREAM])
     assert transactions[0].outgoing[8] == protocol.STREAM_BLOCK_COUNT
     assert transactions[1].outgoing == CAPTURED_STREAM_PAYLOAD[:protocol.PACKET_SIZE]
+
+
+def test_dongle_session_init_reply_is_the_l99_dongles_own_bytes():
+    # Read back from the real L99 dongle (05AC:024F) with the keyboard paired
+    # and unpaired: identical every time, byte 11 = 0x29 (0x08 on the F75).
+    reply = protocol.SESSION_INIT_IN
+    assert len(reply) == protocol.DONGLE_PACKET_SIZE
+    assert reply[protocol.SESSION_INIT_VERSION_BYTE] == 0x29
+    assert reply[-1] == protocol.checksum(reply[:-1])
+    assert reply[:7] == bytes.fromhex("02000040300000")
+    assert reply[7:11] == bytes.fromhex("450c0a80")
+
+
+def test_dongle_replies_match_tolerates_the_version_byte():
+    assert protocol.dongle_replies_match(protocol.SESSION_INIT_IN, protocol.SESSION_INIT_IN)
+    f75_prior_art = bytes.fromhex(
+        "02000040300000450c0a800801ffff0000000000000000000000000000000054"
+    )
+    assert protocol.dongle_replies_match(protocol.SESSION_INIT_IN, f75_prior_art)
+    other = bytearray(protocol.SESSION_INIT_IN)
+    other[3] = 0x00  # not the version byte: must not match
+    assert not protocol.dongle_replies_match(bytes(other), protocol.SESSION_INIT_IN)
+    assert not protocol.dongle_replies_match(
+        protocol.SESSION_INIT_IN, bytes.fromhex("00"))

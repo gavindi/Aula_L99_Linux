@@ -176,8 +176,9 @@ membership in the `dialout` group. No root otherwise.
   per-length lookup table solved from captures)
 - The panel's content-validation mechanism (its behaviour is mapped across
   ~20 hardware data points; the algorithm isn't decoded)
-- Keyboard macros; the 2.4G dongle path (constants inherited from the AULA
-  F75 MAX, never tested); touchscreen touch input, brightness and power
+- Keyboard macros; the 2.4G dongle's colour/effect/settings path (its handshake
+  and RTC-set are confirmed; the rest still awaits a capture of the vendor app
+  driving the dongle); touchscreen touch input, brightness and power
 - One unidentified flash slot at `0x04200000`
 
 ## Repository layout
