@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.22] - 2026-08-02
+
+**`compile.sh`'s whole-tree syntax check no longer trips over the GUI's own
+venv.** `compileall` walked into `tools/aula_l99_gui/.venv`, where PySide6
+ships non-Python files (Jinja templates) with `.py` suffixes that are not
+valid Python, so the check failed on the venv rather than the project.
+
+### Fixed
+- `compile.sh` now excludes the venv from the syntax check
+  (`-x '(__pycache__|\.venv)'`).
+
 ## [0.9.21] - 2026-08-02
 
 **The monitor toggle's state now survives restarts, in a config file any
@@ -30,6 +41,13 @@ same running/not-running state by reading the same file.
 - A graceful quit does not persist "off": KeyboardTab's shutdown stops the
   stream but deliberately skips the state change, so closing the app with the
   stream running leaves it running for the next launch.
+
+### Fixed
+- Startup crash when the saved state was "running": the loading overlay was
+  created after the first device refresh could already emit `busy_changed` via
+  the auto-resumed monitor stream, so `_on_any_busy_changed` hit
+  `_loading_overlay` before it existed (`AttributeError`). The overlay is now
+  created before any wiring or refresh.
 
 ## [0.9.20] - 2026-08-02
 

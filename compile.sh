@@ -26,5 +26,8 @@ fi
 # -q once, not twice: a second -q suppresses the error output as well as the
 # progress, which for a checker means a silent non-zero exit. "$@" lets a
 # caller narrow this to one package (./compile.sh aula_l99_gui).
-"${PYTHON[@]}" -m compileall -q -x '__pycache__' "${@:-.}"
+# The venv must be excluded: it lives under tools/aula_l99_gui/.venv and
+# PySide6 ships non-Python files (Jinja templates) with .py suffixes that are
+# not valid Python and would fail the syntax check.
+"${PYTHON[@]}" -m compileall -q -x '(__pycache__|\.venv)' "${@:-.}"
 echo "compiled ok: ${*:-tools/}"

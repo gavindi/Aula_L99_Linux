@@ -157,6 +157,24 @@ class MainWindow(QMainWindow):
 
         self._debug_log = DebugLog()
 
+        # Floating overlay, not part of any layout -- parented straight to
+        # the window so it can sit centred over everything (title bar and
+        # tab content alike) rather than just one tab's own area. Created
+        # early, before any device refresh can emit a busy/monitoring signal:
+        # _on_any_busy_changed touches it, and the first refresh below
+        # (via _refresh_tab_icons) can fire while the auto-resumed monitor
+        # stream starts.
+        self._loading_movie = QMovie(str(theme.LOADING_GIF))
+        self._loading_overlay = QLabel(self)
+        self._loading_overlay.setMovie(self._loading_movie)
+        self._loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._loading_overlay.setFixedSize(theme.LOADING_GIF_SIZE)
+        self._loading_overlay.move(
+            (self.width() - self._loading_overlay.width()) // 2,
+            (self.height() - self._loading_overlay.height()) // 2,
+        )
+        self._loading_overlay.setVisible(False)
+
         self._device_tab = DeviceTab()
         self._device_tab.setObjectName("DeviceTab")
         self._keyboard_tab = KeyboardTab(self._device_tab.keyboard, self._debug_log)
@@ -215,19 +233,9 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._refresh_tab_icons)
         self._refresh_tab_icons(self._tabs.currentIndex())  # currentChanged
 
-        # Floating overlay, not part of any layout -- parented straight to
-        # the window so it can sit centred over everything (title bar and
-        # tab content alike) rather than just one tab's own area.
-        self._loading_movie = QMovie(str(theme.LOADING_GIF))
-        self._loading_overlay = QLabel(self)
-        self._loading_overlay.setMovie(self._loading_movie)
-        self._loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._loading_overlay.setFixedSize(theme.LOADING_GIF_SIZE)
-        self._loading_overlay.move(
-            (self.width() - self._loading_overlay.width()) // 2,
-            (self.height() - self._loading_overlay.height()) // 2,
-        )
-        self._loading_overlay.setVisible(False)
+        # Re-raised here: setCentralWidget can reparent/restack central above
+        # siblings added before it, which would otherwise bury the overlay
+        # under the tab content it's supposed to float over.
         self._loading_overlay.raise_()
 
         for tab in (
