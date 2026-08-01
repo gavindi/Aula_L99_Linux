@@ -11,3 +11,9 @@ extracted_assets/
 # Python
 __pycache__/
 *.pyc
+.venv/
+
+# IDE
+*.code-workspace
+Aula_L99.code-workspace
+
