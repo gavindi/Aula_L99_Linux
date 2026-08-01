@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.20] - 2026-08-02
+
+**The GUI can now drive the touchscreen's system-monitor readout itself: a
+Config-tab toggle streams the host's CPU/GPU load to the panel every 5s, the
+way the vendor app streams its stats at ~1 Hz. The load source is a new
+dependency-free Linux sampler (`/proc/stat` deltas for CPU; `nvidia-smi` or
+the drm `gpu_busy_percent` sysfs node for GPU), and the stream is coordinated
+with colour polling exactly like a User Lighting animation: it holds the
+keyboard's hidraw handle for its whole run, so polling and one-shot RTC writes
+stand off while it is active, but it is not "busy" — no loading overlay, and
+closing the app just stops it.**
+
+### Added
+- `tools/aula_l99_gui/workers.py`: `MonitorStreamWorker` — sends
+  `build_rtc_transfer` every `period` seconds on one open transport until
+  `stop()`, reporting each send's load via a `sent(cpu, gpu)` signal. The
+  inter-send sleep is sliced so `stop()`/shutdown return within ~50ms even on
+  the 5s period, and a missed ack is counted but not retried (the next send
+  is 5s away anyway).
+- `tools/aula_l99_gui/monitor_stats.py`: `MonitorSampler` — dependency-free
+  CPU/GPU load source. CPU is the busy share of `/proc/stat`'s aggregate `cpu`
+  line between samples; GPU is `nvidia-smi` when on PATH, else the first
+  `/sys/class/drm/card*/device/gpu_busy_percent` node, else 0.
+- `tools/aula_l99_gui/keyboard_tab.py`: monitor-stream lifecycle
+  (`set_monitoring`, `_start/_stop_monitor_stream`, `monitoring_changed`,
+  `monitor_loaded`) and a `shutdown` stop; `_run_transactions` refuses a
+  one-shot RTC write while the stream is active.
+- `tools/aula_l99_gui/config_tab.py`: "System Monitor" group — a "Send
+  CPU/GPU Load" checkbox toggle (the same themed control the other boolean
+  settings use) and a live readout of the last sent values. The toggle stays
+  clickable while checked so the stream can always be stopped.
+- `tools/aula_l99_gui/main_window.py`: wires the toggle to KeyboardTab, pauses
+  colour polling while monitoring (with the same aggregate busy the User
+  Lighting animation uses), and disables the Config tab's other controls for
+  the duration.
+- `tools/aula_l99_gui/tests/test_monitor_stats.py`: sampler unit tests with
+  faked `/proc/stat` and GPU sources.
+
+### Notes
+- The first 5s send reports a CPU load of 0 (no prior `/proc/stat` delta yet);
+  the panel shows real values from the second tick.
+- `re_notes/system_monitor_block.md`'s "The GUI does not populate these yet"
+  note is now partially outdated — the GUI sends load, but not temperatures or
+  weather, which still need their own sources (`hwmon`/`lm-sensors`, and a
+  weather API decision).
+
 ## [0.9.19] - 2026-08-02
 
 **A controlled real-hardware session on the touchscreen settled the "view"

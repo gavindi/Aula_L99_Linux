@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,7 @@ class ConfigTab(QWidget):
     busy_changed = Signal(bool)  # never emitted; keeps main_window's tab interface uniform
     set_clock_requested = Signal()
     poll_interval_changed = Signal(int)
+    monitor_toggled = Signal(bool)  # checked = stream CPU/GPU load
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
@@ -43,6 +45,7 @@ class ConfigTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_keyboard_group())
+        layout.addWidget(self._build_monitor_group())
         layout.addWidget(self._build_poll_group())
         layout.addWidget(self._build_log_group(debug_log), stretch=1)
 
@@ -66,6 +69,27 @@ class ConfigTab(QWidget):
         # the only button that starts one is right above this bar.
         self.progress_bar = QProgressBar()
         column.addWidget(self.progress_bar)
+        return group
+
+    def _build_monitor_group(self) -> QGroupBox:
+        group = QGroupBox("System Monitor")
+        column = QVBoxLayout(group)
+
+        row = QHBoxLayout()
+        # A checkbox toggle like the other boolean controls: checked = stream.
+        # Driven by KeyboardTab, which owns the write path; the toggle only
+        # forwards intent.
+        self.monitor_toggle = QCheckBox("Send CPU/GPU Load")
+        self.monitor_toggle.toggled.connect(self.monitor_toggled)
+        row.addWidget(self.monitor_toggle)
+        self.monitor_readout = QLabel("not running")
+        row.addWidget(self.monitor_readout)
+        row.addStretch(1)
+        column.addLayout(row)
+
+        # Fed by KeyboardTab.monitor_loaded with the load values of the most
+        # recent send, so the readout is a live check rather than a promise.
+        self._monitor_last = None
         return group
 
     def _build_poll_group(self) -> QGroupBox:
@@ -109,6 +133,32 @@ class ConfigTab(QWidget):
 
     def _sync_actions(self) -> None:
         self.set_clock_button.setEnabled(self._device_ready and not self._external_busy)
+        # The monitor toggle must stay clickable while checked so the user can
+        # stop the stream even though everything else is disabled for it.
+        checked = self.monitor_toggle.isChecked()
+        self.monitor_toggle.setEnabled(
+            self._device_ready and (checked or not self._external_busy))
+        self.poll_interval_spin.setEnabled(self._device_ready and not self._external_busy)
+
+    def _on_monitoring_changed(self, monitoring: bool) -> None:
+        """Sync the toggle with the stream's real state -- a stream can end
+        itself (transport failure), and the toggle must not stay checked."""
+        if self.monitor_toggle.isChecked() != monitoring:
+            self.monitor_toggle.setChecked(monitoring)
+        if not monitoring:
+            self._monitor_last = None
+        self._update_monitor_readout()
+
+    def _on_monitor_loaded(self, cpu_load: int, gpu_load: int) -> None:
+        self._monitor_last = (cpu_load, gpu_load)
+        self._update_monitor_readout()
+
+    def _update_monitor_readout(self) -> None:
+        if self._monitor_last is None:
+            self.monitor_readout.setText("not running")
+            return
+        cpu_load, gpu_load = self._monitor_last
+        self.monitor_readout.setText(f"last sent: CPU {cpu_load}% · GPU {gpu_load}%")
 
     def show_write_progress(self, value: int, maximum: int) -> None:
         self.progress_bar.setMaximum(maximum)

@@ -256,10 +256,13 @@ Omitting every flag leaves the nine bytes zero, so a bare `--rtc` and the
 GUI's "Set Clock to Now" both still emit exactly the block they emitted before
 any of this was known.
 
-The GUI does not populate these yet. Doing so means giving it a stats source
-(`psutil` for load, `/sys/class/hwmon` or `lm-sensors` for temperatures) and,
-for the weather half, deciding whether to call out to a network API at all.
-Note also that `OP_COLOR_QUERY` polling is known to disturb a running effect
-(see the colour-poll notes), so a periodic monitor write on the same handle
-needs to be sequenced behind the poll thread the way `_pending_write` already
-does for RTC writes.
+The GUI sends the load half already: the Config tab's "Send CPU/GPU Load"
+toggle streams `MonitorSampler`'s values (CPU from `/proc/stat`, GPU from
+`nvidia-smi` or the drm `gpu_busy_percent` node) to the panel every 5s via
+`MonitorStreamWorker`. Temperatures and weather are still unwired -- that
+means giving the GUI a temperature source (`/sys/class/hwmon` or `lm-sensors`)
+and, for the weather half, deciding whether to call out to a network API at
+all. Note also that `OP_COLOR_QUERY` polling is known to disturb a running
+effect (see the colour-poll notes), so the periodic monitor write is
+sequenced behind the poll thread the way `_pending_write` already does for RTC
+writes -- and the monitor stream pauses colour polling for its whole run.

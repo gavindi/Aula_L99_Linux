@@ -29,7 +29,14 @@ from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
 from .keyboard_overlay import KeyboardOverlay
-from .workers import CallableResultWorker, KeyboardWorker, read_colors, start_worker
+from .monitor_stats import MonitorSampler
+from .workers import (
+    CallableResultWorker,
+    KeyboardWorker,
+    MonitorStreamWorker,
+    read_colors,
+    start_worker,
+)
 
 DEFAULT_POLL_INTERVAL_MS = 100
 # The vendor app itself polls its colour-query opcode ~27x/s (~37ms) to drive
@@ -42,6 +49,13 @@ DEFAULT_POLL_INTERVAL_MS = 100
 MIN_POLL_INTERVAL_MS = 1
 MAX_POLL_INTERVAL_MS = 5000
 
+# The touchscreen's monitor readout is driven through this tab's RTC write
+# path, streamed at the same ~1 Hz cadence the vendor app uses. Every 5s keeps
+# the readout current without hammering the RTC block; the worker slices its
+# inter-send sleep so stop() stays responsive regardless (see workers.py).
+MONITOR_PERIOD_SECONDS = 5.0
+MONITOR_STOP_WAIT_MS = 1000
+
 
 class KeyboardTab(QWidget):
     busy_changed = Signal(bool)
@@ -49,6 +63,12 @@ class KeyboardTab(QWidget):
     # the write -- the Config tab, since this one no longer has any controls
     # of its own to put a progress bar under.
     write_progress = Signal(int, int)
+    # The system-monitor stream's running state, for MainWindow to pause
+    # colour polling with (the way it does for a User Lighting animation).
+    monitoring_changed = Signal(bool)
+    # (cpu_load, gpu_load) of the monitor stream's most recent send, for the
+    # Config tab's readout.
+    monitor_loaded = Signal(int, int)
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
@@ -63,6 +83,10 @@ class KeyboardTab(QWidget):
         self._poll_busy = False
         self._external_busy = False
         self._pending_write = None
+        self._monitor_worker = None
+        self._monitor_thread = None
+        self._monitoring = False
+        self._shutting_down = False
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
@@ -124,7 +148,7 @@ class KeyboardTab(QWidget):
         return self._busy
 
     def _run_transactions(self, transactions: list) -> None:
-        if self._busy:
+        if self._busy or self._monitoring:
             return
         device_path = self._selector.current_path()
         if device_path is None:
@@ -174,6 +198,85 @@ class KeyboardTab(QWidget):
         # done, which races the still-shutting-down old thread.
         self._set_busy(False)
 
+    # -- system-monitor stream ---------------------------------------------
+
+    @property
+    def is_monitoring(self) -> bool:
+        return self._monitoring
+
+    def set_monitoring(self, enabled: bool) -> None:
+        """Start or stop the touchscreen's CPU/GPU load stream, driven by the
+        Config tab's toggle. Not "busy" in the _busy sense: like a User
+        Lighting animation it runs indefinitely, so it must not raise the
+        loading overlay or block closing -- it only pauses colour polling.
+        """
+        if enabled:
+            self._start_monitor_stream()
+        else:
+            self._stop_monitor_stream()
+
+    def _start_monitor_stream(self) -> None:
+        if self._monitoring or self._busy:
+            return
+        device_path = self._selector.current_path()
+        if device_path is None:
+            QMessageBox.warning(self, "Keyboard", "No device selected.")
+            return
+
+        # The sampler is created up front on the GUI thread and handed to the
+        # worker, which runs it on its own thread; it keeps only its own
+        # /proc/stat deltas as state, so sharing it across the two threads is
+        # safe (the worker is the only one calling it).
+        self._monitor_worker = MonitorStreamWorker(
+            device_path, MonitorSampler(), period=MONITOR_PERIOD_SECONDS)
+        self._monitor_worker.finished.connect(self._on_monitor_finished)
+        self._monitor_worker.sent.connect(self.monitor_loaded)
+        self._monitor_thread = start_worker(self._monitor_worker)
+        self._set_monitoring(True)
+        self._debug_log.append(
+            "Keyboard", f"-- streaming CPU/GPU load every {MONITOR_PERIOD_SECONDS:g}s")
+
+    def _stop_monitor_stream(self) -> None:
+        """Stop the stream and wait for its thread, so the device is free
+        before whatever comes next opens it. A no-op when nothing is running.
+
+        Blocking the GUI thread here is deliberate: the wait is at most ~50ms
+        after the current send (the worker slices its inter-send sleep), and
+        every alternative means threading a continuation through every caller
+        for a delay too short to see.
+        """
+        if not self._monitoring:
+            return
+        self._monitor_worker.stop()
+        if self._monitor_thread is not None:
+            self._monitor_thread.wait(MONITOR_STOP_WAIT_MS)
+        # During shutdown the saved toggle state must survive the stop (a
+        # graceful quit should leave "running" so the next run resumes it),
+        # so don't emit monitoring_changed here.
+        if not self._shutting_down:
+            self._set_monitoring(False)
+
+    def _on_monitor_finished(self, success: bool, message: str) -> None:
+        # Fires on a clean stop too, so _set_monitoring's `if monitoring ==
+        # self._monitoring: return` keeps the toggle state right whichever way
+        # the stream ended. Skipped entirely during shutdown: nothing left to
+        # update, and no dialogs when the window is already going away.
+        if self._shutting_down:
+            return
+        self._debug_log.append("Keyboard", f"-- {message}")
+        self._set_monitoring(False)
+        if not success:
+            text = message
+            if "permission" in message.lower():
+                text = f"{message}\n\n{KEYBOARD_PERMISSION_HINT}"
+            QMessageBox.critical(self, "Keyboard Error", text)
+
+    def _set_monitoring(self, monitoring: bool) -> None:
+        if monitoring == self._monitoring:
+            return
+        self._monitoring = monitoring
+        self.monitoring_changed.emit(monitoring)
+
     # -- colour polling -----------------------------------------------------
 
     def _on_poll_tick(self) -> None:
@@ -221,6 +324,8 @@ class KeyboardTab(QWidget):
         fired, so the underlying C++ QThread may no longer exist to call
         into."""
         self._poll_timer.stop()
+        self._shutting_down = True
+        self._stop_monitor_stream()
         if self._poll_busy and self._poll_thread is not None:
             self._poll_thread.quit()
             self._poll_thread.wait()

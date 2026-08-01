@@ -11,6 +11,7 @@ I/O.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -181,6 +182,97 @@ class ColorStreamWorker(QObject):
             message = f"stream stopped after {frames} frames"
             if late:
                 message += f" ({late} over the {self._period * 1000:.0f}ms frame budget)"
+            self.finished.emit(True, message)
+        except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
+            self.finished.emit(False, str(exc))
+
+
+class MonitorStreamWorker(QObject):
+    """Sends the touchscreen's CPU/GPU and weather readout every `period`
+    seconds until stopped -- the live-system-monitor companion to
+    KeyboardWorker's one-shot RTC write (opcode 0x28; see
+    re_notes/system_monitor_block.md).
+
+    Same shape as ColorStreamWorker rather than KeyboardWorker for the same
+    reasons as the colour stream: the transport stays open for the whole run
+    so the device is only ever claimed for these sends, `load_fn` computes
+    each frame as it goes, and nothing is retried -- a send that misses its
+    ack is stale `period` seconds later anyway, so resending would just push
+    the next one back.
+
+    `load_fn` is the stats source: a no-arg callable returning a
+    kb_protocol.MonitorData. It runs on *this* thread, so it must be pure --
+    no widget access, no shared mutable state. All-zero fields are the vendor
+    app's "nothing to report", so a load-only source just leaves the
+    temperatures and weather at their defaults. `view` is byte 1 of the RTC
+    block, which the panel ignores for values of 0 and otherwise routes to its
+    real-time readout frame (>= 1).
+    """
+
+    finished = Signal(bool, str)
+    sent = Signal(int, int)  # cpu_load, gpu_load of the most recent send
+
+    def __init__(self, device_path: str,
+                 load_fn: Callable[[], kb_protocol.MonitorData],
+                 period: float = 5.0, view: int = 1,
+                 gap: float = kb_protocol.PACKET_GAP_SECONDS,
+                 timeout: float = 1.0):
+        super().__init__()
+        self._device_path = device_path
+        self._load_fn = load_fn
+        self._period = period
+        self._view = view
+        self._gap = gap
+        self._timeout = timeout
+        self._stop = False
+
+    def stop(self) -> None:
+        """Ask the loop to finish after the send it is on.
+
+        Called straight from the GUI thread rather than through a queued
+        signal: this worker's thread is inside `run()` for the whole session
+        and never returns to its event loop, so a queued slot would not be
+        delivered until the loop had already ended. A lone bool assignment is
+        safe to do that way; anything more would not be.
+        """
+        self._stop = True
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            sends = late = failures = 0
+            started = time.monotonic()
+            with HidrawTransport(self._device_path, timeout_seconds=self._timeout) as transport:
+                while not self._stop:
+                    frame_started = time.monotonic()
+                    monitor = self._load_fn()
+                    for tx in kb_protocol.build_rtc_transfer(
+                            datetime.now(), monitor, self._view):
+                        transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+                        time.sleep(self._gap)
+                        if tx.expect_reply:
+                            reply = transport.get_feature(
+                                kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+                            time.sleep(self._gap)
+                            if not _is_acked(tx, reply):
+                                failures += 1
+                    sends += 1
+                    self.sent.emit(monitor.cpu_load, monitor.gpu_load)
+                    remaining = self._period - (time.monotonic() - frame_started)
+                    if remaining <= 0:
+                        late += 1
+                        continue
+                    # Sliced so stop() is honoured within ~50ms even on a
+                    # long period; the whole 5s would make the GUI's stop
+                    # button and shutdown block for that long otherwise.
+                    while remaining > 0 and not self._stop:
+                        time.sleep(min(0.05, remaining))
+                        remaining -= 0.05
+            message = f"monitor stream stopped after {sends} send(s)"
+            if failures:
+                message += f" ({failures} not acked)"
+            if late:
+                message += f" ({late} over the {self._period:g}s period)"
             self.finished.emit(True, message)
         except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
             self.finished.emit(False, str(exc))
