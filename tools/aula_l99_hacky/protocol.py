@@ -698,8 +698,12 @@ def build_rtc_blocks(when: datetime, monitor: MonitorData | None = None,
     `view` is byte 1, which an earlier reading of this block took for a
     constant 0x01. The vendor app computes it as the index of the selected
     screen view in its own list, plus one, so 1 means "the first view" -- which
-    is why it looked constant. Only view 1 has ever been captured; what higher
-    values do is untested.
+    is why it looked constant. On hardware, view 0 is ignored (the panel never
+    shows the data) while every value >= 1 lands on the same real-time readout
+    frame; views 1, 2, 3 and 5 were confirmed identical in routing, and the
+    byte does not switch the panel's screen. The values are only visible while
+    the panel is actually showing that frame, which is a property of the
+    screen, not of the view byte.
 
     `monitor` fills bytes 13..21 with the CPU/GPU and weather readout the panel
     displays; each field was confirmed on hardware by writing a distinctive

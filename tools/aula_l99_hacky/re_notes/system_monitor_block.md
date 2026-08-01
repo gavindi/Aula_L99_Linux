@@ -78,7 +78,8 @@ CPU load, have no equivalent story: alignment padding is as likely as a field
 this app build doesn't use.
 
 Both caveats that apply everywhere in this note apply here too: one code path
-in one app build, and only view 1 has ever been exercised.
+in one app build, and only views 1, 2, 3 and 5 have ever been exercised on the
+panel.
 
 ## Where the vendor app gets each field
 
@@ -124,9 +125,40 @@ which makes 0 ambiguous between "cloudy" and "unrecognised".
 `protocol.py` hardcodes `block[1] = 0x01`. The app computes it as
 `MUI::LCDViewList::GetCurSel() + 1` -- the index of the selected screen
 page/view in the app's own list, 1-based. `0x01` is therefore "first view",
-not a fixed tag. Which view is selected presumably decides which panel layout
-the values land in. Only view 1 has ever been captured, so what values 2+ do
-is untested.
+not a fixed tag.
+
+Tested on the panel on 2026-08-02, with the panel held on the real-time frame
+for the whole session and each value sent once (single shots are reliable;
+see below):
+
+- **view 0 is ignored.** Neither single shots nor fifty streamed sends changed
+  anything on the panel. The byte is a 1-based index, so 0 is outside its
+  domain, which matches `GetCurSel() + 1` never producing it.
+- **views 1, 2, 3 and 5 all land identically** on the same real-time readout
+  frame. The byte does not switch the panel's screen (view 1 sent while on a
+  different screen changed nothing there), and it does not select among
+  frames: any value >= 1 routes to the one frame that shows this data. Whether
+  values above 5 behave the same is untested, but nothing observed suggests
+  the panel distinguishes among them.
+
+## A retest corrected an earlier packet-loss theory
+
+An earlier session concluded that a single `--rtc` send often fails to reach
+the panel -- the keyboard acks every packet, but five single sends of the same
+values changed nothing, while streaming them (231 sends / 30 s) updated the
+panel. That looked like lossy keyboard-to-panel forwarding.
+
+A controlled retest on 2026-08-02 disproved it. With the panel fixed on the
+real-time frame and the view byte the only variable, **seven single shots in a
+row all landed** (views 1, 2, 3 and 5, then view 1 three more times with
+distinct values, all confirmed on the panel). The earlier "loss" was a
+screen-state confound: a single send only shows up when the panel is
+displaying the real-time frame, and during those earlier sends it evidently
+wasn't. The view byte does not summon the frame or select a screen, so a send
+that is not visible is not a lost packet -- the panel is just looking at a
+different screen. `--rtc-stream SECS` remains useful for a live readout that
+keeps refreshing, as the vendor app's ~1 Hz stream does, but it is not a
+reliability workaround.
 
 ## Confidence
 
@@ -149,9 +181,10 @@ the block's byte 0..12 layout (independently, against wall clock), and the
 
 Still untested, and deliberately not upgraded by the run above:
 
-- **View indices above 1.** The hardware check used the default `view=1`. What
-  a 2 or 3 does, or whether the panel has more than one view at all, is
-  unknown.
+- **Views above 5.** Views 1, 2, 3 and 5 are confirmed identical in routing
+  and view 0 is confirmed dead; whether the panel owns any layout that a
+  higher value selects (or whether it distinguishes among values at all)
+  remains unknown.
 - **The upper end of each range.** Nothing establishes what the panel does with
   a load above 100 or a nonsense condition code.
 
@@ -166,12 +199,6 @@ rather than silently sending a byte the panel cannot render. The protocol
 builder still accepts them — the two's-complement encoding is tested and
 faithful to the vendor app — for capture reproduction and the `--send-hex`
 path.
-
-Do not use the repo's checked-in `Windows/AULA L99/data.ini` as
-corroboration. It reads `CPU=21 CPU_Temperature=42 GPU=7
-GPU_Temperature=44`, which does not match the captured bytes -- the file was
-copied at some unrelated moment, not during this capture. Its
-`GPU_Temperature=44` colliding with the captured byte 14 is a coincidence of
 
 Do not use the repo's checked-in `Windows/AULA L99/data.ini` as
 corroboration. It reads `CPU=21 CPU_Temperature=42 GPU=7
@@ -214,6 +241,10 @@ CLI exposes both:
 python3 -m aula_l99_hacky.cli --rtc --cpu-load 42 --cpu-temp 55 \
     --air-temp 26 --day-high 34 --night-low 25 --condition rain --humidity 95
 ```
+
+Add `--rtc-stream 30` to keep the values refreshing for a live readout, the
+way the vendor app streams at ~1 Hz. A single send already updates the panel
+while it is showing the real-time frame (see the retest section).
 
 Values are explicit on purpose, and that is what let the field assignments be
 confirmed: sending a byte you chose is the only way to see which cell of the

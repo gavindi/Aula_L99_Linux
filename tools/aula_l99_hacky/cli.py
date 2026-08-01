@@ -8,6 +8,7 @@ Usage:
     python3 -m aula_l99_hacky.cli --effect 0x05 --color 0000FF --speed 5
     python3 -m aula_l99_hacky.cli --rtc
     python3 -m aula_l99_hacky.cli --rtc --cpu-load 42 --cpu-temp 55 --condition rain
+    python3 -m aula_l99_hacky.cli --rtc --rtc-stream 30 --cpu-load 42 --cpu-temp 55
     python3 -m aula_l99_hacky.cli --spectrum 100 --spectrum-hold 3
     python3 -m aula_l99_hacky.cli --send-hex "04 23 00 00 00 00 00 00 09 ..."
 
@@ -18,7 +19,10 @@ pulled from a fresh capture of the vendor app.
 The same RTC packet carries the touchscreen's CPU/GPU and weather readout, so
 `--rtc` doubles as the way to drive that. Those fields are decoded from a
 single capture (re_notes/system_monitor_block.md); sending distinctive values
-and watching which cell of the panel changes is how to confirm them.
+and watching which cell of the panel changes is how to confirm them. One send
+lands on the panel's real-time frame, provided the panel is actually showing
+it; `--rtc-stream SECS` keeps the session going for a live readout, as the
+vendor app does.
 
 `--spectrum` is the same idea for the panel's spectrum analyser: the host does
 the FFT and sends 23 band levels, so driving one band at a time is how to
@@ -248,15 +252,43 @@ def _monitor_from_args(args: argparse.Namespace) -> protocol.MonitorData:
     )
 
 
+def _stream_rtc(device, transactions, args) -> int:
+    """Send the RTC session repeatedly on one open transport until
+    args.rtc_stream seconds elapse, at the vendor app's ~1 Hz cadence.
+
+    The vendor app keeps this packet streaming so the panel's readout stays
+    current rather than going stale. A single send already updates the panel
+    (assuming it is showing the real-time frame), so this is for a live
+    readout, not a reliability workaround.
+    """
+    deadline = time.monotonic() + args.rtc_stream
+    sent = 0
+    failures = 0
+    with HidrawTransport(device.path, timeout_seconds=args.timeout) as transport:
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            failures += _run_transactions(transport, transactions, args)
+            sent += 1
+            time.sleep(max(0.0, 1.0 - (time.monotonic() - started)))
+    print(f"streamed the RTC session {sent} times over {args.rtc_stream:g}s")
+    return 1 if failures else 0
+
+
 def cmd_rtc(args: argparse.Namespace) -> int:
     device = find_l99()
-    now = datetime.now()
 
     try:
         monitor = _monitor_from_args(args)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.view < 1:
+        print(f"error: --view must be >= 1; the panel ignores view 0 "
+              f"(the vendor's index is GetCurSel() + 1)", file=sys.stderr)
+        return 2
+
+    now = datetime.now()
 
     what = f"setting clock to {now:%Y-%m-%d %H:%M:%S}"
     if args.view != 1:
@@ -271,6 +303,8 @@ def cmd_rtc(args: argparse.Namespace) -> int:
     if device.is_cable:
         print(f"using {device.path}; {what}")
         transactions = protocol.build_rtc_transfer(now, monitor, args.view)
+        if args.rtc_stream:
+            return _stream_rtc(device, transactions, args)
         return 1 if _run_sequence(device, transactions, args) else 0
 
     if not monitor.is_empty:
@@ -370,6 +404,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rtc", action="store_true",
                         help="set the keyboard's clock, and the panel's monitor "
                              "readout if any of the fields below are given")
+    parser.add_argument("--rtc-stream", type=float, default=0.0, metavar="SECS",
+                        help="keep sending the RTC session for this long "
+                             "(default %(default)s, one session only), for a "
+                             "live readout on the panel like the vendor app's "
+                             "~1 Hz stream; a single send already updates the "
+                             "panel, this just keeps it fresh")
     parser.add_argument("--send-hex", metavar="HEX", help="send one raw packet and print the reply")
 
     # The panel's spectrum analyser. Levels are explicit for the same reason
@@ -414,8 +454,10 @@ def build_parser() -> argparse.ArgumentParser:
                               "(see --list-conditions)")
     monitor.add_argument("--humidity", type=int, metavar="PCT", help="humidity per cent")
     monitor.add_argument("--view", type=int, default=1, metavar="N",
-                         help="screen-view index the values apply to "
-                              "(default %(default)s; only 1 has ever been captured)")
+                         help="screen-view index the values apply to (default "
+                              "%(default)s; the panel ignores view 0, and every "
+                              "value >= 1 lands on the real-time readout frame -- "
+                              "confirmed for views 1, 2, 3 and 5)")
     parser.add_argument("--list-conditions", action="store_true",
                         help="show the known weather condition codes and exit")
     parser.add_argument("--timeout", type=float, default=1.0, help="reply read timeout in seconds")

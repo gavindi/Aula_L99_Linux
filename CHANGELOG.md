@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.19] - 2026-08-02
+
+**A controlled real-hardware session on the touchscreen settled the "view"
+byte and corrected an earlier packet-loss theory. Byte 1 ("view") is a 1-based
+screen index (`GetCurSel() + 1`): view 0 is ignored by the panel (single shots
+and fifty streamed sends all changed nothing), while views 1, 2, 3 and 5 all
+land identically on the same real-time readout frame and never switch the
+panel's screen. A retest with the panel held on that frame showed seven single
+shots in a row all landing — so single `--rtc` sends are not lossy. The
+earlier "five sends changed nothing" result was a screen-state confound: the
+values only appear while the panel is showing the real-time frame, and the
+view byte neither summons it nor selects a screen.**
+
+### Added
+- `tools/aula_l99_hacky/cli.py`: `--rtc-stream SECS` repeats the RTC session on
+  one open transport at ~1 Hz for the given duration, mirroring the vendor
+  app, for a live readout that keeps refreshing. A single send already updates
+  the panel while it is on the real-time frame.
+
+### Changed
+- `tools/aula_l99_hacky/cli.py`: `--view` must now be >= 1; the panel ignores
+  view 0 (verified on hardware 2026-08-02), so it is rejected rather than
+  silently doing nothing. Help text for `--view`, the `--rtc-stream` help, and
+  the module docstring record the confirmed routing behaviour.
+- `tools/aula_l99_hacky/protocol.py`: `build_rtc_blocks()` docstring updated
+  with the view-0-rejected / view>=1-lands finding; the earlier single-send
+  packet-loss claim is removed.
+- `tools/aula_l99_hacky/re_notes/system_monitor_block.md`: the "Byte 1 is not
+  the constant we assumed" section now records the hardware results; the
+  "single send often never reaches the panel" section is replaced by a
+  retest section that disproves it (seven/seven single shots landed on the
+  fixed real-time frame) and attributes the earlier result to the panel not
+  showing that frame; a duplicated paragraph was also removed.
+
+### Notes
+- The protocol builder still accepts any 0..255 view byte; the >= 1 constraint
+  is a panel behaviour, enforced only at the CLI. Whether the panel owns any
+  layout that a view above 5 selects remains untested.
+
 ## [0.9.18] - 2026-08-02
 
 **A real-hardware test closed the one open question the system-monitor block
