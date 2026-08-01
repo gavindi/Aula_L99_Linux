@@ -171,6 +171,7 @@ class MainWindow(QMainWindow):
         self._config_tab.poll_interval_changed.connect(self._keyboard_tab.set_poll_interval)
         self._config_tab.monitor_toggled.connect(self._keyboard_tab.set_monitoring)
         self._keyboard_tab.monitoring_changed.connect(self._on_any_busy_changed)
+        self._keyboard_tab.monitoring_changed.connect(self._on_monitor_state_changed)
         self._keyboard_tab.monitoring_changed.connect(self._config_tab._on_monitoring_changed)
         self._keyboard_tab.monitor_loaded.connect(self._config_tab._on_monitor_loaded)
         self._keyboard_tab.write_progress.connect(self._config_tab.show_write_progress)
@@ -204,6 +205,10 @@ class MainWindow(QMainWindow):
         self._screen_found = False
         self._keyboard_status = ""
         self._screen_status = ""
+        # Only ever auto-resumes the saved monitor state once -- the first
+        # time the keyboard shows up -- so an unplug/replug doesn't restart a
+        # stream the user stopped in the meantime.
+        self._monitor_auto_started = False
         self._device_tab.keyboard.changed.connect(self._on_keyboard_presence)
         self._device_tab.screen.changed.connect(self._on_screen_presence)
 
@@ -321,6 +326,28 @@ class MainWindow(QMainWindow):
         self._keyboard_found = found
         self._keyboard_status = status
         self._update_usb_icon()
+        # Resume a monitor stream the previous run left running. Deferred
+        # until the keyboard is actually there because starting it while no
+        # device is selected just raises a warning. The checkbox is restored
+        # for the UI, and the stream is started explicitly rather than by
+        # relying on the toggle signal: if the box is somehow already checked
+        # (the user tried before the device was found), setChecked emits
+        # nothing and the resume would silently not happen. Calling
+        # set_monitoring directly is a harmless no-op when the start already
+        # happened through the signal.
+        if found and not self._monitor_auto_started:
+            self._monitor_auto_started = True
+            if settings.monitor_running() and not self._keyboard_tab.is_monitoring:
+                self._config_tab.monitor_toggle.setChecked(True)
+                self._keyboard_tab.set_monitoring(True)
+
+    def _on_monitor_state_changed(self, monitoring: bool) -> None:
+        # Save whenever the stream's real state flips -- a user toggle and a
+        # self-ended stream (transport failure) alike -- so the next run of
+        # the GUI (or a headless daemon reading the same file) starts in the
+        # same state. Deliberately NOT hooked to the toggle itself: a check
+        # with no device to stream to isn't a state worth persisting.
+        settings.set_monitor_running(monitoring)
 
     def _on_screen_presence(self, status: str, _enabled: bool, found: bool) -> None:
         self._screen_found = found

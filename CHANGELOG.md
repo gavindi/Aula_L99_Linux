@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.21] - 2026-08-02
+
+**The monitor toggle's state now survives restarts, in a config file any
+component can read.** The previous run's "Send CPU/GPU Load" state is saved to
+`~/.config/aula_l99/config.json` (or `$XDG_CONFIG_HOME/aula_l99/config.json`)
+and restored on the next launch: the checkbox comes back checked and the stream
+auto-resumes the first time the keyboard shows up. Because the file is plain
+JSON with no Qt dependency, a future headless daemon can start in exactly the
+same running/not-running state by reading the same file.
+
+### Added
+- `tools/aula_l99_gui/settings.py`: shared JSON settings — `monitor_running()`
+  / `set_monitor_running(bool)`, with atomic temp-file writes and graceful
+  fallback to defaults for missing, unreadable or malformed files.
+- `tools/aula_l99_gui/main_window.py`: persists every monitor-state change
+  (a user toggle or a self-ended stream alike) and, once per launch, restores
+  the saved state when the keyboard is present — deferred until the device is
+  found so a resume can't fire a "No device selected" warning.
+- `tools/aula_l99_gui/tests/test_settings.py`: settings tests (round-trip,
+  atomic writes, malformed/unreadable config, plain-JSON format).
+
+### Notes
+- A graceful quit does not persist "off": KeyboardTab's shutdown stops the
+  stream but deliberately skips the state change, so closing the app with the
+  stream running leaves it running for the next launch.
+
 ## [0.9.20] - 2026-08-02
 
 **The GUI can now drive the touchscreen's system-monitor readout itself: a
