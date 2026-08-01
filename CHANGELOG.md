@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18] - 2026-08-02
+
+**A real-hardware test closed the one open question the system-monitor block
+had left: negative temperatures. `--air-temp -1` puts `0xFF` on the wire —
+exactly what the vendor app's `_wtoi`-then-low-byte-store produces — and the
+panel reads the byte as unsigned, displaying "55" (the low two digits of 255)
+instead of -1. The two's-complement encoding was correct; the firmware just
+has no way to render a negative, so the CLI now refuses to send one rather
+than silently pushing a 250-something wrap onto the panel's readout.**
+
+### Changed
+- `tools/aula_l99_hacky/cli.py`: the five temperature flags (`--cpu-temp`,
+  `--gpu-temp`, `--air-temp`, `--day-high`, `--night-low`) must now be >= 0; a
+  negative value exits with an error explaining that the panel reads the byte
+  as unsigned (verified on hardware 2026-08-02: `--air-temp -1` -> `0xFF` ->
+  the panel shows "55"). Loads, humidity and condition are unaffected.
+- `tools/aula_l99_hacky/re_notes/system_monitor_block.md`: the "Negative
+  values" item moved out of "Still untested" into a confirmed finding, with
+  the exact panel behaviour recorded.
+
+### Notes
+- `protocol.MonitorData` and the builders still accept negative values and
+  still encode them two's complement — that behaviour is tested and faithful
+  to the vendor app, and `--send-hex` exists for anyone who genuinely wants
+  `0xFF` on the wire. The guard sits at the user-facing CLI, not the protocol.
+
 ## [0.9.17] - 2026-08-01
 
 **Improved the User Lighting colour-read flow so the overlay no longer depends on a single, sometimes partial read. The helper now short-circuits quickly, validates that it received a full 84-key table, and falls back to the last known full table when the hardware reply is incomplete.**

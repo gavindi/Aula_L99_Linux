@@ -226,6 +226,15 @@ def cmd_effect(args: argparse.Namespace) -> int:
 def _monitor_from_args(args: argparse.Namespace) -> protocol.MonitorData:
     """Build the monitor payload; an omitted flag stays zero, as in a
     clock-only write."""
+    for field in ("cpu_temp", "gpu_temp", "air_temp", "day_high", "night_low"):
+        value = getattr(args, field, None)
+        if value is not None and value < 0:
+            raise ValueError(
+                f"--{field.replace('_', '-')} must be >= 0: the panel reads "
+                "the byte as unsigned, so a negative temperature goes on the "
+                "wire as its two's-complement wrap and displays as garbage "
+                "(e.g. -1 -> 0xFF -> '55' on the panel); "
+                "see re_notes/system_monitor_block.md")
     return protocol.MonitorData(
         cpu_load=args.cpu_load or 0,
         cpu_temp=args.cpu_temp or 0,
@@ -387,9 +396,11 @@ def build_parser() -> argparse.ArgumentParser:
     # nothing to report. See re_notes/system_monitor_block.md.
     monitor = parser.add_argument_group(
         "system-monitor fields (used with --rtc)",
-        "Values the touchscreen displays. Range -128..255; negatives are sent "
-        "as two's complement, matching what the vendor app puts on the wire, "
-        "though whether the panel renders them as signed is untested.")
+        "Values the touchscreen displays. The temperature flags (--cpu-temp, "
+        "--gpu-temp, --air-temp, --day-high, --night-low) must be >= 0: the "
+        "panel reads the byte as unsigned, so a negative value renders as its "
+        "two's-complement wrap (e.g. -1 -> 255 -> '55'). See "
+        "re_notes/system_monitor_block.md.")
     monitor.add_argument("--cpu-load", type=int, metavar="PCT", help="CPU load per cent")
     monitor.add_argument("--cpu-temp", type=int, metavar="DEG", help="CPU temperature")
     monitor.add_argument("--gpu-load", type=int, metavar="PCT", help="GPU load per cent")

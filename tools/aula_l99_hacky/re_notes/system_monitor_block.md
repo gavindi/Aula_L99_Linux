@@ -152,11 +152,20 @@ Still untested, and deliberately not upgraded by the run above:
 - **View indices above 1.** The hardware check used the default `view=1`. What
   a 2 or 3 does, or whether the panel has more than one view at all, is
   unknown.
-- **Negative values.** `--air-temp -5` puts `0xFB` on the wire because that is
-  what the vendor app's `_wtoi`-then-low-byte-store would produce. Whether the
-  panel reads it as -5 or as 251 has not been looked at.
 - **The upper end of each range.** Nothing establishes what the panel does with
   a load above 100 or a nonsense condition code.
+
+**Negative temperatures were the open question here, and a real-hardware test
+has since answered it: the panel renders them as garbage.** On 2026-08-02,
+`--air-temp -1` put `0xFF` on the wire (exactly what the vendor app's
+`_wtoi`-then-low-byte-store would produce) and the panel displayed "55" — the
+low two digits of 255, not -1. The temperature fields are unsigned on the
+firmware side: the byte is displayed literally, so any negative value shows up
+as a 250-something wrap. The CLI therefore rejects negative temperatures now,
+rather than silently sending a byte the panel cannot render. The protocol
+builder still accepts them — the two's-complement encoding is tested and
+faithful to the vendor app — for capture reproduction and the `--send-hex`
+path.
 
 Do not use the repo's checked-in `Windows/AULA L99/data.ini` as
 corroboration. It reads `CPU=21 CPU_Temperature=42 GPU=7

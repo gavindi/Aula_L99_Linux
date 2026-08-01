@@ -410,6 +410,8 @@ QLabel#TitleModeLabel {{
     color: {TEXT};
 }}
 QLabel#TitleCenterLabel {{
+    font-weight: bold;
+    font-size: 16px;
     color: {TEXT};
 }}
 
