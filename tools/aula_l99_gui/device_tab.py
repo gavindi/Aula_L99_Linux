@@ -35,9 +35,9 @@ from .device_utils import (
 )
 from .workers import KeyboardWorker, start_worker
 
-DONGLE_UNSUPPORTED_MESSAGE = (
-    "This tool only implements the wired 0C45:800A path; "
-    "the dongle's packet format has never been captured."
+DONGLE_DETECTED_MESSAGE = (
+    "Using {path} (2.4G dongle) -- detection and the connection test work "
+    "over the dongle; lighting, colour and clock features remain cable-only."
 )
 
 KEYBOARD_LAYOUT_IMAGE = theme.THEME / "keyboard" / "img_keyboard_layout.png"
@@ -51,6 +51,15 @@ POLL_INTERVAL_MS = 5000
 Resolver = Callable[[list], tuple[int, str, bool]]
 
 
+def _connection_kind(device: object) -> str:
+    """"cable" / "dongle" for the keyboard selector, "screen" for anything else."""
+    if getattr(device, "is_dongle", False):
+        return "dongle"
+    if getattr(device, "is_cable", False):
+        return "cable"
+    return "screen"
+
+
 def _resolve_keyboard(devices: list) -> tuple[int, str, bool]:
     try:
         found = find_l99()
@@ -59,7 +68,7 @@ def _resolve_keyboard(devices: list) -> tuple[int, str, bool]:
 
     index = next((i for i, d in enumerate(devices) if d.path == found.path), -1)
     if found.is_dongle:
-        return index, DONGLE_UNSUPPORTED_MESSAGE, False
+        return index, DONGLE_DETECTED_MESSAGE.format(path=found.path), False
     return index, f"Using {found.path} (cable)", True
 
 
@@ -76,7 +85,7 @@ def _resolve_screen(devices: list) -> tuple[int, str, bool]:
 class DeviceSelector(QGroupBox):
     """Combo + Refresh + status line for one device family."""
 
-    changed = Signal(str, bool, bool)  # status text, actions enabled, known device found
+    changed = Signal(str, bool, bool, str)  # status, enabled, found, connection kind
 
     def __init__(
         self,
@@ -93,6 +102,7 @@ class DeviceSelector(QGroupBox):
         self._status = ""
         self._enabled = False
         self._found = False
+        self._kind = ""
 
         layout = QVBoxLayout(self)
 
@@ -129,20 +139,25 @@ class DeviceSelector(QGroupBox):
         self._status = status
         self._enabled = enabled
         # A known VID:PID match (cable, dongle, or screen), independent of
-        # `enabled` -- the dongle is recognized but unsupported for actions,
-        # yet it's still "our" hardware plugged in over USB.
+        # `enabled` -- the dongle is recognized but only its detection and
+        # connection test are supported, yet it's still "our" hardware.
         self._found = index >= 0
+        self._kind = _connection_kind(self._devices[index]) if index >= 0 else ""
         self.status_label.setText(status)
-        self.changed.emit(status, enabled, self._found)
+        self.changed.emit(status, enabled, self._found, self._kind)
 
-    def current_path(self) -> str | None:
+    def current_device(self) -> object | None:
         index = self.device_combo.currentIndex()
         if 0 <= index < len(self._devices):
-            return self._devices[index].path
+            return self._devices[index]
         return None
 
+    def current_path(self) -> str | None:
+        device = self.current_device()
+        return device.path if device is not None else None
+
     def _on_combo_changed(self) -> None:
-        self.changed.emit(self._status, self._enabled, self._found)
+        self.changed.emit(self._status, self._enabled, self._found, self._kind)
 
 
 class DeviceTab(QWidget):
@@ -157,7 +172,7 @@ class DeviceTab(QWidget):
         self._thread = None
         self._worker = None
         self._busy = False
-        self._keyboard_ready = False
+        self._keyboard_found = False
 
         layout = QVBoxLayout(self)
 
@@ -210,13 +225,13 @@ class DeviceTab(QWidget):
 
     # -- connection test --------------------------------------------------
 
-    def _on_keyboard_changed(self, status: str, enabled: bool) -> None:
-        self._keyboard_ready = enabled
-        self.keyboard_image.setVisible(enabled)
+    def _on_keyboard_changed(self, status: str, enabled: bool, found: bool) -> None:
+        self._keyboard_found = found
+        self.keyboard_image.setVisible(found)
         self._sync_connection_button()
 
     def _sync_connection_button(self) -> None:
-        self.test_connection_button.setEnabled(self._keyboard_ready and not self._busy)
+        self.test_connection_button.setEnabled(self._keyboard_found and not self._busy)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
@@ -226,8 +241,8 @@ class DeviceTab(QWidget):
     def _on_handshake(self) -> None:
         if self._busy:
             return
-        device_path = self.keyboard.current_path()
-        if device_path is None:
+        device = self.keyboard.current_device()
+        if device is None:
             QMessageBox.warning(self, "Keyboard", "No device selected.")
             return
 
@@ -236,7 +251,12 @@ class DeviceTab(QWidget):
         # See lighting_tab.py's _run_transactions for why `_worker`/`_thread`
         # are kept referenced until `thread.finished` (not `worker.finished`)
         # and why `_busy` is only cleared there.
-        self._worker = KeyboardWorker(device_path, kb_protocol.build_cable_handshake())
+        if device.is_dongle:
+            transactions = kb_protocol.build_dongle_handshake()
+        else:
+            transactions = kb_protocol.build_cable_handshake()
+        self._worker = KeyboardWorker(
+            device.path, transactions, dongle=device.is_dongle)
         self._worker.finished.connect(self._on_handshake_finished)
         self._thread = start_worker(self._worker)
         self._thread.finished.connect(self._on_thread_stopped)

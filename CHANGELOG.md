@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.24] - 2026-08-02
+
+**The GUI now completes detection and connection via the 2.4G dongle.**
+Previously the Device tab treated a dongle-only setup as unsupported ("the
+dongle's packet format has never been captured", Test Connection disabled).
+With the dongle handshake confirmed on real hardware (0.9.23), the GUI now
+recognizes the dongle as valid hardware: the Device tab shows the status line
+instead, Test Connection works over the dongle using the same
+session-init/session-query handshake, and the lighting/colour/clock features
+remain disabled with the status line explaining they are cable-only. The
+title-bar connection badge (left of the minimise button) now follows the
+connection: the 2.4G radio-wave icon while the keyboard is attached through
+the dongle, the USB-plug icon on the cable.
+
+### Added
+- `tools/aula_l99_gui/device_tab.py`: `DONGLE_DETECTED_MESSAGE` replaces the
+  stale `DONGLE_UNSUPPORTED_MESSAGE`; `DeviceSelector.current_device()` (the
+  picker already exposed `current_path()`), used by the connection test to
+  distinguish dongle from cable; `DeviceSelector.changed` now also carries the
+  resolved device's connection kind ("cable"/"dongle"/"screen").
+- `tools/aula_l99_gui/theme.py`: `DONGLE_MODE_ICON` (`24g_mode.png`) and a
+  `connection_icon(kind)` helper choosing between it and `USB_MODE_ICON`.
+- `tools/aula_l99_gui/tests/test_workers.py`: `KeyboardWorker` path tests — the
+  dongle handshake acks and sends 33-byte interrupt writes, tolerates a
+  different session-init version byte, and fails on a mismatched reply; a cable
+  regression test guards the refactor.
+- `tools/aula_l99_gui/tests/test_device_tab.py`: `_connection_kind` and
+  `connection_icon` tests, pinning the dongle badge to `24g_mode.png`.
+
+### Changed
+- `tools/aula_l99_gui/workers.py`: `KeyboardWorker` takes a `dongle` flag and
+  switches transport accordingly — interrupt reports (`write`/`read_report`,
+  replies compared with `dongle_replies_match()`) vs the cable feature reports
+  (`set_feature`/`get_feature`, `_is_acked`).
+- `tools/aula_l99_gui/device_tab.py`: `_on_handshake()` builds
+  `build_dongle_handshake()` for the dongle and `build_cable_handshake()`
+  otherwise; Test Connection now enables on any recognized keyboard (cable or
+  dongle) rather than only the cable.
+- `tools/aula_l99_gui/main_window.py`: the monitor-stream auto-resume only
+  triggers when the cable keyboard is usable (`enabled`), not merely found —
+  it never attempts the cable-only stream over the dongle. `_update_usb_icon()`
+  switches the title-bar badge to the 2.4G icon when the keyboard is attached
+  via the dongle.
+- `tools/aula_l99_gui/README.md`: Device tab section updated to say the dongle
+  is recognized and Test Connection works on either connection, with the
+  cable-only features noted.
+
 ## [0.9.23] - 2026-08-02
 
 **The 2.4G dongle path is now confirmed on real hardware.** Previously it was

@@ -69,8 +69,14 @@ act on. One selector each, with a "Refresh" button and a status line; if a devic
 isn't found, plug it in and click Refresh. Both control tabs mirror the relevant
 status line read-only at the top of the tab and disable their buttons while no
 usable device is selected, so a greyed-out tab always says why. The keyboard is
-cable-only (`0C45:800A`) — the 2.4G dongle path is unimplemented here same as in
-the CLI, and finding only a dongle is reported here as an unsupported device.
+recognized on both its connections — the wired `0C45:800A` and the 2.4G dongle
+(`05AC:024F`, its vendor interface 3) — and Test Connection works on either: the
+dongle path runs the same session-init/session-query handshake the CLI uses.
+Only the dongle is present, the lighting, colour and clock features stay
+disabled (they're cable-only), and the status line says so. The connection
+badge left of the minimise button follows which connection the keyboard is on:
+the 2.4G radio-wave icon (`24g_mode.png`) over the dongle, the USB-plug icon
+(`usb_mode.png`) on the cable.
 
 **Keyboard tab**
 - **Test Connection**: opens and closes a session, proving the channel works.

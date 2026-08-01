@@ -125,6 +125,11 @@ class TitleBar(QWidget):
     def set_usb_connected(self, connected: bool) -> None:
         self.usb_icon.setVisible(connected)
 
+    def set_usb_icon(self, icon_path) -> None:
+        pixmap = QPixmap(str(icon_path))
+        if not pixmap.isNull():
+            self.usb_icon.setPixmap(pixmap)
+
     def set_usb_tooltip(self, text: str) -> None:
         self.usb_icon.setToolTip(text)
 
@@ -220,6 +225,7 @@ class MainWindow(QMainWindow):
         if self._tray_enabled:
             self._create_tray_icon()
         self._keyboard_found = False
+        self._keyboard_kind = ""
         self._screen_found = False
         self._keyboard_status = ""
         self._screen_status = ""
@@ -330,20 +336,23 @@ class MainWindow(QMainWindow):
         ):
             self._show_window()
 
-    def _on_keyboard_presence(self, status: str, _enabled: bool, found: bool) -> None:
+    def _on_keyboard_presence(self, status: str, enabled: bool, found: bool,
+                              kind: str) -> None:
         self._keyboard_found = found
+        self._keyboard_kind = kind
         self._keyboard_status = status
         self._update_usb_icon()
         # Resume a monitor stream the previous run left running. Deferred
-        # until the keyboard is actually there because starting it while no
-        # device is selected just raises a warning. The checkbox is restored
-        # for the UI, and the stream is started explicitly rather than by
-        # relying on the toggle signal: if the box is somehow already checked
-        # (the user tried before the device was found), setChecked emits
-        # nothing and the resume would silently not happen. Calling
-        # set_monitoring directly is a harmless no-op when the start already
-        # happened through the signal.
-        if found and not self._monitor_auto_started:
+        # until the *cable* keyboard is actually usable (enabled) because the
+        # stream is a cable-only feature -- the 2.4G dongle is recognized
+        # (found) but can't carry it, and starting it while no device is
+        # selected just raises a warning. The checkbox is restored for the
+        # UI, and the stream is started explicitly rather than by relying on
+        # the toggle signal: if the box is somehow already checked (the user
+        # tried before the device was found), setChecked emits nothing and the
+        # resume would silently not happen. Calling set_monitoring directly is
+        # a harmless no-op when the start already happened through the signal.
+        if enabled and not self._monitor_auto_started:
             self._monitor_auto_started = True
             if settings.monitor_running() and not self._keyboard_tab.is_monitoring:
                 self._config_tab.monitor_toggle.setChecked(True)
@@ -357,16 +366,22 @@ class MainWindow(QMainWindow):
         # with no device to stream to isn't a state worth persisting.
         settings.set_monitor_running(monitoring)
 
-    def _on_screen_presence(self, status: str, _enabled: bool, found: bool) -> None:
+    def _on_screen_presence(self, status: str, _enabled: bool, found: bool,
+                            _kind: str) -> None:
         self._screen_found = found
         self._screen_status = status
         self._update_usb_icon()
 
     def _update_usb_icon(self) -> None:
-        # Any recognized AULA L99 hardware over USB -- cable keyboard, dongle
-        # (even though it's unsupported for actions), or touchscreen -- not
-        # just the subset that's actionable.
-        self._title_bar.set_usb_connected(self._keyboard_found or self._screen_found)
+        # Any recognized AULA L99 hardware over USB -- cable keyboard, dongle,
+        # or touchscreen -- not just the subset that's actionable.
+        connected = self._keyboard_found or self._screen_found
+        self._title_bar.set_usb_connected(connected)
+        if connected:
+            # The keyboard's connection kind picks the badge: the 2.4G dongle
+            # gets the radio-wave icon, everything else the USB plug.
+            kind = self._keyboard_kind if self._keyboard_found else ""
+            self._title_bar.set_usb_icon(theme.connection_icon(kind))
         # Replaces the per-tab status line the control tabs used to mirror
         # from the Device tab's selectors -- both statuses combined here
         # since one icon now speaks for both devices.

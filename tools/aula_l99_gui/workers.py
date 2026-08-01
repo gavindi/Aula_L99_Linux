@@ -59,19 +59,27 @@ def start_worker(worker: QObject) -> QThread:
 
 
 class KeyboardWorker(QObject):
-    """Runs a list of kb_protocol.Transaction over HidrawTransport, cable
-    path only -- mirrors cli.py's _run_cable/_run_sequence but signal-driven."""
+    """Runs a list of kb_protocol.Transaction over HidrawTransport -- mirrors
+    cli.py's _run_cable/_run_dongle/_run_sequence but signal-driven.
+
+    Cable path: 64-byte feature reports (set_feature/get_feature, acked via
+    the ACK flag). Dongle path: 32-byte interrupt reports (write/read_report),
+    replies compared with protocol.dongle_replies_match() so the per-device
+    version byte (and its checksum byte) don't count as a mismatch.
+    """
 
     progress = Signal(int, int, str, bool)  # index, total, name, acked
     finished = Signal(bool, str)  # success, message
 
     def __init__(self, device_path: str, transactions: list,
-                 timeout: float = 1.0, gap: float = kb_protocol.PACKET_GAP_SECONDS):
+                 timeout: float = 1.0, gap: float = kb_protocol.PACKET_GAP_SECONDS,
+                 dongle: bool = False):
         super().__init__()
         self._device_path = device_path
         self._transactions = transactions
         self._timeout = timeout
         self._gap = gap
+        self._dongle = dongle
 
     @Slot()
     def run(self) -> None:
@@ -83,19 +91,35 @@ class KeyboardWorker(QObject):
                     attempts = kb_protocol.SESSION_OPEN_RETRIES if tx.retry_until_ack else 1
                     acked = True
                     for attempt in range(1, attempts + 1):
-                        transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
-                        time.sleep(self._gap)
-                        if tx.expect_reply:
-                            reply = transport.get_feature(
-                                kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+                        if self._dongle:
+                            transport.write(
+                                bytes([kb_protocol.REPORT_ID])
+                                + tx.outgoing.ljust(kb_protocol.DONGLE_PACKET_SIZE, b"\x00"))
                             time.sleep(self._gap)
-                            acked = (
-                                reply[0] == kb_protocol.CMD_PREFIX
-                                and reply[1] == tx.outgoing[1]
-                                and bool(reply[kb_protocol.ACK_OFFSET] & kb_protocol.ACK_FLAG)
-                            )
+                            if tx.expect_reply:
+                                reply = transport.read_report(
+                                    max_length=kb_protocol.DONGLE_PACKET_SIZE)
+                                time.sleep(self._gap)
+                                acked = (
+                                    reply is not None
+                                    and (
+                                        tx.expected_reply is None
+                                        or kb_protocol.dongle_replies_match(
+                                            reply, tx.expected_reply)
+                                    )
+                                )
+                            else:
+                                acked = True
                         else:
-                            acked = True
+                            transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+                            time.sleep(self._gap)
+                            if tx.expect_reply:
+                                reply = transport.get_feature(
+                                    kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+                                time.sleep(self._gap)
+                                acked = _is_acked(tx, reply)
+                            else:
+                                acked = True
                         if acked or attempt == attempts:
                             break
                         time.sleep(kb_protocol.RETRY_DELAY_SECONDS)

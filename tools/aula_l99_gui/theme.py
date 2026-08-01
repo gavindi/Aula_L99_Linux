@@ -30,6 +30,14 @@ PANEL_BORDER = "rgba(150, 150, 160, 90)"
 BACKGROUND_IMAGE = THEME / "main_bkg.png"
 LOGO_IMAGE = THEME / "logo" / "logo.png"
 USB_MODE_ICON = ICONS / "usb_mode.png"
+DONGLE_MODE_ICON = ICONS / "24g_mode.png"
+
+
+def connection_icon(kind: str) -> pathlib.Path:
+    """The title-bar connection icon for a connection kind -- "dongle" gets the
+    radio-wave 2.4G badge, everything else (cable keyboard, touchscreen, or no
+    device yet) the USB plug."""
+    return DONGLE_MODE_ICON if kind == "dongle" else USB_MODE_ICON
 COLOR_WHEEL_IMAGE = THEME / "img_circlepalette.png"
 LOADING_GIF = THEME / "loading.gif"
 LOADING_GIF_SIZE = QSize(100, 100)
