@@ -6,6 +6,7 @@ import io
 import pathlib
 import shutil
 import subprocess
+from collections import Counter
 
 from PySide6.QtCore import QSize, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QIcon, QImage, QPixmap
@@ -47,6 +48,7 @@ STRIP_ICON_SIZE = QSize(64, 96)
 PREVIEW_ICON_SIZE = QSize(200, 300)  # same 2:3 aspect as the panel (320x480)
 SOURCE_IMAGE_FILTER = "Supported files (*.png *.jpg *.jpeg *.gif *.mp4)"
 SINGLE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+MULTI_FRAME_SUFFIXES = {".gif", ".mp4"}
 
 
 def _pillow_missing_message() -> str:
@@ -70,22 +72,70 @@ def _next_animation_path(save_dir: pathlib.Path) -> pathlib.Path:
     return save_dir / f"{best + 1}.gif"
 
 
-def _save_frames_as_gif(
-    frames: list[list[tuple[int, int, int]]], delay: int, path: pathlib.Path
-) -> None:
+PALETTE_SAMPLE_FRAMES = 8
+
+
+def _save_frames_as_gif(frames: list[bytes], delay: int, path: pathlib.Path) -> None:
+    """Write the local backup copy of what was just built.
+
+    Every frame is mapped to one shared palette, derived from a handful of
+    frames sampled across the animation. Letting Pillow's GIF encoder pick a
+    palette per frame instead cost 78ms/frame against 5ms here, for the same
+    file size -- and on a 200-frame animation that was ~15s of the build,
+    spent on a file that is only ever used for the Saved Animations thumbnail
+    and as a record of what was sent.
+    """
     width, height = screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT
-    images = []
-    for pixels in frames:
-        image = Image.new("RGB", (width, height))
-        image.putdata(pixels)
-        images.append(image)
-    images[0].save(
+    # frombytes() takes the frame's buffer directly; the Image.new() +
+    # putdata() pair it replaces walked the frame a pixel at a time.
+    images = [Image.frombytes("RGB", (width, height), pixels) for pixels in frames]
+
+    # Sample across the whole animation rather than trusting frame 0 to be
+    # representative of it -- a scene change would otherwise leave every
+    # later frame mapped to the opening shot's colours.
+    step = max(1, len(images) // PALETTE_SAMPLE_FRAMES)
+    sample = images[::step][:PALETTE_SAMPLE_FRAMES]
+    strip = Image.new("RGB", (width, height * len(sample)))
+    for i, image in enumerate(sample):
+        strip.paste(image, (0, height * i))
+    palette = strip.quantize(colors=256)
+
+    mapped = [image.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
+              for image in images]
+    mapped[0].save(
         path,
         save_all=True,
-        append_images=images[1:],
+        append_images=mapped[1:],
         duration=delay * 10,
         loop=0,
+        optimize=False,
     )
+
+
+def _evenly_spaced_indices(total: int, limit: int) -> list[int]:
+    """Up to `limit` indices spread evenly over range(total).
+
+    Sampling across the whole source rather than truncating to the first
+    `limit` frames: a long animation's opening second is rarely
+    representative of it, and the panel plays whatever it is given at one
+    uniform delay anyway.
+    """
+    if limit <= 0 or total <= 0:
+        return []
+    if total <= limit:
+        return list(range(total))
+    return [i * total // limit for i in range(limit)]
+
+
+def _per_source_frame_budget(source_paths: list[str]) -> int:
+    """How many frames each multi-frame source may contribute.
+
+    Split evenly rather than first-come-first-served, so a second GIF isn't
+    silently reduced to nothing by whatever was listed ahead of it.
+    """
+    multi = [p for p in source_paths
+             if pathlib.Path(p).suffix.lower() in MULTI_FRAME_SUFFIXES]
+    return max(1, screen_protocol.MAX_GIF_FRAMES // max(len(multi), 1))
 
 
 def _save_animation_config(
@@ -118,6 +168,11 @@ class TouchscreenTab(QWidget):
         self._convert_error = ""
         self._local_save_path: pathlib.Path | None = None
         self._local_save_error: str | None = None
+        # Frames the sources actually contain, before sampling down to the
+        # panel's budget -- set on the conversion thread, read by
+        # _on_convert_thread_stopped on the GUI thread once it has finished,
+        # same handover as _local_save_path/_local_save_error above.
+        self._source_frame_total = 0
         self._pending_upload_device_path: str | None = None
         self._busy = False
         self._device_ready = False
@@ -507,10 +562,12 @@ class TouchscreenTab(QWidget):
             image = image.resize(size, Image.LANCZOS)
         return image
 
-    def _pixels_from_image(self, image) -> list[tuple[int, int, int]]:
-        if hasattr(image, "get_flattened_data"):
-            return list(image.get_flattened_data())
-        return list(image.getdata())
+    def _pixels_from_image(self, image) -> bytes:
+        # Flat RGB888 -- the form screen_protocol works in natively. A
+        # 320x480 frame is 460800 bytes this way and 12.3 MB as the list of
+        # (r, g, b) tuples getdata()/get_flattened_data() produce; at the
+        # 200-frame maximum that is 92 MB against 2.5 GB.
+        return image.tobytes("raw", "RGB")
 
     def _to_pixmap(self, image) -> QPixmap:
         data = image.tobytes("raw", "RGB")
@@ -564,11 +621,20 @@ class TouchscreenTab(QWidget):
     def _current_gif_source_paths(self) -> list[str]:
         return list(self._build_source_paths)
 
-    def _frames_from_gif(self, path: str) -> list[list[tuple[int, int, int]]]:
+    def _frames_from_gif(self, path: str, limit: int) -> list[bytes]:
         frames = []
         size = (screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT)
         with Image.open(path) as im:
-            for frame in ImageSequence.Iterator(im):
+            total = getattr(im, "n_frames", 1)
+            self._source_frame_total += total
+            # Decide which frames to keep *before* decoding any of them.
+            # Iterating still has to seek past the skipped ones (a GIF is a
+            # sequential format), but the convert/resize/store work -- which
+            # is all of the cost -- only happens for the ones being kept.
+            keep = set(_evenly_spaced_indices(total, limit))
+            for index, frame in enumerate(ImageSequence.Iterator(im)):
+                if index not in keep:
+                    continue
                 rgb = frame.convert("RGB")
                 if rgb.size != size:
                     rgb = rgb.resize(size, Image.LANCZOS)
@@ -577,7 +643,7 @@ class TouchscreenTab(QWidget):
             raise ValueError(f"{path} has no frames.")
         return frames
 
-    def _collect_gif_frame_pixels(self, delay: int) -> list[list[tuple[int, int, int]]]:
+    def _collect_gif_frame_pixels(self, delay: int) -> list[bytes]:
         # Raises rather than showing a QMessageBox and returning None: this
         # runs off the GUI thread now (see _build_gif_packets), and Qt
         # widgets aren't thread-safe. _on_convert_thread_stopped turns the
@@ -585,21 +651,49 @@ class TouchscreenTab(QWidget):
         # background job (a CallableResultWorker) finishes.
         if not self._build_source_paths:
             raise ValueError("No source images selected.")
-        frames: list[list[tuple[int, int, int]]] = []
+        # Every multi-frame source is sampled down to its share of the
+        # panel's frame budget as it is read. Without this a long source
+        # runs to completion and then fails at the very end: the format's
+        # frame-count field is one byte, so a 4883-frame GIF spent minutes
+        # decoding and writing a local copy only to raise on encode.
+        budget = _per_source_frame_budget(self._build_source_paths)
+        self._source_frame_total = 0
+        frames: list[bytes] = []
         for path in self._build_source_paths:
             suffix = pathlib.Path(path).suffix.lower()
             if suffix == ".mp4":
-                frames.extend(self._extract_video_frames(path, delay))
+                frames.extend(self._extract_video_frames(path, delay, budget))
             elif suffix == ".gif":
-                frames.extend(self._frames_from_gif(path))
+                frames.extend(self._frames_from_gif(path, budget))
             else:
                 try:
                     frames.append(self._pixels_from_image(self._load_image(path)))
                 except OSError as exc:
                     raise ValueError(f"Could not open {path}: {exc}") from exc
+        # Safety net for the mixed-source case, where per-source budgets can
+        # still add up to more than the panel takes (e.g. many stills).
+        if len(frames) > screen_protocol.MAX_GIF_FRAMES:
+            keep = _evenly_spaced_indices(len(frames), screen_protocol.MAX_GIF_FRAMES)
+            frames = [frames[i] for i in keep]
         return frames
 
-    def _extract_video_frames(self, path: str, delay: int) -> list[list[tuple[int, int, int]]]:
+    def _video_duration_seconds(self, path: str) -> float | None:
+        """Runs ffprobe, or None if it isn't installed / can't say."""
+        if shutil.which("ffprobe") is None:
+            return None
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, check=True,
+            )
+            duration = float(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError):
+            return None
+        return duration if duration > 0 else None
+
+    def _extract_video_frames(self, path: str, delay: int,
+                              limit: int) -> list[bytes]:
         """Decodes video frames via a system ffmpeg subprocess -- no video
         decoding library is otherwise a dependency of this project, and
         shelling out avoids adding one (PyAV/opencv-python) just for this.
@@ -608,6 +702,11 @@ class TouchscreenTab(QWidget):
         same "Delay (centiseconds)" spinbox every other source uses for
         playback timing, rather than pulling every frame of what's typically
         a 24-60fps source into what's a small, slow panel to redraw.
+
+        `limit` caps the result at the panel's frame budget. When ffprobe can
+        report the duration, the sampling rate is lowered to spread that many
+        frames across the whole clip; otherwise `-frames:v` truncates it,
+        which bounds the work either way but keeps only the opening.
         """
         if shutil.which("ffmpeg") is None:
             raise ValueError(
@@ -617,11 +716,15 @@ class TouchscreenTab(QWidget):
 
         width, height = screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT
         fps = 100.0 / delay
+        duration = self._video_duration_seconds(path)
+        if duration is not None and fps * duration > limit:
+            fps = limit / duration
         command = [
             "ffmpeg", "-i", path,
             "-vf",
             f"fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+            "-frames:v", str(limit),
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
         ]
         try:
@@ -635,26 +738,31 @@ class TouchscreenTab(QWidget):
         # Drop a truncated trailing frame rather than fail outright -- ffmpeg
         # occasionally writes a partial last frame for an odd frame count.
         usable = len(data) - (len(data) % frame_size)
-        frames = []
-        for offset in range(0, usable, frame_size):
-            chunk = data[offset:offset + frame_size]
-            # zip over three byte-strided slices (each a C-level slice, not a
-            # per-pixel Python loop) is the same reshape dither_frame_floyd_
-            # steinberg's per-pixel loop can't avoid -- see protocol.py's
-            # comment on that one for why a hot pure-Python loop here would
-            # matter even off the GUI thread.
-            frames.append(list(zip(chunk[0::3], chunk[1::3], chunk[2::3])))
+        # ffmpeg's rgb24 output is already exactly the flat RGB888 layout
+        # screen_protocol wants, so each frame is a plain slice -- no
+        # reshaping pass over the pixels at all.
+        frames = [data[offset:offset + frame_size]
+                  for offset in range(0, usable, frame_size)]
         if not frames:
             raise ValueError("That video produced no frames.")
         return frames
 
-    def _ensure_safe_colors(self, frames: list[list[tuple[int, int, int]]]) -> None:
+    def _ensure_safe_colors(self, frames: list[bytes]) -> None:
+        # Distinct colours first (a C-level zip over three strided slices),
+        # counting occurrences only for the ones that turn out to be unsafe
+        # -- the per-pixel pass this replaces walked every pixel of every
+        # frame in Python to build a report that is usually never shown.
         bad: dict[tuple[int, int, int], int] = {}
         for pixels in frames:
-            for color in pixels:
+            for color in set(zip(pixels[0::3], pixels[1::3], pixels[2::3])):
                 if not screen_protocol.is_safe_gif_color(*color):
-                    bad[color] = bad.get(color, 0) + 1
+                    bad[color] = 0
         if bad:
+            for pixels in frames:
+                for color, count in Counter(
+                        zip(pixels[0::3], pixels[1::3], pixels[2::3])).items():
+                    if color in bad:
+                        bad[color] += count
             worst = sorted(bad.items(), key=lambda kv: -kv[1])[:10]
             lines = "\n".join(f"  rgb{color}: {count} px" for color, count in worst)
             raise ValueError(
@@ -690,12 +798,20 @@ class TouchscreenTab(QWidget):
             self._local_save_path = None
             self._local_save_error = str(exc)
 
+        frame_count = len(frames)
         blob = screen_protocol.build_gif_blob(
             frames, screen_protocol.PANEL_WIDTH, screen_protocol.PANEL_HEIGHT,
             delay=delay, dither=dither,
         )
+        # Nothing downstream reads the frames again, and this thread's locals
+        # stay alive until it exits -- so without these the source pixels
+        # would sit in memory alongside the blob, and then alongside the
+        # packet list, for the whole packing phase and the upload after it.
+        del frames
+        blob_len = len(blob)
         packets = screen_protocol.build_upload(blob, screen_protocol.GIF_FLASH_BASE)
-        return packets, len(frames), len(blob)
+        del blob
+        return packets, frame_count, blob_len
 
     def _on_upload_gif(self) -> None:
         if self._busy:
@@ -746,6 +862,13 @@ class TouchscreenTab(QWidget):
             return
         packets, frame_count, blob_len = self._convert_result
         self._debug_log.append("Touchscreen", f"{frame_count} frame(s), {blob_len} bytes")
+        if self._source_frame_total > frame_count:
+            self._debug_log.append(
+                "Touchscreen",
+                f"sampled {frame_count} of {self._source_frame_total} source frame(s) "
+                f"-- the panel's format carries at most "
+                f"{screen_protocol.MAX_GIF_FRAMES}",
+            )
         if self._local_save_error:
             self._debug_log.append("Touchscreen", f"Local copy not saved: {self._local_save_error}")
         else:

@@ -5,6 +5,94 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.25] - 2026-08-03
+
+**A Customized Animation built from a long source failed outright, after
+spending minutes getting there.** The GIF container's table-of-contents
+carries its frame count in a single byte, so `build_gif_blob()` raised
+`ValueError: byte must be in range(0, 256)` for any source of 256 frames or
+more. Nothing capped the frame count on the way in, so a 4883-frame GIF was
+decoded in full, resized frame by frame, and written out as an 82 MB local
+backup copy before the encode reached that field and gave up. Sources are now
+sampled down to the vendor's own `gif_maxframes="200"` *before* any frame is
+decoded, and the encoder rejects an over-long frame list up front with an
+explanation instead of a bytearray range error.
+
+The same build was also far slower than it needed to be, on every path it
+touched. Measured end to end on that 4883-frame source: it now completes in
+64s at 404 MB peak RSS, where before it failed after roughly twice that time
+and 2.7 GB.
+
+| stage | before | after |
+|---|---|---|
+| decode + sample | 56.3s / 2686 MB | 46.4s / 189 MB |
+| local `.gif` backup | ~15.6s | 0.5s |
+| `build_gif_blob` | ~48s | 16.1s |
+| `build_upload` | ~11s | 1.2s |
+| result | **ValueError** | 30.8 MB blob, 15290 packets |
+
+Non-dithered uploads are byte-for-byte what they were. Dithered ones are not:
+the pixel pattern comes from Pillow's dithering now (see below).
+
+### Added
+- `tools/aula_l99_screen/protocol.py`: `MAX_GIF_FRAMES` (200, the vendor's
+  limit from `layouts/rgb-keyboard.xml`) and `GIF_FRAME_COUNT_MAX` (255, what
+  the TOC field can physically express). `RAMP_COLORS`, the full 252-entry
+  product of the three per-channel ramps. `_as_rgb_bytes()`, `_rgb_tuples()`,
+  `_distinct_colors()`, `_pillow_ramp_palette()`, `_dither_rgb_pillow()`,
+  `_dither_rgb_bytes()` and `_gif_token_count()`.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_evenly_spaced_indices()` and
+  `_per_source_frame_budget()` — which frames to keep, and how the allowance
+  is split when several multi-frame sources are queued.
+- `tools/aula_l99_gui/tests/test_touchscreen_tab.py`: frame-budget tests —
+  sampling spans the whole source rather than truncating to its opening,
+  spacing is even, the allowance splits between multi-frame sources and
+  ignores stills, and a sampled source always fits the format.
+- `tools/aula_l99_screen/tests/test_protocol.py`: the frame-count ceiling is
+  accepted and one past it is rejected; an empty frame list is rejected; the
+  shipped blob carries a real payload CRC; `crc16_packet()` matches a
+  bit-by-bit reference; bytes and tuple frames build identical blobs and
+  identical error text; both dither paths are ramp-legal and leave
+  ramp-legal regions untouched.
+
+### Changed
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_frames_from_gif()` and
+  `_extract_video_frames()` take a frame budget and decide what to keep
+  before decoding anything — for video, ffprobe is used to lower the sampling
+  rate so the budget spreads across the whole clip rather than truncating it.
+  The Touchscreen debug log now says how many of the source's frames were
+  used.
+- `tools/aula_l99_screen/protocol.py`: `dither_frame_floyd_steinberg()` uses
+  Pillow's C Floyd–Steinberg against a palette built from `RAMP_COLORS`,
+  falling back to the pure-Python implementation when Pillow is absent — the
+  module still imports and its tests still run with no Pillow installed.
+  Measured 182ms → 7.1ms on a noisy 320x480 frame and 190ms → 1.9ms on
+  photo-like content. The output is a different pixel pattern, always
+  ramp-legal, and scored marginally closer to the source on every image
+  tried; regions already on the ramp come through untouched, which is what
+  the CRC-length tuning pass depends on.
+- `tools/aula_l99_screen/protocol.py`: `crc16_packet()` is table-driven,
+  reusing `crc16_modbus()`'s `_CRC16_TABLE` (same reflected polynomial, only
+  the initial value differs). `build_gif_blob()`'s length-probing pass skips
+  the payload CRC it would only throw away, and rebuilds with it when that
+  pass turns out to be the blob being returned.
+- `tools/aula_l99_screen/protocol.py`: frames may be flat RGB888 `bytes` as
+  well as `list[(r, g, b)]` — 460800 bytes against 12.3 MB for one 320x480
+  frame, which at 200 frames is 92 MB against 2.5 GB. Dithering happens one
+  frame at a time rather than building a second full list, a frame's run list
+  is dropped once it is known to be raw-bitmap mode, and the colour gate
+  checks each frame's distinct-colour set instead of every pixel.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_save_frames_as_gif()` maps every
+  frame to one shared palette sampled across the animation (78ms → 5ms per
+  frame, same file size); `_pixels_from_image()` returns `image.tobytes()`;
+  `_extract_video_frames()` slices ffmpeg's rgb24 output directly;
+  `_ensure_safe_colors()` scans distinct colours; `_build_gif_packets()`
+  releases the frames and the blob once the next stage has what it needs.
+- `tools/aula_l99_screen/cli.py`: `_gif_source_frames()` applies the same
+  sampling and reports it; `_pixels_from_image()` returns
+  `image.tobytes("raw", "RGB")`, replacing the
+  `get_flattened_data()`/`getdata()` pair.
+
 ## [0.9.24] - 2026-08-02
 
 **The GUI now completes detection and connection via the 2.4G dongle.**

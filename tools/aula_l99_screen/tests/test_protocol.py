@@ -251,3 +251,178 @@ def test_build_gif_blob_pads_to_a_valid_chunk_boundary():
     blob = protocol.build_gif_blob([pixels], width, height, delay=50, dither=True)
     remainder = len(blob) % protocol.CHUNK_SIZE
     assert remainder == 0 or remainder in protocol.CRC_INIT
+
+
+# --- frame count: the TOC's count field is one byte ----------------------
+
+
+def _solid(n, color=(255, 0, 0)):
+    return [color] * (n // 2) + [(0, 0, 0)] * (n - n // 2)
+
+
+def test_build_gif_blob_accepts_the_format_ceiling():
+    width, height = 16, 16
+    blob = protocol.build_gif_blob(
+        [_solid(width * height)] * protocol.GIF_FRAME_COUNT_MAX, width, height, delay=50)
+    # Byte 13 of the first TOC entry is the frame count -- the field that
+    # used to blow up with "byte must be in range(0, 256)".
+    assert blob[13] == protocol.GIF_FRAME_COUNT_MAX
+
+
+def test_build_gif_blob_rejects_more_frames_than_the_field_can_hold():
+    width, height = 16, 16
+    frames = [_solid(width * height)] * (protocol.GIF_FRAME_COUNT_MAX + 1)
+    with pytest.raises(ValueError, match="more than this format can carry"):
+        protocol.build_gif_blob(frames, width, height, delay=50)
+
+
+def test_build_gif_blob_rejects_no_frames():
+    with pytest.raises(ValueError, match="no frames"):
+        protocol.build_gif_blob([], 16, 16, delay=50)
+
+
+def test_vendor_frame_limit_is_under_the_format_ceiling():
+    assert protocol.MAX_GIF_FRAMES <= protocol.GIF_FRAME_COUNT_MAX
+
+
+# --- CRC ------------------------------------------------------------------
+
+
+def _crc16_packet_reference(body: bytes) -> int:
+    """Bit-by-bit reference for crc16_packet(), same role as
+    _crc16_modbus_reference() above -- the shipped one is table-driven."""
+    crc = protocol.CRC_INIT[len(body) - protocol.HEADER_SIZE_WIRE]
+    for byte in body:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def test_crc16_packet_matches_bit_by_bit_reference():
+    rng = random.Random(2)
+    for payload_len in sorted(protocol.CRC_INIT):
+        body = bytes(rng.randint(0, 255)
+                     for _ in range(protocol.HEADER_SIZE_WIRE + payload_len))
+        assert protocol.crc16_packet(body) == _crc16_packet_reference(body)
+
+
+def test_blob_carries_a_real_payload_crc():
+    # The length-probing pass builds with with_crc=False; regression guard
+    # against that zero-checksum blob ever being the one returned.
+    width, height = 128, 128
+    n = width * height
+    blob = protocol.build_gif_blob([_solid(n)], width, height, delay=50)
+    toc_crc = int.from_bytes(blob[18:20], "little")
+    assert toc_crc == protocol.crc16_modbus(blob[20:])
+
+
+# --- frame representation: bytes and list[(r,g,b)] are interchangeable ----
+
+
+def _as_bytes(pixels) -> bytes:
+    return bytes(channel for color in pixels for channel in color)
+
+
+def test_bytes_frames_build_identical_blob_to_tuple_frames():
+    width, height = 128, 128
+    n = width * height
+    frames = [_solid(n), [(0, 255, 0)] * n]
+    from_tuples = protocol.build_gif_blob(frames, width, height, delay=50)
+    from_bytes = protocol.build_gif_blob(
+        [_as_bytes(f) for f in frames], width, height, delay=50)
+    assert from_bytes == from_tuples
+
+
+def test_bytes_and_tuple_frames_report_the_same_bad_colors():
+    width, height = 32, 32
+    n = width * height
+    # Two unsafe pixels of one colour, one of another -- the message orders
+    # by count, so this pins the counting, not just the detection.
+    pixels = [(0, 0, 0)] * (n - 3) + [(7, 9, 11), (7, 9, 11), (3, 4, 5)]
+    with pytest.raises(ValueError) as from_tuples:
+        protocol.build_gif_blob([pixels], width, height, delay=50)
+    with pytest.raises(ValueError) as from_bytes:
+        protocol.build_gif_blob([_as_bytes(pixels)], width, height, delay=50)
+    assert str(from_bytes.value) == str(from_tuples.value)
+    assert "rgb(7, 9, 11): 2 pixels" in str(from_bytes.value)
+    assert "rgb(3, 4, 5): 1 pixels" in str(from_bytes.value)
+
+
+def test_build_gif_blob_rejects_wrong_length_bytes_frame():
+    with pytest.raises(ValueError, match="expected 1024 pixels"):
+        protocol.build_gif_blob([bytes(3 * 1000)], 32, 32, delay=50)
+
+
+def test_build_gif_blob_does_not_mutate_the_callers_frame_list():
+    width, height = 32, 32
+    frames = [[(0, 0, 0)] * (width * height)]
+    original = frames[0]
+    protocol.build_gif_blob(frames, width, height, delay=50, dither=True)
+    assert frames[0] is original
+
+
+def test_gif_runs_accepts_both_frame_forms():
+    pixels = [(0, 0, 0)] * 5 + [(255, 0, 0)] * 3
+    expected = [(5, (0, 0, 0)), (3, (255, 0, 0))]
+    assert protocol._gif_runs(pixels) == expected
+    assert protocol._gif_runs(_as_bytes(pixels)) == expected
+
+
+def test_gif_token_count_matches_building_the_tokens():
+    # Spans the 256px chaining boundary both ways, since the shortcut has to
+    # reproduce _gif_tokens()'s own chunking exactly.
+    runs = [(1, (0, 0, 0)), (256, (255, 0, 0)), (257, (0, 255, 0)), (1000, (0, 0, 255))]
+    palette_index = {color: i for i, (_length, color) in enumerate(runs)}
+    assert protocol._gif_token_count(runs) == len(protocol._gif_tokens(runs, palette_index))
+
+
+# --- dithering ------------------------------------------------------------
+
+
+def test_dither_returns_the_form_it_was_given():
+    width, height = 32, 32
+    pixels = [((x * 8) % 256, (y * 8) % 256, ((x + y) * 4) % 256)
+              for y in range(height) for x in range(width)]
+    as_list = protocol.dither_frame_floyd_steinberg(pixels, width)
+    as_bytes = protocol.dither_frame_floyd_steinberg(_as_bytes(pixels), width)
+    assert isinstance(as_list, list) and isinstance(as_list[0], tuple)
+    assert isinstance(as_bytes, bytes)
+    assert _as_bytes(as_list) == as_bytes
+
+
+def test_both_dither_paths_are_ramp_legal():
+    """Pillow's pattern differs from the pure-Python fallback's, but the
+    invariant every caller relies on holds for both."""
+    width, height = 64, 64
+    pixels = [((x * 5) % 256, (y * 7) % 256, ((x * y) % 256))
+              for y in range(height) for x in range(width)]
+    raw = _as_bytes(pixels)
+    outputs = [bytes(protocol._dither_rgb_bytes(raw, width))]
+    from_pillow = protocol._dither_rgb_pillow(raw, width, height)
+    if from_pillow is not None:  # Pillow is optional for this module
+        outputs.append(from_pillow)
+    for out in outputs:
+        assert len(out) == len(raw)
+        for color in protocol._distinct_colors(out):
+            assert protocol.is_ramp_legal_color(*color)
+
+
+def test_dither_leaves_ramp_legal_regions_untouched():
+    """build_gif_blob's CRC-length tuning needs a long uniform run to pad;
+    dithering one away would break it, so neither path may disturb pixels
+    already sitting on the ramp."""
+    width, height = 64, 64
+    for color in [(0, 0, 0), (255, 0, 0), (49, 40, 99)]:
+        raw = bytes(color) * (width * height)
+        assert bytes(protocol._dither_rgb_bytes(raw, width)) == raw
+        from_pillow = protocol._dither_rgb_pillow(raw, width, height)
+        if from_pillow is not None:
+            assert from_pillow == raw
+
+
+def test_ramp_colors_is_the_full_product():
+    assert len(protocol.RAMP_COLORS) == len(protocol.RAMP_R) * len(protocol.RAMP_G) * len(protocol.RAMP_B)
+    assert len(protocol.RAMP_COLORS) == len(set(protocol.RAMP_COLORS))
+    for color in protocol.RAMP_COLORS:
+        assert protocol.is_ramp_legal_color(*color)

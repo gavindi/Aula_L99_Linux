@@ -66,14 +66,26 @@ def _encode(path: str, width: int, height: int) -> bytes:
     return protocol.build_image_file(image.tobytes(), width, height)
 
 
-def _pixels_from_image(image) -> list[tuple[int, int, int]]:
-    if hasattr(image, "get_flattened_data"):
-        return list(image.get_flattened_data())
-    return list(image.getdata())  # Pillow < 12
+def _pixels_from_image(image) -> bytes:
+    # Flat RGB888, the form protocol.build_gif_blob() works in natively --
+    # tobytes() hands the buffer over whole, where getdata()/
+    # get_flattened_data() built a Python tuple per pixel (~27x the memory,
+    # and a per-pixel loop to match).
+    return image.tobytes("raw", "RGB")
 
 
-def _encode_gif_frame_pixels(path: str, width: int, height: int) -> list[tuple[int, int, int]]:
+def _encode_gif_frame_pixels(path: str, width: int, height: int) -> bytes:
     return _pixels_from_image(_load_image(path, width, height))
+
+
+def _evenly_spaced_indices(total: int, limit: int) -> list[int]:
+    """Up to `limit` indices spread evenly over range(total) -- sampling
+    across the whole source rather than truncating to its opening frames."""
+    if limit <= 0 or total <= 0:
+        return []
+    if total <= limit:
+        return list(range(total))
+    return [i * total // limit for i in range(limit)]
 
 
 GIF_EXTENSIONS = {".gif"}
@@ -95,7 +107,19 @@ def _gif_source_frames(path: str, width: int, height: int):
     frames = []
     delays = []
     with Image.open(path) as im:
-        for frame in ImageSequence.Iterator(im):
+        total = getattr(im, "n_frames", 1)
+        # The TOC's frame-count field is one byte, so a long source has to be
+        # sampled down or the encode fails outright at the very end. Deciding
+        # which frames to keep up front also means only those get converted
+        # and resized, which is where the time goes.
+        keep = _evenly_spaced_indices(total, protocol.MAX_GIF_FRAMES)
+        if len(keep) < total:
+            print(f"sampling {len(keep)} of {total} frames "
+                  f"(the panel's format carries at most {protocol.MAX_GIF_FRAMES})")
+        keep = set(keep)
+        for index, frame in enumerate(ImageSequence.Iterator(im)):
+            if index not in keep:
+                continue
             rgb = frame.convert("RGB")
             if rgb.size != (width, height):
                 rgb = rgb.resize((width, height), Image.LANCZOS)

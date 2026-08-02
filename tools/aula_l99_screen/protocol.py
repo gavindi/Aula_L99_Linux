@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import struct
 import time
+from collections import Counter
+from collections.abc import Sequence
 
 HEADER_SIZE = 11
 OFF_SIZE = 0
@@ -224,6 +226,20 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
 # this format. The bytes written there are NOT build_image_file() output --
 # see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
+
+# The TOC's frame-count field ([13] of each entry, below) is a single byte, so
+# the format cannot express more than 255 frames -- build_gif_blob() rejects
+# anything above that rather than letting the bytearray store silently blow up
+# with "byte must be in range(0, 256)", which is what a 4883-frame source
+# actually produced.
+#
+# MAX_GIF_FRAMES is the vendor's own limit (gif_maxframes="200" in
+# layouts/rgb-keyboard.xml), comfortably under the format ceiling, and is what
+# the GUI and CLI decimate a longer source down to. It's a policy for callers
+# to apply, not something this module enforces: the encoder's job is to say
+# what the format can carry, and 255 is that.
+GIF_FRAME_COUNT_MAX = 255
+MAX_GIF_FRAMES = 200
 
 # GIF container format, from six captures: save_to_gif_1.pcapng (a real
 # multi-frame photo GIF), save_to_gif_2.pcapng (a 3-frame solid
@@ -1427,15 +1443,20 @@ def crc16_packet(body: bytes) -> int:
 
     Keyed by length, not by the cmd byte in `body` -- see CRC_INIT for why
     (cmd is a many-to-one function of length, so it can't disambiguate).
+
+    Table-driven, sharing crc16_modbus()'s _CRC16_TABLE: same reflected
+    polynomial, only the initial value differs. The bit-by-bit form this
+    replaces cost 0.74ms per full 2048-byte packet, and build_upload() pays
+    it once per packet over the whole blob -- ~11s of pure Python on a
+    200-frame animation, against ~1.3s here.
     """
     payload_len = len(body) - HEADER_SIZE_WIRE
     if payload_len not in CRC_INIT:
         raise ValueError(f"unknown payload length {payload_len}")
     crc = CRC_INIT[payload_len]
+    table = _CRC16_TABLE
     for byte in body:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+        crc = (crc >> 8) ^ table[(crc ^ byte) & 0xFF]
     return crc
 
 
@@ -1551,9 +1572,195 @@ def is_ramp_legal_color(r: int, g: int, b: int) -> bool:
     return r in RAMP_R and g in RAMP_G and b in RAMP_B
 
 
-def dither_frame_floyd_steinberg(
-    pixels: list[tuple[int, int, int]], width: int
-) -> list[tuple[int, int, int]]:
+# --- frame representation -----------------------------------------------
+#
+# A frame is flat RGB888 bytes (len == width*height*3, raster order) -- the
+# layout PIL's Image.tobytes() and ffmpeg's rgb24 output already produce, so
+# callers hand one over with no per-pixel work.
+#
+# The older list[(r, g, b)] form is still accepted everywhere (cli.py, tests,
+# anything building frames by hand), but it costs ~27x the memory: a 320x480
+# frame is 460800 bytes as `bytes` and 12.3 MB as a list of 3-tuples. At the
+# vendor's 200-frame maximum that is 92 MB against 2.5 GB -- measured, on a
+# real 4883-frame source sampled down to 200 -- which is the difference
+# between a build that fits in RAM and one that drives the session into swap.
+
+
+def _is_raw_frame(pixels) -> bool:
+    return isinstance(pixels, (bytes, bytearray, memoryview))
+
+
+def _as_rgb_bytes(pixels) -> bytes:
+    """One frame as flat RGB888 bytes, from either accepted form."""
+    if _is_raw_frame(pixels):
+        raw = pixels if isinstance(pixels, bytes) else bytes(pixels)
+        if len(raw) % 3 != 0:
+            raise ValueError(f"RGB frame length {len(raw)} isn't a multiple of 3")
+        return raw
+    return bytes(channel for color in pixels for channel in color)
+
+
+def _rgb_tuples(raw: bytes) -> list[tuple[int, int, int]]:
+    """Flat RGB888 bytes back to a list of (r, g, b).
+
+    The three strided slices and the zip all run at C level, so this is the
+    cheap direction; it is used to hand a frame to the run scanner, which is
+    measurably faster comparing whole tuples than three indexed bytes at a
+    time (4.3ms vs 11.9ms on a solid 320x480 frame).
+    """
+    return list(zip(raw[0::3], raw[1::3], raw[2::3]))
+
+
+def _distinct_colors(raw: bytes) -> set[tuple[int, int, int]]:
+    """Every distinct (r, g, b) in one frame, at C level -- bounded by the
+    252-entry ramp for dithered content, where a per-pixel scan is bounded
+    by the frame size."""
+    return set(zip(raw[0::3], raw[1::3], raw[2::3]))
+
+
+# Every colour the panel's fixed ramp can display: the full product of the
+# three per-channel ramps, 6*7*6 = 252 entries. Used as the target palette
+# for Pillow's dithering, and as the proof that per-channel quantisation and
+# nearest-colour-in-the-palette are the same operation here -- for a product
+# grid the closest grid point minimises each coordinate independently.
+RAMP_COLORS: tuple[tuple[int, int, int], ...] = tuple(
+    (r, g, b) for r in RAMP_R for g in RAMP_G for b in RAMP_B
+)
+
+_ramp_palette_image = None
+
+
+def _pillow_ramp_palette():
+    """A Pillow "P" image carrying RAMP_COLORS, or None if Pillow is absent.
+
+    Built once and cached. Imported lazily so this module keeps working
+    without Pillow -- it otherwise imports only struct/time/collections, and
+    its test suite runs with no Pillow installed. Same lazy-import pattern
+    cli.py already uses for its image loading.
+    """
+    global _ramp_palette_image
+    if _ramp_palette_image is None:
+        try:
+            from PIL import Image
+        except ImportError:
+            return None
+        image = Image.new("P", (1, 1))
+        flat = [channel for color in RAMP_COLORS for channel in color]
+        # Pad to a full 256 entries; the spares repeat (0, 0, 0), which is
+        # itself a ramp colour, so a duplicate can never make the nearest
+        # match illegal.
+        image.putpalette(flat + [0] * (768 - len(flat)))
+        _ramp_palette_image = image
+    return _ramp_palette_image
+
+
+def _dither_rgb_pillow(raw: bytes, width: int, height: int) -> bytes | None:
+    """Floyd-Steinberg via Pillow's C implementation, or None if unavailable.
+
+    Measured against the pure-Python path below on 320x480 frames: 7.1ms vs
+    182ms on noise, 1.9ms vs 190ms on photo-like content. Output is a
+    different pixel pattern -- Pillow accumulates error its own way -- but is
+    always ramp-legal by construction (every pixel is a palette entry), and
+    scored marginally closer to the source on every image tried. Regions
+    already sitting on the ramp (a solid black background, say) come through
+    untouched, which matters: build_gif_blob's CRC-length tuning needs a long
+    uniform run to pad, and dithering one away would break it.
+    """
+    palette = _pillow_ramp_palette()
+    if palette is None:
+        return None
+    from PIL import Image
+    image = Image.frombytes("RGB", (width, height), raw)
+    quantized = image.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
+    return quantized.convert("RGB").tobytes()
+
+
+def _dither_rgb_bytes(raw: bytes, width: int) -> bytearray:
+    """The pure-Python Floyd-Steinberg core, bytes in / bytes out.
+
+    The reference implementation, and the fallback when Pillow is missing.
+    See dither_frame_floyd_steinberg() for the algorithm and its rationale.
+
+    Diffusion state is two width-long rows (this row's accumulated error and
+    the next row's), not three full-frame float lists: the kernel never
+    reaches further than one row ahead, and the full-frame form cost ~15 MB
+    of float objects per 320x480 frame. Contributions land in each
+    accumulator in exactly the order the full-frame version produced them
+    (up-left 1/16, up 5/16, up-right 3/16, then left 7/16), so this stays
+    bit-identical to it, not merely equivalent.
+    """
+    n3 = len(raw)
+    row_bytes = width * 3
+    if width <= 0 or n3 % row_bytes != 0:
+        raise ValueError(f"width {width} doesn't evenly divide {n3 // 3} pixels")
+    height = n3 // row_bytes
+
+    out = bytearray(n3)
+    lut_r, lut_g, lut_b = RAMP_R_LUT, RAMP_G_LUT, RAMP_B_LUT
+    cur_r = [0.0] * width
+    cur_g = [0.0] * width
+    cur_b = [0.0] * width
+    last_x = width - 1
+
+    for y in range(height):
+        nxt_r = [0.0] * width
+        nxt_g = [0.0] * width
+        nxt_b = [0.0] * width
+        has_down = y + 1 < height
+        o = y * row_bytes
+
+        for x in range(width):
+            r = raw[o] + cur_r[x]
+            g = raw[o + 1] + cur_g[x]
+            b = raw[o + 2] + cur_b[x]
+
+            ri = 0 if r < 0 else 255 if r > 255 else int(r + 0.5)
+            gi = 0 if g < 0 else 255 if g > 255 else int(g + 0.5)
+            bi = 0 if b < 0 else 255 if b > 255 else int(b + 0.5)
+            rq = lut_r[ri]
+            gq = lut_g[gi]
+            bq = lut_b[bi]
+            out[o] = rq
+            out[o + 1] = gq
+            out[o + 2] = bq
+
+            er, eg, eb = r - rq, g - gq, b - bq
+            has_right = x < last_x
+
+            if has_right:
+                cur_r[x + 1] += er * 7 / 16
+                cur_g[x + 1] += eg * 7 / 16
+                cur_b[x + 1] += eb * 7 / 16
+            if has_down:
+                if x:
+                    nxt_r[x - 1] += er * 3 / 16
+                    nxt_g[x - 1] += eg * 3 / 16
+                    nxt_b[x - 1] += eb * 3 / 16
+                nxt_r[x] += er * 5 / 16
+                nxt_g[x] += eg * 5 / 16
+                nxt_b[x] += eb * 5 / 16
+                if has_right:
+                    nxt_r[x + 1] += er * 1 / 16
+                    nxt_g[x + 1] += eg * 1 / 16
+                    nxt_b[x + 1] += eb * 1 / 16
+            o += 3
+
+        cur_r, cur_g, cur_b = nxt_r, nxt_g, nxt_b
+        # Tight pure-Python loop with no natural GIL-release point of its own;
+        # on a multi-core machine a thread that keeps re-acquiring the GIL
+        # the instant it's released can starve other threads of it far more
+        # than CPython's switch-interval alone would suggest (the "GIL
+        # convoy" effect) -- e.g. the GUI's main thread stalls badly enough
+        # to visibly freeze a QMovie spinner while this runs on a worker
+        # thread. One yield per row (not per pixel -- that would meaningfully
+        # slow this down) is enough opportunities for another thread to get
+        # scheduled, and is a no-op when nothing else is runnable, as in
+        # single-threaded CLI use.
+        time.sleep(0)
+    return out
+
+
+def dither_frame_floyd_steinberg(pixels, width: int):
     """Classic raster-order Floyd-Steinberg error diffusion (7/16 right,
     3/16 below-left, 5/16 below, 1/16 below-right), applied independently
     per channel, quantizing each channel to the nearest rung of its own ramp
@@ -1580,71 +1787,29 @@ def dither_frame_floyd_steinberg(
     cascades through the whole diffusion chain), so there was never a
     byte-exact algorithm being preserved in the first place.
 
-    pixels: flat width*height list, raster order, one frame's worth.
+    Pillow's C implementation does the work when it is installed, falling
+    back to the pure-Python _dither_rgb_bytes() otherwise; both are always
+    ramp-legal, but they are not the same pixel pattern (see
+    _dither_rgb_pillow()).
+
+    pixels: one frame, either flat RGB888 bytes or a flat width*height list
+    of (r, g, b) in raster order.
     width: needed to compute row-wrap offsets for the below-row diffusion
-    targets; must evenly divide len(pixels).
+    targets; must evenly divide the frame's pixel count.
 
-    Returns a new list of ramp-legal (r, g, b) tuples, same length as
-    pixels; does not mutate the input.
+    Returns a new ramp-legal frame in the same form the input used -- bytes
+    for bytes, a list of (r, g, b) tuples for a list. Does not mutate the
+    input.
     """
-    n = len(pixels)
-    if width <= 0 or n % width != 0:
-        raise ValueError(f"width {width} doesn't evenly divide {n} pixels")
-    height = n // width
+    raw = _as_rgb_bytes(pixels)
+    row_bytes = width * 3
+    if width <= 0 or len(raw) % row_bytes != 0:
+        raise ValueError(f"width {width} doesn't evenly divide {len(raw) // 3} pixels")
 
-    err_r = [0.0] * n
-    err_g = [0.0] * n
-    err_b = [0.0] * n
-    out: list[tuple[int, int, int]] = [(0, 0, 0)] * n
-
-    for y in range(height):
-        row = y * width
-        for x in range(width):
-            i = row + x
-            r0, g0, b0 = pixels[i]
-            r, g, b = r0 + err_r[i], g0 + err_g[i], b0 + err_b[i]
-
-            ri = 0 if r < 0 else 255 if r > 255 else int(r + 0.5)
-            gi = 0 if g < 0 else 255 if g > 255 else int(g + 0.5)
-            bi = 0 if b < 0 else 255 if b > 255 else int(b + 0.5)
-            rq = RAMP_R_LUT[ri]
-            gq = RAMP_G_LUT[gi]
-            bq = RAMP_B_LUT[bi]
-            out[i] = (rq, gq, bq)
-
-            er, eg, eb = r - rq, g - gq, b - bq
-            has_right = x + 1 < width
-            has_left = x - 1 >= 0
-            has_down = y + 1 < height
-
-            if has_right:
-                err_r[i + 1] += er * 7 / 16
-                err_g[i + 1] += eg * 7 / 16
-                err_b[i + 1] += eb * 7 / 16
-            if has_down:
-                if has_left:
-                    err_r[i + width - 1] += er * 3 / 16
-                    err_g[i + width - 1] += eg * 3 / 16
-                    err_b[i + width - 1] += eb * 3 / 16
-                err_r[i + width] += er * 5 / 16
-                err_g[i + width] += eg * 5 / 16
-                err_b[i + width] += eb * 5 / 16
-                if has_right:
-                    err_r[i + width + 1] += er * 1 / 16
-                    err_g[i + width + 1] += eg * 1 / 16
-                    err_b[i + width + 1] += eb * 1 / 16
-        # Tight pure-Python loop with no natural GIL-release point of its own;
-        # on a multi-core machine a thread that keeps re-acquiring the GIL
-        # the instant it's released can starve other threads of it far more
-        # than CPython's switch-interval alone would suggest (the "GIL
-        # convoy" effect) -- e.g. the GUI's main thread stalls badly enough
-        # to visibly freeze a QMovie spinner while this runs on a worker
-        # thread. One yield per row (not per pixel -- that would meaningfully
-        # slow this down) is enough opportunities for another thread to get
-        # scheduled, and is a no-op when nothing else is runnable, as in
-        # single-threaded CLI use.
-        time.sleep(0)
-    return out
+    out = _dither_rgb_pillow(raw, width, len(raw) // row_bytes)
+    if out is None:
+        out = bytes(_dither_rgb_bytes(raw, width))
+    return out if _is_raw_frame(pixels) else _rgb_tuples(out)
 
 
 def is_safe_gif_color(r: int, g: int, b: int) -> bool:
@@ -1657,10 +1822,17 @@ def is_safe_gif_color(r: int, g: int, b: int) -> bool:
     return max(r, g, b) in (0, 255)
 
 
-def _gif_runs(pixels: list[tuple[int, int, int]]) -> list[tuple[int, tuple[int, int, int]]]:
+def _gif_runs(pixels) -> list[tuple[int, tuple[int, int, int]]]:
     """Raster-order (length, color) runs -- the continuous-RLE model's
     input, before splitting into <=256px chained tokens.
+
+    A bytes frame is reshaped to tuples first (a C-level zip) rather than
+    scanned three indexed bytes at a time: comparing whole tuples is 1.7-2.8x
+    faster on the flat-region content real animations are made of, and the
+    reshaped list is transient, freed as soon as this returns.
     """
+    if _is_raw_frame(pixels):
+        pixels = _rgb_tuples(pixels)
     runs = []
     i = 0
     n = len(pixels)
@@ -1672,6 +1844,13 @@ def _gif_runs(pixels: list[tuple[int, int, int]]) -> list[tuple[int, tuple[int, 
         runs.append((j - i, color))
         i = j
     return runs
+
+
+def _gif_token_count(runs) -> int:
+    """How many <=256px chained tokens _gif_tokens() would emit for `runs`
+    with no split_at. The mode decision needs only the count, and building
+    the whole token list to call len() on it doubled that work per frame."""
+    return sum(-(-length // 256) for length, _color in runs)
 
 
 def _gif_tokens(runs, palette_index, split_at=None):
@@ -1705,7 +1884,11 @@ def _gif_raw_bitmap_content(pixels, palette_index) -> bytes:
     disassembly and direct hardware byte-edit tests (see the
     GIF_FLASH_BASE comment block).
     """
-    return bytes(palette_index[c] for c in pixels)
+    if _is_raw_frame(pixels):
+        pixels = _rgb_tuples(pixels)
+    # map(dict.__getitem__, ...) keeps the per-pixel lookup at C level --
+    # no Python frame per pixel.
+    return bytes(map(palette_index.__getitem__, pixels))
 
 
 def _gif_largest_run(frames_runs, eligible: set[int] | None = None):
@@ -1798,9 +1981,23 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     still-poorly-understood content validator checks.
     """
     n = width * height
+    if len(frames_pixels) > GIF_FRAME_COUNT_MAX:
+        raise ValueError(
+            f"{len(frames_pixels)} frames is more than this format can carry -- the "
+            f"TOC's frame-count field is one byte, so {GIF_FRAME_COUNT_MAX} is the "
+            f"hard ceiling (the vendor app's own limit is {MAX_GIF_FRAMES}). Sample "
+            f"the source down to at most {MAX_GIF_FRAMES} frames before encoding."
+        )
+    if not frames_pixels:
+        raise ValueError("no frames to encode")
+    # Normalized into a *new* list, so replacing entries below (to drop each
+    # source frame as its dithered version is built) never touches the
+    # caller's own list.
+    frames_pixels = [_as_rgb_bytes(px) for px in frames_pixels]
     for i, px in enumerate(frames_pixels):
-        if len(px) != n:
-            raise ValueError(f"frame {i}: expected {n} pixels ({width}x{height}), got {len(px)}")
+        if len(px) != n * 3:
+            raise ValueError(
+                f"frame {i}: expected {n} pixels ({width}x{height}), got {len(px) // 3}")
 
     if isinstance(delay, int):
         delays = [delay] * len(frames_pixels)
@@ -1810,15 +2007,27 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             raise ValueError(f"delay list has {len(delays)} entries, expected {len(frames_pixels)}")
 
     if dither:
-        frames_pixels = [dither_frame_floyd_steinberg(px, width) for px in frames_pixels]
+        # One frame at a time, releasing each source frame as it is replaced.
+        # The list comprehension this replaces held every source frame and
+        # every dithered frame alive at once, doubling peak pixel memory
+        # across the whole build.
+        for i in range(len(frames_pixels)):
+            frames_pixels[i] = _as_rgb_bytes(
+                dither_frame_floyd_steinberg(frames_pixels[i], width))
 
     gate = is_ramp_legal_color if dither else is_safe_gif_color
     bad: dict[tuple[int, int, int], int] = {}
     for px in frames_pixels:
-        for color in px:
+        for color in _distinct_colors(px):
             if not gate(*color):
-                bad[color] = bad.get(color, 0) + 1
+                bad[color] = 0
     if bad:
+        # Only now, on the error path, is a per-pixel pass worth it, to put
+        # occurrence counts in the message.
+        for px in frames_pixels:
+            for color, count in Counter(zip(px[0::3], px[1::3], px[2::3])).items():
+                if color in bad:
+                    bad[color] += count
         lines = "\n".join(f"  rgb{color}: {count} pixels"
                            for color, count in sorted(bad.items(), key=lambda kv: -kv[1]))
         if dither:
@@ -1832,25 +2041,38 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             "produce yet (only max(R,G,B) in {0, 255} is supported):\n" + lines
         )
 
-    frames_runs = [_gif_runs(px) for px in frames_pixels]
-
     # Build each frame's palette once (first-appearance-order dedup, shared
     # by both RLE and raw-bitmap content) and decide its mode up front --
     # this must stay fixed across the CRC-length-tuning retries below,
     # since raw-bitmap content has no tokens for split_at to pad.
+    #
+    # A frame's run list is retained only if that frame lands in RLE mode,
+    # where build_all() needs it again and its size is bounded by the 16-bit
+    # content-length field (<=32767 runs). A raw-bitmap frame's runs can be
+    # one per pixel -- ~11 MB for a 320x480 frame of dithered content -- and
+    # nothing downstream reads them, so they go as soon as the palette and
+    # mode are known.
+    frames_runs: list[Sequence[tuple[int, tuple[int, int, int]]]] = []
     frame_palettes: list[list[tuple[int, int, int]]] = []
     frame_palette_indexes: list[dict[tuple[int, int, int], int]] = []
     frame_modes: list[bool] = []  # True = raw-bitmap
-    for runs in frames_runs:
+    for px in frames_pixels:
+        runs = _gif_runs(px)
         palette: list[tuple[int, int, int]] = []
         palette_index: dict[tuple[int, int, int], int] = {}
         for _length, color in runs:
             if color not in palette_index:
                 palette_index[color] = len(palette)
                 palette.append(color)
+        raw_bitmap = _gif_token_count(runs) * 2 > 0xFFFF
         frame_palettes.append(palette)
         frame_palette_indexes.append(palette_index)
-        frame_modes.append(len(_gif_tokens(runs, palette_index)) * 2 > 0xFFFF)
+        frame_modes.append(raw_bitmap)
+        # `()` rather than the real runs for a raw-bitmap frame:
+        # _gif_largest_run skips it via `eligible` anyway, and build_all
+        # never reads it.
+        frames_runs.append(() if raw_bitmap else runs)
+        del runs
 
     frame_content_lengths = [0] * len(frames_pixels)
 
@@ -1864,7 +2086,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
                 )
         return blob
 
-    def build_all(split_at=None, raw_pad=None):
+    def build_all(split_at=None, raw_pad=None, with_crc=True):
         frame_bytes = []
         for fi, runs in enumerate(frames_runs):
             palette = frame_palettes[fi]
@@ -1910,7 +2132,12 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
         toc_size = 20 * len(frame_bytes)
         total_payload = sum(len(fb) for fb in frame_bytes)
         payload = b"".join(frame_bytes)
-        crc = crc16_modbus(payload)
+        # The baseline pass exists only to measure the blob's length, and the
+        # CRC occupies a fixed-width TOC field either way -- so skipping it
+        # there cannot change the length being measured. Worth skipping:
+        # crc16_modbus runs at ~25 MB/s, which is ~1.2s over a 200-frame
+        # blob, paid on every one of these passes.
+        crc = crc16_modbus(payload) if with_crc else 0
 
         toc = bytearray(toc_size)
         offset = toc_size
@@ -1928,7 +2155,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             offset += len(fb)
         return bytes(toc) + payload
 
-    baseline = build_all()
+    baseline = build_all(with_crc=False)
     base_remainder = len(baseline) % CHUNK_SIZE
 
     candidate_targets = sorted(set(CRC_INIT) | {0})
@@ -1936,7 +2163,10 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     deltas_even = [d for d in deltas_any if d % 2 == 0]
 
     if deltas_any and deltas_any[0] == 0:
-        return _verify_and_return(baseline)
+        # Rebuild with the real CRC: `baseline` was built with with_crc=False
+        # purely to measure its length, so its TOC carries a zero checksum
+        # and must never be shipped.
+        return _verify_and_return(build_all())
 
     # Prefer padding a raw-bitmap frame with harmless trailing filler bytes
     # (ignored by the decoder, which always reads exactly width*height bytes
