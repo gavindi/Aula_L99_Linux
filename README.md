@@ -10,6 +10,10 @@ ties it all together.
 
 ![The GUI's Device tab, wearing the vendor's own skin](screenshots/00-HomeDevice.png)
 
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P21M7MBS)
+
 Everything here was derived from USB captures of the vendor's
 `DeviceDriver.exe`, static analysis of its DLLs and firmware updaters, and
 byte-level experimentation against real hardware. No vendor code runs on
