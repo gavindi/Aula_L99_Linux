@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.27] - 2026-08-03
+
+**The Touchscreen tab is laid out around the preview now, and the preview is
+the shape of the screen it is previewing.** It used to be a fixed 200x300
+tucked under the source strip, with "Send to Device" and "Animation
+Settings" stacked below it across the full width. The preview now sits in its
+own group on the left, running from the source strip down to the progress
+bar, with both control groups in a column to its right; the progress bar
+still spans the bottom. Its width follows its height at the panel's own
+320x480, so the frame is the panel's shape at any window size, and the image
+fills it edge to edge rather than sitting in the middle of a taller box with
+the styled background showing as grey bands above and below it.
+
+### Added
+- `tools/aula_l99_gui/touchscreen_tab.py`: `PreviewLabel`, a `QLabel` sized
+  by its layout instead of its contents. It keeps the unscaled pixmap and
+  rescales from it on each resize, so repeatedly growing and shrinking the
+  window doesn't compound scaling losses. Qt offers height-for-width but not
+  the reverse, so the width is set from `resizeEvent()`; that settles in one
+  extra layout pass, since the widget's width never feeds back into its own
+  height. The vertical size policy is `Ignored` deliberately — a policy that
+  honoured the pixmap's size hint would let the rescale feed a new hint back
+  into the layout and oscillate.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `PREVIEW_MIN_HEIGHT`,
+  `PREVIEW_MAX_WIDTH`/`PREVIEW_MAX_HEIGHT` (taken from `PANEL_WIDTH`/
+  `PANEL_HEIGHT`, so they can't drift from the real panel) and
+  `PREVIEW_SOURCE_SIZE`, which loads the preview at 2x the panel so it stays
+  sharp on a tall window. The preview never grows past 1:1 with the panel;
+  beyond that the extra height becomes padding under it rather than a taller
+  image, so the column still reaches the progress bar.
+
+### Changed
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_build_ui()` puts the preview and
+  the control groups in a row between the source strip and the progress bar,
+  with that row carrying the column's stretch. The preview moved out of
+  "Source Images" into its own `_build_preview_group()`.
+- `tools/aula_l99_gui/touchscreen_tab.py`: "Send to Device" stacks its three
+  buttons vertically with the packet-gap spinner on its own row beneath them
+  — side by side they no longer fit the narrower column.
+- `tools/aula_l99_gui/touchscreen_tab.py`: the preview scales with
+  `IgnoreAspectRatio`. The frame is already the panel's aspect, and the
+  upload stretches to the panel too (`_load_image()` and `_frames_from_gif()`
+  both `resize()` straight to 320x480 without preserving aspect), so the
+  preview now shows what will actually be sent. `.mp4` sources remain the
+  exception: `_extract_video_frames()` letterboxes via ffmpeg, so for video
+  the preview stretches where the upload pads.
+
 ## [0.9.26] - 2026-08-03
 
 **A Customized Animation can now be far larger than anything the vendor app

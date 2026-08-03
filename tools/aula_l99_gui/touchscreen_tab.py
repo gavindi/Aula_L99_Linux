@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -45,7 +46,17 @@ DEFAULT_GIF_DELAY = 50
 DEFAULT_PACKET_GAP_MS = 0.0
 THUMBNAIL_ICON_SIZE = QSize(96, 144)
 STRIP_ICON_SIZE = QSize(64, 96)
-PREVIEW_ICON_SIZE = QSize(200, 300)  # same 2:3 aspect as the panel (320x480)
+# The preview is sized by the layout, tracking the panel's aspect (see
+# PreviewLabel), but never grows past the panel's own 320x480: at 1:1 there
+# is nothing further to show, and a tall window would otherwise keep handing
+# it height it has no use for. The group pads underneath, so the column still
+# runs down to the progress bar without the image stretching to match.
+PREVIEW_MIN_HEIGHT = 440
+PREVIEW_MAX_WIDTH = screen_protocol.PANEL_WIDTH
+PREVIEW_MAX_HEIGHT = screen_protocol.PANEL_HEIGHT
+# Loaded at 2x the panel's own 320x480 so the preview stays sharp when the
+# window is tall; PreviewLabel scales this down to whatever height it gets.
+PREVIEW_SOURCE_SIZE = QSize(640, 960)
 SOURCE_IMAGE_FILTER = "Supported files (*.png *.jpg *.jpeg *.gif *.mp4)"
 SINGLE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 MULTI_FRAME_SUFFIXES = {".gif", ".mp4"}
@@ -53,6 +64,81 @@ MULTI_FRAME_SUFFIXES = {".gif", ".mp4"}
 
 def _pillow_missing_message() -> str:
     return "Pillow is required to load images (pip install pillow)."
+
+
+class PreviewLabel(QLabel):
+    """The source preview, sized by its layout rather than by its contents.
+
+    Holds the unscaled pixmap and rescales from it on every resize, so
+    repeatedly growing and shrinking the window doesn't compound scaling
+    losses.
+
+    The height comes from the layout -- the preview spans from the source
+    strip down to the progress bar -- and the width is then derived from it
+    at the panel's own 320x480, so the frame is the shape of the screen being
+    previewed and the image fills it edge to edge (see _rescale). Qt can do
+    height-for-width but not the reverse, hence setting the width from
+    resizeEvent(); it settles in one extra layout pass, since this widget's
+    width doesn't feed back into its own height.
+
+    The vertical size policy is Ignored on purpose: the label must take the
+    space the layout gives it and never ask for more. With a policy that
+    honoured the pixmap's size hint, setting a freshly scaled pixmap from
+    inside resizeEvent() would feed a new size hint back into the layout and
+    can oscillate.
+    """
+
+    def __init__(self, placeholder: str) -> None:
+        super().__init__(placeholder)
+        self._placeholder = placeholder
+        self._source: QPixmap | None = None
+        self.setObjectName("ImagePreview")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(PREVIEW_MIN_HEIGHT)
+        # Honoured regardless of the Ignored policy below -- that governs the
+        # size *hint*, not the min/max bounds a layout has to respect.
+        self.setMaximumHeight(PREVIEW_MAX_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Ignored)
+        self.setFixedWidth(self._width_for_height(PREVIEW_MIN_HEIGHT))
+
+    @staticmethod
+    def _width_for_height(height: int) -> int:
+        """The width that makes this label the panel's own aspect."""
+        width = round(height * screen_protocol.PANEL_WIDTH / screen_protocol.PANEL_HEIGHT)
+        return max(1, min(width, PREVIEW_MAX_WIDTH))
+
+    def set_source(self, pixmap: QPixmap | None) -> None:
+        """Show `pixmap`, or fall back to the placeholder text for None."""
+        self._source = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self._rescale()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        wanted = self._width_for_height(self.height())
+        if wanted != self.width():
+            # Re-runs the layout, which calls back in here with the new width
+            # and the same height, where `wanted` matches and this stops.
+            self.setFixedWidth(wanted)
+        self._rescale()
+
+    def _rescale(self) -> None:
+        if self._source is None:
+            self.setPixmap(QPixmap())
+            self.setText(self._placeholder)
+            return
+        self.setText("")
+        # Fills the frame rather than fitting inside it. The label is already
+        # the panel's aspect, and the upload stretches to the panel too --
+        # _load_image() and _frames_from_gif() both resize() straight to
+        # 320x480 without preserving aspect -- so stretching here shows what
+        # will actually be sent. Fitting instead left the styled background
+        # showing as grey bands above and below the image, with the border
+        # drawn around a box visibly taller than the picture in it.
+        self.setPixmap(self._source.scaled(
+            self.size(),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
 
 
 def _animation_save_dir() -> pathlib.Path:
@@ -191,12 +277,26 @@ class TouchscreenTab(QWidget):
 
         right = QVBoxLayout()
         right.addWidget(self._build_source_strip())
-        right.addWidget(self._build_send_to_device_group())
-        right.addWidget(self._build_gif_group())
+
+        # Preview on the left of this row, controls stacked to its right. The
+        # row takes all the stretch in the column, which is what makes the
+        # preview run the full height from the source strip down to the
+        # progress bar.
+        middle = QHBoxLayout()
+        middle.addWidget(self._build_preview_group())
+
+        controls = QVBoxLayout()
+        controls.addWidget(self._build_send_to_device_group())
+        controls.addWidget(self._build_gif_group())
+        # Keeps both groups at their natural height, pinned to the top of the
+        # column, instead of stretching to fill the preview's height.
+        controls.addStretch(1)
+        middle.addLayout(controls, 1)
+
+        right.addLayout(middle, 1)
 
         self.progress_bar = QProgressBar()
         right.addWidget(self.progress_bar)
-        right.addStretch(1)
 
         outer.addLayout(right, 1)
 
@@ -244,12 +344,19 @@ class TouchscreenTab(QWidget):
         self.source_strip.currentItemChanged.connect(self._on_source_image_selected)
         layout.addWidget(self.source_strip)
 
-        self.source_preview = QLabel("(no image selected)")
-        self.source_preview.setObjectName("ImagePreview")
-        self.source_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.source_preview.setFixedSize(PREVIEW_ICON_SIZE)
-        layout.addWidget(self.source_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
+        return group
 
+    def _build_preview_group(self) -> QGroupBox:
+        # Its own group rather than living inside "Source Images", so it can
+        # sit beside the control groups and span their full height.
+        group = QGroupBox("Preview")
+        layout = QVBoxLayout(group)
+        self.source_preview = PreviewLabel("(no image selected)")
+        layout.addWidget(self.source_preview)
+        # Padding, not stretch: the group still spans down to the progress
+        # bar, but once the preview hits the panel's own size the leftover
+        # height goes here instead of into the image.
+        layout.addStretch(1)
         return group
 
     def _refresh_thumbnails(self) -> None:
@@ -427,12 +534,11 @@ class TouchscreenTab(QWidget):
         self, current: QListWidgetItem | None, previous: QListWidgetItem | None
     ) -> None:
         if current is None:
-            self.source_preview.setPixmap(QPixmap())
-            self.source_preview.setText("(no image selected)")
+            self.source_preview.set_source(None)
             return
         source_path = current.data(Qt.ItemDataRole.UserRole)
-        self.source_preview.setPixmap(self._load_source_thumbnail(source_path, PREVIEW_ICON_SIZE))
-        self.source_preview.setText("")
+        self.source_preview.set_source(
+            self._load_source_thumbnail(source_path, PREVIEW_SOURCE_SIZE))
 
     def _on_choose_source_images(self) -> None:
         if Image is None:
@@ -462,7 +568,10 @@ class TouchscreenTab(QWidget):
 
     def _build_send_to_device_group(self) -> QGroupBox:
         group = QGroupBox("Send to Device")
-        layout = QHBoxLayout(group)
+        # Stacked, not in a row: the group sits in a narrow column beside the
+        # preview now, where three buttons side by side would either be
+        # clipped or force the column wider than the controls need.
+        layout = QVBoxLayout(group)
 
         self.background_button = QPushButton("Background")
         self.background_button.clicked.connect(
@@ -480,8 +589,8 @@ class TouchscreenTab(QWidget):
         self.customized_animation_button.clicked.connect(self._on_upload_gif)
         layout.addWidget(self.customized_animation_button)
 
-        layout.addStretch(1)
-        layout.addWidget(QLabel("Packet gap (ms):"))
+        gap_row = QHBoxLayout()
+        gap_row.addWidget(QLabel("Packet gap (ms):"))
         self.packet_gap_spin = QDoubleSpinBox()
         self.packet_gap_spin.setRange(0.0, 50.0)
         self.packet_gap_spin.setSingleStep(0.5)
@@ -492,7 +601,9 @@ class TouchscreenTab(QWidget):
             "unverified against the panel's firmware -- if transfers start "
             "failing, raise this back up."
         )
-        layout.addWidget(self.packet_gap_spin)
+        gap_row.addWidget(self.packet_gap_spin)
+        gap_row.addStretch(1)
+        layout.addLayout(gap_row)
 
         return group
 
