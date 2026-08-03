@@ -17,8 +17,13 @@ From `tools/`:
 cd tools
 python3 -m venv .venv          # optional but recommended
 source .venv/bin/activate
-pip install PySide6 pillow
+pip install PySide6 pillow defusedxml
 ```
+
+`defusedxml` is imported at module scope by the User Lighting tab (it parses
+saved profiles), so the GUI won't start without it. Building an animation
+from a video source additionally needs `ffmpeg`/`ffprobe` on `PATH` — that
+one is an external binary, not a pip package.
 
 (There's a `pyproject.toml` here for `uv` users: `uv run --project aula_l99_gui
 python3 -m aula_l99_gui.main` handles the venv and install automatically instead of

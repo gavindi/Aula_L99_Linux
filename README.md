@@ -120,6 +120,36 @@ streamed at ~17 fps for single keys the firmware can't animate itself
 
 Supports system-tray/app-indicator mode (`--tray`, `--start-hidden`).
 
+## Requirements
+
+Python 3.10+ (the GUI's floor; the keyboard CLI itself runs on 3.9+).
+
+| Module | Version | Needed by |
+|---|---|---|
+| [`PySide6`](https://pypi.org/project/PySide6/) | ≥ 6.5 | GUI only |
+| [`Pillow`](https://pypi.org/project/Pillow/) | ≥ 10.0 | GUI; touchscreen CLI's image/GIF/video features |
+| [`defusedxml`](https://pypi.org/project/defusedxml/) | any | GUI only — parsing saved User Lighting profiles |
+| [`pytest`](https://pypi.org/project/pytest/) | any | running the test suites only |
+
+```bash
+pip install PySide6 pillow defusedxml
+```
+
+**The keyboard CLI (`aula_l99_hacky`) needs nothing but the standard
+library** — hidraw is driven through `fcntl`/`os`, so it works on a bare
+Python install.
+
+**The touchscreen CLI (`aula_l99_screen`) needs nothing installed for device
+discovery, `--describe`, or uploading a pre-built `.bin`.** Pillow is
+imported lazily, only where an actual image is decoded (`--upload`,
+`--upload-gif`, `--convert`), and each of those exits with an install hint
+rather than a traceback if it is missing.
+
+**Not a Python module:** building an animation from a video source needs
+`ffmpeg` and `ffprobe` on `PATH` (`apt install ffmpeg`). Every other source
+format is handled by Pillow. This applies to both the GUI's Touchscreen tab
+and the CLI's video path.
+
 ## Quick start
 
 ```bash
@@ -138,7 +168,7 @@ python3 -m aula_l99_screen.cli --upload picture.png
 ./compile.sh
 ```
 
-The GUI needs `PySide6` and `pillow`; the CLIs are stdlib-only. See
+See [Requirements](#requirements) above for what to install, and
 [tools/aula_l99_gui/README.md](tools/aula_l99_gui/README.md) for venv/`uv`
 setup.
 

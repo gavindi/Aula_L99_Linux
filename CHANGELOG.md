@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.29] - 2026-08-04
+
+**A fresh install following the documented steps could not start the GUI.**
+`user_lighting_tab` has imported `defusedxml` at module scope since saved
+profiles became XML, but the module was declared nowhere — not in
+`aula_l99_gui/pyproject.toml`, not in the `pip install` line of either
+README. Every existing checkout has it sitting in its venv, which is the only
+reason this went unnoticed; a new one following the instructions would import
+`main_window`, reach the User Lighting tab and die on `ModuleNotFoundError`
+before showing a window. Documenting the requirement without also declaring
+it would only have moved the error, so both are fixed here. Checking the
+claim it replaced turned up a second inaccuracy in the root README: the
+touchscreen CLI was never stdlib-only either.
+
+### Fixed
+- `tools/aula_l99_gui/pyproject.toml`: `defusedxml` added to
+  `dependencies`. This affected `uv` users specifically, since `uv run
+  --project aula_l99_gui` builds its environment from this file alone and
+  would produce one the GUI cannot start in.
+- `tools/aula_l99_gui/README.md`: the install line is
+  `pip install PySide6 pillow defusedxml`, with a note that the import is at
+  module scope and therefore not optional.
+
+### Added
+- `README.md`: a Requirements section — the Python floor (3.10+ for the GUI,
+  3.9+ for the keyboard CLI), a table of the four third-party modules against
+  what each is actually needed by, and a single `pip install` line. `pytest`
+  is listed as test-suite-only rather than left to be discovered.
+- `README.md`: `ffmpeg`/`ffprobe` recorded as a `PATH` requirement for video
+  sources, kept out of the pip list because it is an external binary. It
+  applies to both the GUI's Touchscreen tab and the CLI's video path.
+
+### Changed
+- `README.md`: "The GUI needs `PySide6` and `pillow`; the CLIs are
+  stdlib-only" was wrong in both halves and is replaced. `aula_l99_screen`
+  imports Pillow in five places across `cli.py` and `protocol.py`. The import
+  is lazy, so the accurate line is narrower than "needs Pillow": device
+  discovery, `--describe` and uploading a pre-built `.bin` need nothing at
+  all, while `--upload`, `--upload-gif` and `--convert` each exit with an
+  install hint instead of a traceback. `aula_l99_hacky` is the one component
+  that is genuinely stdlib-only — hidraw is driven through `fcntl`/`os`.
+
 ## [0.9.28] - 2026-08-04
 
 **The preview's crop box decides what reaches the panel, so a source no
