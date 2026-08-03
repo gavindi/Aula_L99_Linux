@@ -1,4 +1,4 @@
-# AULA L99 — Linux Reverse Engineering & Tools
+# AULA L99 Linux— Control App & Tools
 
 Reverse engineering of the **AULA L99** mechanical keyboard and its built-in
 touchscreen, with working Linux tools for everything the vendor's
