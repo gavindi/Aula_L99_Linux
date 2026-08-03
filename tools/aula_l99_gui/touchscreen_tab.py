@@ -869,6 +869,20 @@ class TouchscreenTab(QWidget):
                 f"-- the panel's format carries at most "
                 f"{screen_protocol.MAX_GIF_FRAMES}",
             )
+        if blob_len > screen_protocol.VENDOR_MAX_GIF_BLOB_BYTES:
+            # Warning only, deliberately: nothing establishes how much flash
+            # is mapped above the GIF base, so this reports that the upload
+            # has left the range the vendor app could ever have written
+            # rather than second-guessing the panel. See
+            # protocol.VENDOR_MAX_GIF_BLOB_BYTES for where the figure
+            # comes from.
+            self._debug_log.append(
+                "Touchscreen",
+                f"warning: {blob_len / 1e6:.1f} MB exceeds the "
+                f"{screen_protocol.VENDOR_MAX_GIF_BLOB_BYTES / 1e6:.1f} MB the vendor "
+                f"app could ever write -- dithered frames encode much larger than its "
+                f"own do, and how much flash is mapped there is unverified",
+            )
         if self._local_save_error:
             self._debug_log.append("Touchscreen", f"Local copy not saved: {self._local_save_error}")
         else:

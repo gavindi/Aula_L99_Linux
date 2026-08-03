@@ -257,6 +257,15 @@ def cmd_upload(args: argparse.Namespace) -> int:
         blob = protocol.build_gif_blob(frames, args.width, args.height, delay=delays,
                                        dither=args.dither)
         print(f"payload: {len(frames)} frame(s), delays={delays}  ({len(blob)} bytes)")
+        if len(blob) > protocol.VENDOR_MAX_GIF_BLOB_BYTES:
+            # Warning, not a refusal: how much flash is mapped above the GIF
+            # base is unverified, so this only reports that the upload is
+            # larger than the vendor app could ever have written.
+            print(f"warning: {len(blob) / 1e6:.1f} MB exceeds the "
+                  f"{protocol.VENDOR_MAX_GIF_BLOB_BYTES / 1e6:.1f} MB ceiling implied by "
+                  f"the vendor's own frame and content-length limits -- dithered frames "
+                  f"encode much larger than its own do, and the flash beyond that point "
+                  f"is unverified")
     else:
         if len(args.upload) != 1:
             raise SystemExit(

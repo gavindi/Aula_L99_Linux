@@ -1519,6 +1519,30 @@ def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]
 
 GIF_FRAME_PREFIX_SIZE = 528
 
+GIF_TOC_ENTRY_SIZE = 20
+
+# The largest blob the vendor's own encoder could ever produce, and so the
+# most anything is known to have written to GIF_FLASH_BASE.
+#
+# Derived, not captured: a frame's content-length field is 16 bits, so an
+# RLE frame tops out at 65535 content bytes, and gif_maxframes caps the
+# count at MAX_GIF_FRAMES. That puts a hard ceiling on the vendor app at
+# roughly 13.2 MB.
+#
+# raw-bitmap mode -- this module's own addition, for dithered content whose
+# RLE encoding would overflow that 16-bit field -- instead emits a fixed
+# width*height bytes per frame (153600 at 320x480), so a long dithered
+# animation sails past the ceiling: 200 such frames is 30.8 MB, 2.3x more
+# than the vendor could ever have sent.
+#
+# Nothing above GIF_FLASH_BASE appears in any capture, so how much flash is
+# actually mapped there is unknown. This is not enforced anywhere; callers
+# use it to warn that an upload has left the range the hardware is known to
+# accept.
+VENDOR_MAX_GIF_BLOB_BYTES = MAX_GIF_FRAMES * (
+    GIF_TOC_ENTRY_SIZE + GIF_FRAME_PREFIX_SIZE + 0xFFFF
+)
+
 # Bytes 0-1 and 6-7 of every frame's sub-header have been byte-identical
 # across every captured frame regardless of content, in every capture in
 # this investigation. Meaning unknown; copied verbatim as fixed constants.
@@ -2129,7 +2153,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
                 header[off:off + 2] = struct.pack("<H", rgb_to_rgb565(*color))
             frame_bytes.append(bytes(header) + bytes(content))
 
-        toc_size = 20 * len(frame_bytes)
+        toc_size = GIF_TOC_ENTRY_SIZE * len(frame_bytes)
         total_payload = sum(len(fb) for fb in frame_bytes)
         payload = b"".join(frame_bytes)
         # The baseline pass exists only to measure the blob's length, and the
@@ -2142,7 +2166,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
         toc = bytearray(toc_size)
         offset = toc_size
         for i, fb in enumerate(frame_bytes):
-            e = 20 * i
+            e = GIF_TOC_ENTRY_SIZE * i
             struct.pack_into("<I", toc, e + 0, offset)
             struct.pack_into("<I", toc, e + 4, total_payload)
             struct.pack_into("<H", toc, e + 8, width)

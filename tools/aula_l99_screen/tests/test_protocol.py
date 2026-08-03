@@ -285,6 +285,24 @@ def test_vendor_frame_limit_is_under_the_format_ceiling():
     assert protocol.MAX_GIF_FRAMES <= protocol.GIF_FRAME_COUNT_MAX
 
 
+def test_vendor_blob_ceiling_admits_a_vendor_shaped_upload():
+    # The largest thing the vendor's own encoder could build -- every frame
+    # at the 16-bit content-length maximum -- must sit exactly at the
+    # ceiling, not over it, or the warning would fire on legitimate uploads.
+    largest_vendor_frame = (
+        protocol.GIF_TOC_ENTRY_SIZE + protocol.GIF_FRAME_PREFIX_SIZE + 0xFFFF)
+    assert (protocol.MAX_GIF_FRAMES * largest_vendor_frame
+            == protocol.VENDOR_MAX_GIF_BLOB_BYTES)
+
+
+def test_raw_bitmap_frames_can_exceed_the_vendor_blob_ceiling():
+    # The case the warning exists for: raw-bitmap mode emits a fixed
+    # width*height bytes per frame, well past what an RLE frame can reach.
+    raw_frame = (protocol.GIF_TOC_ENTRY_SIZE + protocol.GIF_FRAME_PREFIX_SIZE
+                 + protocol.PANEL_WIDTH * protocol.PANEL_HEIGHT)
+    assert protocol.MAX_GIF_FRAMES * raw_frame > protocol.VENDOR_MAX_GIF_BLOB_BYTES
+
+
 # --- CRC ------------------------------------------------------------------
 
 

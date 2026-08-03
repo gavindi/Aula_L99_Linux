@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.26] - 2026-08-03
+
+**A Customized Animation can now be far larger than anything the vendor app
+could ever have sent, and says so.** 0.9.25 capped the frame count at the
+vendor's `gif_maxframes="200"` (since confirmed against the Windows app),
+which bounds the count but not the size: raw-bitmap mode — this project's
+own addition, for dithered content whose RLE encoding would overflow the
+16-bit content-length field — emits a fixed `width*height` bytes per frame
+where the vendor's encoder structurally tops out at 65535. So 200 dithered
+frames come to 30.8 MB against the 13.2 MB ceiling implied by the vendor's
+own two limits, 2.3x more. Nothing above `GIF_FLASH_BASE` appears in any
+capture, so how much flash is actually mapped there is unknown; the GUI's
+debug log and the CLI now report crossing that line before uploading.
+Deliberately a warning and not a refusal — the upload may well be fine, but
+it is outside the range anything is known to have written.
+
+### Added
+- `tools/aula_l99_screen/protocol.py`: `VENDOR_MAX_GIF_BLOB_BYTES` — the
+  largest blob the vendor's own encoder could produce, derived rather than
+  captured as `MAX_GIF_FRAMES * (20 + 528 + 0xFFFF)` = 13,216,600 bytes.
+  `GIF_TOC_ENTRY_SIZE` (20), which the TOC builder now uses in place of the
+  two literals sitting next to it.
+- `tools/aula_l99_screen/tests/test_protocol.py`: a vendor-shaped maximum
+  upload lands exactly *on* the ceiling rather than over it, so the warning
+  cannot fire on a legitimate upload, while 200 raw-bitmap frames do exceed
+  it.
+
+### Changed
+- `tools/aula_l99_gui/touchscreen_tab.py`, `tools/aula_l99_screen/cli.py`:
+  both report an over-ceiling blob before starting the transfer, naming the
+  size, the ceiling, and why dithered frames encode so much larger.
+
 ## [0.9.25] - 2026-08-03
 
 **A Customized Animation built from a long source failed outright, after
