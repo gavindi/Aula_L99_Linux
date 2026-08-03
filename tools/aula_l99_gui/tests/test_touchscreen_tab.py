@@ -12,8 +12,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from aula_l99_gui.touchscreen_tab import (
+    CLIP_FULL,
+    SourceImage,
+    _crop_box,
     _evenly_spaced_indices,
     _per_source_frame_budget,
+    _sane_clip,
+    _source_from_csv_row,
 )
 from aula_l99_screen import protocol
 
@@ -77,3 +82,64 @@ def test_budget_survives_stills_only():
 def test_a_sampled_source_fits_what_the_format_can_carry():
     kept = _evenly_spaced_indices(4883, _per_source_frame_budget(["big.gif"]))
     assert len(kept) <= protocol.GIF_FRAME_COUNT_MAX
+
+
+# -- clip regions ------------------------------------------------------
+#
+# Clips are fractions of the source, so the same numbers describe a .png, a
+# .gif and an .mp4. Everything below guards the two ways that can go wrong:
+# a clip that escapes the source, and a clip that collapses to nothing.
+
+
+def test_an_untouched_source_is_the_whole_image():
+    assert SourceImage("a.png").clip == CLIP_FULL
+
+
+def test_the_full_clip_skips_cropping_entirely():
+    # None is the signal to leave the image alone -- both faster and what
+    # keeps an unclipped upload byte-for-byte what it was before clipping.
+    assert _crop_box(CLIP_FULL, 1920, 1080) is None
+
+
+def test_a_clip_maps_to_source_pixels():
+    assert _crop_box((0.25, 0.5, 0.5, 0.5), 800, 600) == (200, 300, 600, 600)
+
+
+def test_a_clip_never_runs_past_the_source():
+    left, top, right, bottom = _crop_box((0.9, 0.9, 0.2, 0.2), 100, 100)
+    assert right <= 100 and bottom <= 100
+    assert left < right and top < bottom
+
+
+def test_a_tiny_clip_still_yields_a_pixel():
+    # Rounding a sub-pixel clip to nothing gives Pillow a 0-wide image, which
+    # then fails to resize -- so the box is widened rather than collapsed.
+    left, top, right, bottom = _crop_box((0.5, 0.5, 0.001, 0.001), 10, 10)
+    assert right > left and bottom > top
+
+
+def test_a_clip_is_clamped_back_inside_the_source():
+    assert _sane_clip((-0.5, 0.0, 2.0, 1.0)) == (0.0, 0.0, 1.0, 1.0)
+    x, y, w, h = _sane_clip((0.8, 0.8, 0.9, 0.9))
+    assert x + w <= 1.0 and y + h <= 1.0
+
+
+def test_a_clip_is_never_zero_sized():
+    _, _, w, h = _sane_clip((0.0, 0.0, 0.0, -1.0))
+    assert w > 0 and h > 0
+
+
+def test_a_saved_row_round_trips_its_clip():
+    source = SourceImage("a.gif", 0.1, 0.2, 0.3, 0.4)
+    row = ["a.gif", "50"] + [f"{v:.6g}" for v in source.clip]
+    assert _source_from_csv_row(row).clip == source.clip
+
+
+def test_a_row_from_before_clipping_loads_as_the_whole_source():
+    # Saves written by earlier versions have only path and delay; they must
+    # keep working rather than being dropped from the list.
+    assert _source_from_csv_row(["a.gif", "50"]).clip == CLIP_FULL
+
+
+def test_a_mangled_clip_falls_back_to_the_whole_source():
+    assert _source_from_csv_row(["a.gif", "50", "x", "y", "z", "w"]).clip == CLIP_FULL

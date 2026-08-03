@@ -5,6 +5,96 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.28] - 2026-08-04
+
+**The preview's crop box decides what reaches the panel, so a source no
+longer has to be the panel's shape to be sent well.** Every source was
+stretched whole onto 320x480, which is fine for something already 2:3 and
+disfiguring for anything else — a 16:9 still had no framing to choose, only
+a distortion to accept. Each source now carries its own clip region, dragged
+directly on the preview: drag inside the box to move it, an edge or corner
+to resize it, and only what's inside is sent. The box is free-form rather
+than locked to 2:3; a crop that isn't the panel's shape still stretches to
+fit, exactly as an unclipped source of the wrong shape already did, so the
+constraint is visible in the box's proportions instead of being enforced
+against the user. The clip is a property of the file, so a GIF or video gets
+one box applied to all of its frames, and it is written into the saved
+animation's config alongside the path.
+
+### Added
+- `tools/aula_l99_gui/touchscreen_tab.py`: `SourceImage`, the build list's
+  entry type — a path plus `clip_x`/`clip_y`/`clip_w`/`clip_h`. The clip is
+  held as fractions of the source rather than pixels, so one representation
+  describes a `.png`, a `.gif` and an `.mp4` without any of their dimensions
+  having to be known first: ffmpeg's `crop` filter takes `iw`/`ih`
+  expressions, and Pillow's `crop()` is one multiply away. It also means a
+  clip survives its source being re-exported at another resolution. The
+  default is the whole image, which is what every earlier save reloads as.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_sane_clip()` and `_crop_box()`.
+  The first forces a clip back inside the source — the only things that can
+  produce an escaping one are a drag and a hand-edited config, so both are
+  clamped rather than rejected. The second converts to a pixel box for
+  Pillow, returning `None` for a full-frame clip so every caller skips the
+  crop entirely, and widening a sub-pixel box to at least one pixel: rounding
+  it to nothing hands Pillow a zero-width image that then fails to resize.
+- `tools/aula_l99_gui/touchscreen_tab.py`: clip-box interaction on
+  `PreviewLabel` — hit-testing for the four edges, four corners and the box
+  interior, hover cursors for each, and `clip_changed`/`clip_committed`
+  signals. The drag maths runs in fractions of the source throughout, so it
+  holds at whatever scale the preview happens to be drawn at. `clip_changed`
+  fires continuously and only moves the box and the readout; `clip_committed`
+  fires once on release for the work too expensive to redo per mouse-move,
+  namely re-reading the file to restyle the source strip's thumbnail.
+- `tools/aula_l99_gui/touchscreen_tab.py`: a `crop W x H` readout and a
+  "Reset Crop" button under the preview, quoting the crop in the source's own
+  pixels since that is the resolution it is actually taken at. Both are kept
+  narrow enough not to widen the column past the preview itself, which is
+  what fixes that group's width — the full detail is in the readout's
+  tooltip.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_load_source_frame()`, the first
+  frame of a source at its own size and unclipped. Split out of
+  `_load_source_thumbnail()` because the preview needs the whole source to
+  aim the box against, where the strip wants the cropped result.
+- `tools/aula_l99_gui/tests/test_touchscreen_tab.py`: clip clamping, pixel
+  mapping, the sub-pixel collapse, and config round-tripping including a row
+  written before clipping existed and a row whose clip columns are garbage.
+
+### Changed
+- `tools/aula_l99_gui/touchscreen_tab.py`: the preview fits the source at its
+  own aspect inside the panel-shaped frame and paints the box over it, dimmed
+  outside and with handles on the edges and corners. 0.9.27 stretched it to
+  fill the frame, which was the honest thing to show while the upload
+  stretched the whole source — but the framing is the box's job now, and a
+  box can only be aimed against a picture whose real shape and full extent
+  are both visible. The frame itself still tracks the panel's 320x480.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_load_image()`,
+  `_frames_from_gif()` and `_extract_video_frames()` take a clip and apply it
+  before the resize to 320x480, via the shared `_crop_to_panel()` for stills
+  and GIF frames and a `crop=iw*…:ih*…` filter for video. The video filter
+  chain puts `fps` first, so the crop and scale only run on the frames being
+  kept.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `.mp4` sources no longer
+  letterbox. `_extract_video_frames()` scaled with
+  `force_original_aspect_ratio=decrease` and padded the remainder, which was
+  reasonable while there was no way to choose the framing — it would now
+  quietly add bars around a region the user had deliberately picked, and
+  video was the one source type whose result didn't match the preview.
+  Stills and GIFs have always stretched; video now does too.
+- `tools/aula_l99_gui/touchscreen_tab.py`: the source strip's thumbnails show
+  each source cropped, so a tile whose box has been narrowed looks narrowed.
+  Committing a drag re-icons that one tile rather than calling
+  `_refresh_source_strip()`, which clears the list, drops the selection and
+  would take the preview down with it on every drag.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_save_animation_config()` appends
+  four clip columns to each source row of the animation's `.csv`.
+  `_source_from_csv_row()` reads a row that is missing them, or whose values
+  don't parse, as an unclipped source — a save that can't describe its
+  framing is still perfectly usable as a source list, and refusing it would
+  lose the paths too. Saves written before this release load unchanged.
+- `tools/aula_l99_gui/touchscreen_tab.py`: the sources handed to the
+  conversion thread are copies. That thread writes them to the config long
+  after the GUI thread is free to carry on editing clips.
+
 ## [0.9.27] - 2026-08-03
 
 **The Touchscreen tab is laid out around the preview now, and the preview is
