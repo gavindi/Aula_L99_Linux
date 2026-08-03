@@ -29,6 +29,32 @@ one is an external binary, not a pip package.
 python3 -m aula_l99_gui.main` handles the venv and install automatically instead of
 the steps above.)
 
+### Packaged build
+
+`../../package.sh` compiles all of this into a self-contained directory with
+Nuitka and packs it as a tarball, for handing to someone who has no Python and
+no wish to set one up:
+
+```bash
+./package.sh                     # from the repo root
+```
+
+The result is `build/aula-l99-gui-<version>-<arch>.tar.gz` — about 56 MB
+packed, 147 MB unpacked — containing its own CPython and Qt alongside the skin
+assets. Unpack it anywhere and run the `aula-l99-gui` binary inside; nothing
+needs installing. `ffmpeg`/`ffprobe` remain an outside requirement, and only
+for video sources.
+
+Note that this buys distribution and nothing else. Measured on one machine, the
+packaged binary reaches its first window in ~0.37 s against ~0.34 s for the
+interpreted app, and uses ~126 MB RSS against ~130 MB. Qt sets both floors, so
+compiling the Python does not move them.
+
+The build takes ~80 s and needs a C compiler. It creates its own
+`tools/.venv-build` from the declared dependencies rather than reusing the dev
+venv, and pins Python 3.13 when `uv` is available, because Nuitka 4.1.3 still
+calls 3.14 experimental (3.14 does build and run correctly — it just warns).
+
 ## Run
 
 Must be run with `tools/` on `sys.path` — either run it as a module from `tools/`,

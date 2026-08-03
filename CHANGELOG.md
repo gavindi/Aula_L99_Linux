@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.30] - 2026-08-04
+
+**The GUI can now be handed to someone who does not have Python, which was the
+only real argument for rewriting it in C++.** Sizing that rewrite came to 5–8
+weeks across the ~9,200 lines of the GUI and the two protocol libraries, on the
+strength of three claimed wins: startup, memory, and not shipping a venv. Only
+the third survived measurement. `package.sh` compiles the existing Python with
+Nuitka into a self-contained tree — its own CPython, its own Qt, the skin
+assets — and the result reaches its first window in ~0.37s against ~0.34s
+interpreted, at ~126MB RSS against ~130MB. It is fractionally *slower* and no
+smaller in memory, because Qt sets both floors and compiling the Python does
+not move them. That is worth recording as the answer to the performance
+question rather than leaving it to be re-asked: a C++ port would inherit the
+same floors.
+
+Two details of the build were not obvious and are the reason it is a script
+rather than a documented command. `assets/gif/` is 113MB of the 115MB assets
+tree and no code path opens it — saved animations go to `QStandardPaths`'
+`AppDataLocation` — so the three directories that *are* read get named
+individually, and a future asset directory will surface as a missing file
+instead of quietly re-inflating the tarball. And `aula_l99_gui/font/` sits
+outside `assets/` entirely; omitting it fails silently, because
+`theme.load_font()` returns `""` by design and Qt falls back to the platform
+font, so the build would look correct while losing the skin's typography.
+
+### Added
+- `package.sh`: builds `build/aula-l99-gui-<version>-<arch>.tar.gz` (~56MB
+  packed, 147MB unpacked) via Nuitka `--standalone`. Verified by unpacking
+  elsewhere and running under `env -i` — no absolute paths are baked in, and
+  the only outside requirement left is `ffmpeg`, for video sources.
+- The build creates its own `tools/.venv-build` from the declared dependencies
+  rather than reusing the dev venv, which carries ~500MB of packages nothing
+  imports (`onnxruntime`, `opencv-python`, `numpy`) that Nuitka's
+  import-following could otherwise drag in. It installs `PySide6_Essentials`
+  rather than `PySide6`, since only QtCore, QtGui and QtWidgets are used.
+- Python 3.13 is pinned when `uv` is available: Nuitka 4.1.3 still calls 3.14
+  experimental. 3.14 was tested and both builds run identically, so the
+  fallback path warns rather than refuses.
+
+### Changed
+- `README.md`, `tools/aula_l99_gui/README.md`: a packaged build is documented
+  alongside the source checkout, including the measured figures above so the
+  tradeoff is stated rather than implied.
+- `.gitignore`: `.venv-build/` added — the existing `.venv/` rule does not
+  match that name.
+
 ## [0.9.29] - 2026-08-04
 
 **A fresh install following the documented steps could not start the GUI.**

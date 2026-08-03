@@ -12,6 +12,8 @@ extracted_assets/
 __pycache__/
 *.pyc
 .venv/
+# package.sh's build venv -- the .venv/ rule above does not match this name.
+.venv-build/
 
 # IDE
 *.code-workspace

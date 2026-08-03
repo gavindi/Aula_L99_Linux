@@ -1,4 +1,4 @@
-# AULA L99 Linux— Control App & Tools
+# AULA L99 Linux - Keyboard App & Tools
 
 Reverse engineering of the **AULA L99** mechanical keyboard and its built-in
 touchscreen, with working Linux tools for everything the vendor's
@@ -150,6 +150,13 @@ rather than a traceback if it is missing.
 format is handled by Pillow. This applies to both the GUI's Touchscreen tab
 and the CLI's video path.
 
+**None of the above applies to the packaged GUI.** `./package.sh` builds a
+self-contained tarball that carries its own CPython and Qt, so the binary
+inside needs no Python and no `pip install` — only `ffmpeg` for video sources.
+See [Quick start](#quick-start) below and
+[tools/aula_l99_gui/README.md](tools/aula_l99_gui/README.md#packaged-build).
+Building it (as opposed to running it) needs a C compiler.
+
 ## Quick start
 
 ```bash
@@ -166,6 +173,9 @@ python3 -m aula_l99_screen.cli --upload picture.png
 
 # syntax-check everything under tools/
 ./compile.sh
+
+# build a standalone GUI tarball (no Python needed to run the result)
+./package.sh
 ```
 
 See [Requirements](#requirements) above for what to install, and
@@ -227,6 +237,7 @@ documentation/Firmware/  unpacked PE sections of the screen firmware updater
 test_images/             image/GIF test fixtures
 run.sh                   launch the GUI
 compile.sh               byte-compile everything under tools/
+package.sh               build a standalone GUI tarball with Nuitka
 CHANGELOG.md             detailed, versioned history of the whole effort
 ```
 
