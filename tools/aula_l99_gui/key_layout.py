@@ -8,8 +8,14 @@ that connection.
 """
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+
+# defusedxml, matching user_lighting_tab: stdlib ElementTree expands internal
+# entities, so a hostile layout file can blow up memory before _parse ever
+# sees an element. This one ships with the package rather than being chosen
+# by the user, but package.sh installs it into a writable tree, and there is
+# no reason for the two XML readers in this GUI to have different footing.
+import defusedxml.ElementTree as ET
 
 from aula_l99_hacky import protocol as kb_protocol
 
@@ -27,24 +33,37 @@ class KeyRect:
 
 
 def _parse(path) -> tuple[int, int, dict[int, KeyRect], dict[int, int]]:
-    root = ET.parse(path).getroot()
-    keyboard = root.find("Keyboard")
-    width = int(keyboard.get("width"))
-    height = int(keyboard.get("height"))
+    # This runs at import time, so every failure below would otherwise be a
+    # bare TypeError/AttributeError traceback out of `import main_window`,
+    # before there is a window to show anything in. A missing attribute makes
+    # int() raise TypeError on None; a missing element makes find() return
+    # None. Both are the same problem -- the layout file isn't the one this
+    # expects -- and both are worth saying so.
+    try:
+        root = ET.parse(path).getroot()
+        keyboard = root.find("Keyboard")
+        width = int(keyboard.get("width"))
+        height = int(keyboard.get("height"))
 
-    rects: dict[int, KeyRect] = {}
-    hid_by_key_id: dict[int, int] = {}
-    for key in keyboard.find("KeyItems").findall("key"):
-        key_id = int(key.get("light_index"))
-        rects[key_id] = KeyRect(
-            key_id=key_id,
-            name=key.get("name"),
-            left=int(key.get("rect_left")),
-            top=int(key.get("rect_top")),
-            width=int(key.get("rect_width")),
-            height=int(key.get("rect_height")),
-        )
-        hid_by_key_id[key_id] = int(key.get("code"), 16)
+        rects: dict[int, KeyRect] = {}
+        hid_by_key_id: dict[int, int] = {}
+        for key in keyboard.find("KeyItems").findall("key"):
+            key_id = int(key.get("light_index"))
+            rects[key_id] = KeyRect(
+                key_id=key_id,
+                name=key.get("name"),
+                left=int(key.get("rect_left")),
+                top=int(key.get("rect_top")),
+                width=int(key.get("rect_width")),
+                height=int(key.get("rect_height")),
+            )
+            hid_by_key_id[key_id] = int(key.get("code"), 16)
+    except Exception as exc:  # noqa: BLE001 - re-raised with the file named
+        raise RuntimeError(
+            f"the keyboard layout at {path} could not be read ({type(exc).__name__}: "
+            f"{exc}) -- this file ships with the package, so a fresh install or "
+            f"reinstall should restore it"
+        ) from exc
     return width, height, rects, hid_by_key_id
 
 

@@ -29,6 +29,7 @@ with a "no large enough solid run" error.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 
 from . import protocol
@@ -164,7 +165,9 @@ def _video_source_frames(path: str, width: int, height: int,
             duration = float(result.stdout.strip())
         except ValueError:
             raise SystemExit(f"error: ffprobe didn't report a usable duration for {path}")
-        if duration <= 0:
+        # isfinite, not just > 0: ffprobe reports "inf" for some streams, which
+        # passes a positivity check and then divides down to fps=0.
+        if not math.isfinite(duration) or duration <= 0:
             raise SystemExit(f"error: ffprobe reported a non-positive duration for {path}")
         fps = max_frames / duration
         print(f"deriving --fps {fps:.3f} from --max-frames {max_frames} and duration {duration:.2f}s")
@@ -214,10 +217,61 @@ TARGET_ADDRESSES = {
 }
 
 
+def _upload_address(args: argparse.Namespace) -> int:
+    """The flash address for this upload, checked before anything is built.
+
+    A bad address is not a transfer that fails: the panel acks whatever it is
+    given, so the only place to catch one is here.
+    """
+    if args.address is None:
+        return TARGET_ADDRESSES[args.target]
+
+    if not 0 <= args.address <= 0xFFFFFFFF:
+        # struct.pack(">I", ...) in build_packet would otherwise raise
+        # struct.error, which main() doesn't catch -- a traceback instead of
+        # a message.
+        raise SystemExit(
+            f"error: --address {args.address:#x} doesn't fit the wire format's 32-bit "
+            f"address field (0..0xffffffff)"
+        )
+    if args.address not in TARGET_ADDRESSES.values() and not args.force_address:
+        known = ", ".join(f"{name} ({addr:#x})" for name, addr in sorted(TARGET_ADDRESSES.items()))
+        raise SystemExit(
+            f"error: --address {args.address:#x} is not one of the addresses this panel is "
+            f"known to accept -- {known}. Nothing establishes what is mapped there or how "
+            f"much of it, so an upload can't be bounds-checked and may overwrite firmware. "
+            f"Pass --force-address to do it anyway."
+        )
+    return args.address
+
+
+def _check_dimensions(args: argparse.Namespace) -> None:
+    """Reject dimensions that would build a blob no slot can hold.
+
+    Unbounded --width/--height used to reach build_image_file() directly:
+    --height 960 alone produces 614411 bytes, which is a size whose final
+    chunk happens to land on a solved CRC_INIT entry, so every packet of it
+    builds and acks while overwriting 221195 bytes of the adjacent GIF slot.
+    """
+    if args.width <= 0 or args.height <= 0:
+        raise SystemExit(
+            f"error: --width/--height must be positive, got {args.width}x{args.height}")
+    if args.force_size:
+        return
+    if args.width > protocol.PANEL_WIDTH or args.height > protocol.PANEL_HEIGHT:
+        raise SystemExit(
+            f"error: {args.width}x{args.height} is larger than the panel's "
+            f"{protocol.PANEL_WIDTH}x{protocol.PANEL_HEIGHT}, so the image would run past "
+            f"the end of its flash slot and over whatever follows it. Pass --force-size to "
+            f"do it anyway."
+        )
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     import time
 
-    address = args.address if args.address is not None else TARGET_ADDRESSES[args.target]
+    address = _upload_address(args)
+    _check_dimensions(args)
 
     if args.target == "gif":
         import pathlib
@@ -257,15 +311,17 @@ def cmd_upload(args: argparse.Namespace) -> int:
         blob = protocol.build_gif_blob(frames, args.width, args.height, delay=delays,
                                        dither=args.dither)
         print(f"payload: {len(frames)} frame(s), delays={delays}  ({len(blob)} bytes)")
-        if len(blob) > protocol.VENDOR_MAX_GIF_BLOB_BYTES:
-            # Warning, not a refusal: how much flash is mapped above the GIF
-            # base is unverified, so this only reports that the upload is
-            # larger than the vendor app could ever have written.
-            print(f"warning: {len(blob) / 1e6:.1f} MB exceeds the "
-                  f"{protocol.VENDOR_MAX_GIF_BLOB_BYTES / 1e6:.1f} MB ceiling implied by "
-                  f"the vendor's own frame and content-length limits -- dithered frames "
-                  f"encode much larger than its own do, and the flash beyond that point "
-                  f"is unverified")
+        if len(blob) > protocol.VENDOR_MAX_GIF_BLOB_BYTES and not args.force_size:
+            # A refusal now, not the warning this used to print before
+            # uploading anyway. How much flash is mapped above the GIF base
+            # is unverified, and "unverified" is a reason not to write there,
+            # not a reason to write there and mention it.
+            raise SystemExit(
+                f"error: {len(blob) / 1e6:.1f} MB exceeds the "
+                f"{protocol.VENDOR_MAX_GIF_BLOB_BYTES / 1e6:.1f} MB ceiling implied by "
+                f"the vendor's own frame and content-length limits -- dithered frames "
+                f"encode much larger than its own do, and the flash beyond that point is "
+                f"unverified. Use fewer frames, or --force-size to send it anyway.")
     else:
         if len(args.upload) != 1:
             raise SystemExit(
@@ -275,7 +331,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         blob = _encode(args.upload[0], args.width, args.height)
         print(f"payload: {protocol.describe(blob)}  ({len(blob)} bytes)")
 
-    packets = protocol.build_upload(blob, address)
+    packets = protocol.build_upload(blob, address, force=args.force_size or args.force_address)
     print(f"{len(packets)} packets to flash {address:#x}")
 
     device = find_screen()
@@ -319,7 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", choices=sorted(TARGET_ADDRESSES), default="photo-frame",
                         help="upload destination for --upload (default %(default)s)")
     parser.add_argument("--address", type=lambda v: int(v, 0), default=None,
-                        help="flash address for --upload; overrides --target")
+                        help="flash address for --upload; overrides --target. Must be one "
+                             "of the known target addresses unless --force-address is given")
+    parser.add_argument("--force-address", action="store_true",
+                        help="allow --address outside the known targets. Nothing establishes "
+                             "what is mapped there, so the upload cannot be bounds-checked "
+                             "and may overwrite firmware")
+    parser.add_argument("--force-size", action="store_true",
+                        help="allow an upload larger than its flash slot holds, including "
+                             "--width/--height beyond the panel's own. The excess overwrites "
+                             "whatever flash follows the slot; the panel acks it regardless")
     parser.add_argument("--gif-delay", type=int, default=None,
                         help="inter-frame delay for --target gif, unit unconfirmed. "
                              "Overrides every frame's delay uniformly, including a source "

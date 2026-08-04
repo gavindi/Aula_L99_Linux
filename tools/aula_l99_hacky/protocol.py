@@ -542,9 +542,20 @@ def parse_color_blocks(blocks: list[bytes]) -> dict[int, tuple[int, int, int]]:
     block: every block is a real row, so all of them are scanned the same way.
     Positions with no physical key (key id absent from KEY_IDS, including the
     all-zero padding in the last block) are dropped.
+
+    Blocks are length-checked like parse_stream_blocks() and
+    parse_audio_block() do. Today's callers read via get_feature(), which
+    always returns exactly PACKET_SIZE bytes because the ioctl fills a
+    preallocated buffer -- but the slicing below would silently return a
+    2-element "colour" for a short block rather than failing, so a caller
+    switching to read_report() (which returns whatever arrived) would get
+    wrong colours instead of an error.
     """
     colors: dict[int, tuple[int, int, int]] = {}
-    for block in blocks:
+    for index, block in enumerate(blocks):
+        if len(block) != PACKET_SIZE:
+            raise ValueError(
+                f"block {index}: expected a {PACKET_SIZE}-byte block, got {len(block)}")
         for column in range(KEYS_PER_ROW):
             offset = column * BYTES_PER_KEY
             key_id = block[offset]

@@ -357,3 +357,21 @@ def test_dongle_replies_match_tolerates_the_version_byte():
     assert not protocol.dongle_replies_match(bytes(other), protocol.SESSION_INIT_IN)
     assert not protocol.dongle_replies_match(
         protocol.SESSION_INIT_IN, bytes.fromhex("00"))
+
+
+def test_parse_color_blocks_rejects_a_short_block():
+    """A short block would otherwise slice to a 2-element "colour" and be
+    returned as one, so a caller reading via read_report() (which returns
+    whatever arrived) would get wrong colours rather than an error."""
+    blocks = [bytes(protocol.PACKET_SIZE)] * (protocol.COLOR_BLOCK_COUNT - 1)
+    blocks.append(bytes(protocol.PACKET_SIZE - 1))
+    with pytest.raises(ValueError, match="block"):
+        protocol.parse_color_blocks(blocks)
+
+
+def test_parse_color_blocks_round_trips_a_full_read():
+    colors = protocol.build_uniform_colors((10, 20, 30))
+    # A query reply has no terminator block, unlike a write -- see
+    # build_color_query_commands.
+    blocks = protocol.build_color_blocks(colors)[:-1]
+    assert protocol.parse_color_blocks(blocks) == colors

@@ -36,6 +36,11 @@ def _cpu_busy_percent(prev_idle: int | None, prev_total: int | None) -> tuple[in
         values = [int(v) for v in fields[1:]]
     except ValueError:
         return None
+    # idle and iowait are fields 4 and 5 of the cpu line; every Linux since
+    # 2.6 has had them, but reading a truncated line shouldn't be an
+    # IndexError out of a function that returns None for everything else.
+    if len(values) < 5:
+        return None
     idle = values[3] + values[4]
     total = sum(values)
     if prev_idle is None or prev_total is None or total < prev_total:

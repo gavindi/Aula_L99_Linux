@@ -129,10 +129,21 @@ def _load_lighting_xml(path: pathlib.Path) -> dict[int, tuple[int, int, int]]:
     colors: dict[int, tuple[int, int, int]] = {}
     keyinfo = root.find("keyinfo")
     for item in [] if keyinfo is None else keyinfo.findall("item"):
-        key_id = key_layout.KEY_ID_BY_HID.get(int(item.get("keycode", "-1")))
+        # Skipped rather than fatal, for the same reason an unrecognised
+        # keycode is: one malformed <item> in a file shared across vendor
+        # models shouldn't cost the user the other 83 keys. int() raises on
+        # any non-numeric attribute, including an absent one once the
+        # default is gone.
+        try:
+            keycode = int(item.get("keycode", "-1"))
+            rgb = int(item.get("rgbvalue", "0"))
+        except (TypeError, ValueError):
+            continue
+        key_id = key_layout.KEY_ID_BY_HID.get(keycode)
         if key_id is None:
             continue
-        rgb = int(item.get("rgbvalue", "0"))
+        # Masked, so a negative or out-of-range rgbvalue still yields three
+        # in-range channels rather than something build_color_blocks rejects.
         colors[key_id] = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF)
     return colors
 

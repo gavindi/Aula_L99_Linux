@@ -104,7 +104,16 @@ def find_l99(interface: int = VENDOR_INTERFACE) -> HidrawDevice:
     )
 
 
+_IOC_SIZE_MAX = 0x3FFF  # the size field is 14 bits wide
+
+
 def _ioctl_code(direction: int, ioc_type: int, nr: int, size: int) -> int:
+    # Anything wider than the size field would silently carry into the
+    # direction bits above it and build a different ioctl entirely. Latent
+    # today (callers pass PACKET_SIZE + 1), so this documents the constraint
+    # as much as it enforces it.
+    if not 0 <= size <= _IOC_SIZE_MAX:
+        raise ValueError(f"ioctl size must be 0..{_IOC_SIZE_MAX}, got {size}")
     return (direction << 30) | (ioc_type << 8) | nr | (size << 16)
 
 

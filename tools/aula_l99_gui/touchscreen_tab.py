@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import dataclasses
 import io
+import math
 import pathlib
 import shutil
 import subprocess
@@ -37,6 +38,18 @@ except ImportError:  # pragma: no cover - Pillow is a declared dependency
     ImageSequence = None
 
 from aula_l99_screen import protocol as screen_protocol
+
+if Image is not None:
+    # Every source here is stretched onto a 320x480 panel, so nothing this
+    # tab opens has any reason to be enormous -- and Image.open() hands an
+    # arbitrary user-chosen file to Pillow's C decoders, which is the one
+    # place in this project where a malformed file meets memory-unsafe code.
+    # Pillow's own default (~89 Mpx) is a generic figure aimed at a library
+    # that can't know its caller; this one is the panel's own area with room
+    # to spare for a genuinely high-resolution source to be downscaled from.
+    # Over it, Pillow raises DecompressionBombError -- which is not an
+    # OSError, so every `except OSError` around an open() here names it too.
+    Image.MAX_IMAGE_PIXELS = 64 * screen_protocol.PANEL_WIDTH * screen_protocol.PANEL_HEIGHT
 
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
@@ -82,6 +95,13 @@ def _pillow_missing_message() -> str:
 def _sane_clip(clip: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     """`clip` forced back inside the source, for values off disk or a drag."""
     x, y, w, h = (float(v) for v in clip)
+    # min/max propagate NaN rather than clamping it, so every bound below is a
+    # no-op for one and it would reach _crop_box's int() (which raises) or
+    # ffmpeg's crop filter (which doesn't parse). A csv holding "nan" also
+    # parses cleanly through float(), so _source_from_csv_row's own except
+    # never sees it -- this is the only place it can be caught.
+    if not all(math.isfinite(v) for v in (x, y, w, h)):
+        return CLIP_FULL
     x = min(max(x, 0.0), 1.0)
     y = min(max(y, 0.0), 1.0)
     # A zero-width clip would crop to nothing and a too-wide one would run off
@@ -1108,7 +1128,7 @@ class TouchscreenTab(QWidget):
         path = source.path
         try:
             image = self._load_image(path, source.clip)
-        except OSError as exc:
+        except (OSError, Image.DecompressionBombError) as exc:
             QMessageBox.critical(self, "Screen", f"Could not open {path}:\n{exc}")
             return
 
@@ -1196,7 +1216,7 @@ class TouchscreenTab(QWidget):
                 try:
                     frames.append(
                         self._pixels_from_image(self._load_image(path, source.clip)))
-                except OSError as exc:
+                except (OSError, Image.DecompressionBombError) as exc:
                     raise ValueError(f"Could not open {path}: {exc}") from exc
         # Safety net for the mixed-source case, where per-source budgets can
         # still add up to more than the panel takes (e.g. many stills).
@@ -1218,7 +1238,9 @@ class TouchscreenTab(QWidget):
             duration = float(result.stdout.strip())
         except (subprocess.CalledProcessError, ValueError):
             return None
-        return duration if duration > 0 else None
+        # isfinite as well as > 0: ffprobe reports "inf" for some streams, and
+        # that passes a positivity check only to divide down to fps=0 below.
+        return duration if math.isfinite(duration) and duration > 0 else None
 
     def _extract_video_frames(self, path: str, delay: int, limit: int,
                               clip: tuple[float, float, float, float] = CLIP_FULL
@@ -1352,7 +1374,19 @@ class TouchscreenTab(QWidget):
         # packet list, for the whole packing phase and the upload after it.
         del frames
         blob_len = len(blob)
-        packets = screen_protocol.build_upload(blob, screen_protocol.GIF_FLASH_BASE)
+        try:
+            packets = screen_protocol.build_upload(blob, screen_protocol.GIF_FLASH_BASE)
+        except ValueError as exc:
+            # build_upload refuses a blob larger than the GIF slot is known to
+            # hold. Re-raised with the one thing the protocol layer can't know:
+            # what the user can actually do about it from this tab. Nothing
+            # here offers the CLI's --force-size -- overwriting unidentified
+            # flash isn't a button a GUI should have.
+            raise ValueError(
+                f"{exc}\n\nThis animation is {blob_len / 1e6:.1f} MB. Dithered frames "
+                f"encode much larger than flat ones, so try fewer frames, a shorter "
+                f"source, or turning dithering off."
+            ) from exc
         del blob
         return packets, frame_count, blob_len
 
@@ -1412,20 +1446,10 @@ class TouchscreenTab(QWidget):
                 f"-- the panel's format carries at most "
                 f"{screen_protocol.MAX_GIF_FRAMES}",
             )
-        if blob_len > screen_protocol.VENDOR_MAX_GIF_BLOB_BYTES:
-            # Warning only, deliberately: nothing establishes how much flash
-            # is mapped above the GIF base, so this reports that the upload
-            # has left the range the vendor app could ever have written
-            # rather than second-guessing the panel. See
-            # protocol.VENDOR_MAX_GIF_BLOB_BYTES for where the figure
-            # comes from.
-            self._debug_log.append(
-                "Touchscreen",
-                f"warning: {blob_len / 1e6:.1f} MB exceeds the "
-                f"{screen_protocol.VENDOR_MAX_GIF_BLOB_BYTES / 1e6:.1f} MB the vendor "
-                f"app could ever write -- dithered frames encode much larger than its "
-                f"own do, and how much flash is mapped there is unverified",
-            )
+        # No oversize warning here any more: an upload past what the GIF slot
+        # is known to hold is refused outright by build_upload(), so it fails
+        # in _build_gif_packets and arrives as `_convert_error` above rather
+        # than reaching this point and being uploaded with a note in the log.
         if self._local_save_error:
             self._debug_log.append("Touchscreen", f"Local copy not saved: {self._local_save_error}")
         else:

@@ -227,6 +227,79 @@ BACKGROUND_FLASH_BASE = 0x04180000     # "Save to BKG", confirmed from
 # see the GIF container notes below.
 GIF_FLASH_BASE = 0x04240000
 
+# The panel's own partition stride, recovered from the firmware images
+# embedded in the vendor's updaters -- see
+# re_notes/flash_slot_table.md for the offsets and the verification.
+#
+# Both `Windows/AULA L99/firmware/L99 ISP V1.23.exe` and the 194MB screen
+# reset firmware exe carry a six-entry list of flash bases on a uniform
+# 0x60000 stride:
+#
+#   0x04060000 0x040C0000 0x04120000 0x04180000 0x041E0000 0x04240000
+#                                       BKG       PHOTO      GIF
+#
+# The three named ones match the bases derived from captures exactly, which
+# is what makes the other three, and the stride, worth believing. This is
+# device-side firmware, not host code: the vendor's PC binaries
+# (pic_scan.dll, Image2Bin.exe, SerialPortTool.exe, DeviceDriver.exe)
+# contain no flash addresses at all -- they are handed them.
+#
+# 0x04200000, which the vendor binary also references, sits between the
+# photo-frame and GIF bases and is NOT a boundary: it is not on this lattice,
+# and a perfectly ordinary 320x480 photo-frame image is 307211 bytes and so
+# runs from 0x041E0000 to 0x0422B04B, straight through it. Whatever that
+# address is for, the vendor's own photo-frame writes overlap it, so using it
+# as a ceiling would reject uploads the device demonstrably accepts.
+SLOT_STRIDE = 0x60000                  # 393216 bytes; the table's stride
+
+SLOT_CAPACITY = {
+    BACKGROUND_FLASH_BASE: PHOTO_FRAME_FLASH_BASE - BACKGROUND_FLASH_BASE,
+    PHOTO_FRAME_FLASH_BASE: GIF_FLASH_BASE - PHOTO_FRAME_FLASH_BASE,
+    # Both of the above are SLOT_STRIDE already, arrived at independently as
+    # base-to-base gaps before the firmware table was found. The table
+    # agreeing with them is what makes the table worth trusting for the two
+    # slots it can be checked against.
+    #
+    # The GIF slot is NOT one stride, and the attempt to make it one is
+    # recorded here because the reasoning was wrong in an instructive way.
+    # It is the last entry in the table, so its size cannot be got by
+    # subtracting a next base -- assuming the stride continues was an
+    # inference, and it is contradicted by the vendor's own shipped assets:
+    # gif/AULA L99/0.gif is 214 frames at 320x480, gif/用户动画(1)/*.gif are
+    # 200 each. Fitting 214 frames in 393216 bytes needs 1837 bytes/frame,
+    # which only the flat solid-colour test captures ever achieved
+    # (save_to_gif_3, 2048). Real content in save_to_gif_1 took 105131
+    # bytes/frame, putting that asset at ~22 MB.
+    #
+    # The "no capture exceeds 393216" observation that seemed to corroborate
+    # the stride is worthless: every capture is 2-3 frames, so the vendor was
+    # never once observed uploading a real animation. That is a small sample,
+    # not a ceiling. See re_notes/flash_slot_table.md.
+    GIF_FLASH_BASE: None,   # replaced below, once the ceiling is defined
+}
+
+
+def check_upload_fits(blob_len: int, base: int) -> None:
+    """Raise unless a blob of `blob_len` bytes stays inside `base`'s slot.
+
+    Called by build_upload(), so every caller inherits it. An oversized
+    upload is not a transfer that fails: the panel acks every packet of it
+    and the bytes past the slot's end land on whatever is next in flash.
+
+    An address with no capacity entry (a hand-picked --address) passes: there
+    is no model for where it ends, and inventing one would be worse than
+    saying so.
+    """
+    capacity = SLOT_CAPACITY.get(base)
+    if capacity is None or blob_len <= capacity:
+        return
+    raise ValueError(
+        f"{blob_len} bytes at {base:#x} runs {blob_len - capacity} bytes past the "
+        f"{capacity} the slot holds, ending at {base + blob_len:#x} -- that overwrites "
+        f"whatever flash follows it, and the panel will ack every packet of it anyway"
+    )
+
+
 # The TOC's frame-count field ([13] of each entry, below) is a single byte, so
 # the format cannot express more than 255 frames -- build_gif_blob() rejects
 # anything above that rather than letting the bytearray store silently blow up
@@ -1471,13 +1544,25 @@ def build_packet(cmd: int, const: int, address: int, payload: bytes) -> bytes:
     return bytes(body) + struct.pack("<H", crc16_packet(bytes(body)))
 
 
-def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE) -> list[bytes]:
+def build_upload(blob: bytes, base: int = PHOTO_FRAME_FLASH_BASE,
+                 force: bool = False) -> list[bytes]:
     """The full packet sequence for one image, in the vendor's own order.
 
     Full 2048-byte chunks are written until a 128 KiB region is filled, then a
     commit for that region carrying the byte count written to it. Any remainder
     goes out as a final short packet before the last commit.
+
+    Raises if the blob doesn't fit the slot at `base` -- see
+    check_upload_fits(). Here rather than in each frontend so nothing can
+    reach the wire without passing it.
+
+    force: skip that check. For deliberate experiments only -- this is a
+    reverse-engineering tool and writing outside a known slot is a legitimate
+    thing to want to try, but it has to be asked for, not defaulted into.
     """
+    if not force:
+        check_upload_fits(len(blob), base)
+
     packets: list[bytes] = []
     offset = 0
     region_start = base
@@ -1536,12 +1621,31 @@ GIF_TOC_ENTRY_SIZE = 20
 # than the vendor could ever have sent.
 #
 # Nothing above GIF_FLASH_BASE appears in any capture, so how much flash is
-# actually mapped there is unknown. This is not enforced anywhere; callers
-# use it to warn that an upload has left the range the hardware is known to
-# accept.
+# actually mapped there is unknown. This remains the best available stand-in
+# for the GIF slot's real extent: it is the only figure the vendor's own
+# behaviour supports, since its shipped assets (128-214 frames at 320x480)
+# need multiple MB by any per-frame rate the captures establish, and its
+# format is built to express exactly this much.
 VENDOR_MAX_GIF_BLOB_BYTES = MAX_GIF_FRAMES * (
     GIF_TOC_ENTRY_SIZE + GIF_FRAME_PREFIX_SIZE + 0xFFFF
 )
+
+# Largest blob any capture actually contains -- save_to_gif_1, a real photo
+# GIF, at 3 frames and 105131 bytes/frame. Recorded to keep the distinction
+# between "the most the vendor was seen to send" and "the most it could send"
+# visible, because conflating them is what briefly produced a 393216-byte cap
+# here: every capture is 2-3 frames, so this number describes the sample, not
+# the hardware, and must never be used as a bound. See SLOT_CAPACITY.
+VENDOR_OBSERVED_MAX_GIF_BLOB_BYTES = 315392
+
+# Enforced, via check_upload_fits(). Not an address difference -- the GIF
+# slot is the last entry in the firmware's partition table and has no next
+# base to be measured against, so this is the vendor's own ceiling standing
+# in for one. raw-bitmap frames encode far larger than the vendor's own ever
+# did, so a long dithered animation still sails past it; that upload is the
+# one worth stopping, since nothing establishes that the flash it would
+# reach is mapped at all.
+SLOT_CAPACITY[GIF_FLASH_BASE] = VENDOR_MAX_GIF_BLOB_BYTES
 
 # Bytes 0-1 and 6-7 of every frame's sub-header have been byte-identical
 # across every captured frame regardless of content, in every capture in
@@ -2080,7 +2184,7 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
     frame_palettes: list[list[tuple[int, int, int]]] = []
     frame_palette_indexes: list[dict[tuple[int, int, int], int]] = []
     frame_modes: list[bool] = []  # True = raw-bitmap
-    for px in frames_pixels:
+    for fi, px in enumerate(frames_pixels):
         runs = _gif_runs(px)
         palette: list[tuple[int, int, int]] = []
         palette_index: dict[tuple[int, int, int], int] = {}
@@ -2088,6 +2192,25 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             if color not in palette_index:
                 palette_index[color] = len(palette)
                 palette.append(color)
+        # Checked here, before any content is built, rather than while the
+        # header is being filled in below: a palette index goes into a single
+        # byte of content in both modes, so an over-256-slot frame otherwise
+        # died first in bytearray.append/bytes() with "byte must be in
+        # range(0, 256)" instead of the real explanation.
+        #
+        # (528 - 16) / 2 = 256 slots is what the prefix holds. dither=True
+        # content can't structurally reach it -- the ramp has only 6*7*6 =
+        # 252 legal colors -- but is_safe_gif_color admits any color whose
+        # brightest channel is 255, which is ~195k of them, so the
+        # undithered path can.
+        max_slots = (GIF_FRAME_PREFIX_SIZE - 16) // 2
+        if len(palette) > max_slots:
+            raise ValueError(
+                f"frame {fi}: {len(palette)} distinct colors is too many for the "
+                f"{GIF_FRAME_PREFIX_SIZE}-byte prefix, which holds {max_slots} palette "
+                f"slots (only ever confirmed up to 11 on hardware) -- reduce the frame's "
+                f"colors, or pass dither=True to quantize onto the device's ramp"
+            )
         raw_bitmap = _gif_token_count(runs) * 2 > 0xFFFF
         frame_palettes.append(palette)
         frame_palette_indexes.append(palette_index)
@@ -2140,16 +2263,10 @@ def build_gif_blob(frames_pixels: list[list[tuple[int, int, int]]],
             header[8:12] = struct.pack("<I", size32)
             header[12:14] = struct.pack("<H", len(content) % 65536)
             header[14:16] = struct.pack("<H", mode_flag)
+            # Bounded above, before any content was built -- see the
+            # max_slots check where the palettes are assembled.
             for i, color in enumerate(palette):
                 off = 16 + i * 2
-                # This caps the palette at (528-16)/2 = 256 slots. The full
-                # ramp only has 6*7*6 = 252 legal (R,G,B) combinations, so
-                # dither=True content can never structurally overflow this.
-                if off + 2 > GIF_FRAME_PREFIX_SIZE:
-                    raise ValueError(
-                        f"frame {fi}: {len(palette)} distinct colors is too many for the "
-                        f"528-byte prefix (only ever confirmed up to 11 slots)"
-                    )
                 header[off:off + 2] = struct.pack("<H", rgb_to_rgb565(*color))
             frame_bytes.append(bytes(header) + bytes(content))
 

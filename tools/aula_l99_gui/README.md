@@ -25,6 +25,12 @@ saved profiles), so the GUI won't start without it. Building an animation
 from a video source additionally needs `ffmpeg`/`ffprobe` on `PATH` — that
 one is an external binary, not a pip package.
 
+Keep Pillow and `ffmpeg` current. The Touchscreen tab hands whatever image,
+GIF or video you pick straight to their decoders, which are C and are the only
+part of this project where a malformed file meets memory-unsafe code — the
+Python here can be wrong but not corrupted. `pyproject.toml`'s Pillow floor is
+set for that reason rather than for any API it needs.
+
 (There's a `pyproject.toml` here for `uv` users: `uv run --project aula_l99_gui
 python3 -m aula_l99_gui.main` handles the venv and install automatically instead of
 the steps above.)

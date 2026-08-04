@@ -444,3 +444,92 @@ def test_ramp_colors_is_the_full_product():
     assert len(protocol.RAMP_COLORS) == len(set(protocol.RAMP_COLORS))
     for color in protocol.RAMP_COLORS:
         assert protocol.is_ramp_legal_color(*color)
+
+
+# --- flash slot bounds -----------------------------------------------------
+
+
+def test_an_upload_that_overruns_its_slot_is_refused():
+    """The panel acks every packet of an oversized upload and writes the
+    excess over whatever flash follows the slot, so build_upload is the only
+    place this can be caught."""
+    blob = b"\x00" * (protocol.SLOT_CAPACITY[protocol.PHOTO_FRAME_FLASH_BASE] + 1)
+    with pytest.raises(ValueError, match="past"):
+        protocol.build_upload(blob, protocol.PHOTO_FRAME_FLASH_BASE)
+
+
+def test_an_ordinary_panel_sized_image_still_fits_every_image_slot():
+    blob = protocol.build_image_file(
+        b"\x00" * (protocol.PANEL_WIDTH * protocol.PANEL_HEIGHT * 3))
+    for base in (protocol.PHOTO_FRAME_FLASH_BASE, protocol.BACKGROUND_FLASH_BASE):
+        # 154 packets is what wireshark_dumps/save_to_bkg_1/2.pcapng contain.
+        assert len(protocol.build_upload(blob, base)) == 154
+
+
+def test_an_oversized_height_cannot_reach_the_gif_slot():
+    """--height 960 was the concrete case: 614411 bytes, whose final chunk
+    length (11) is a solved CRC_INIT entry, so every packet of it built and
+    acked while overwriting the start of the GIF slot."""
+    blob = protocol.build_image_file(
+        b"\x00" * (protocol.PANEL_WIDTH * 960 * 3), protocol.PANEL_WIDTH, 960)
+    end = protocol.PHOTO_FRAME_FLASH_BASE + len(blob)
+    assert end > protocol.GIF_FLASH_BASE, "the case under test must actually overrun"
+    with pytest.raises(ValueError):
+        protocol.build_upload(blob, protocol.PHOTO_FRAME_FLASH_BASE)
+
+
+def test_force_sends_an_oversized_upload_anyway():
+    # The escape hatch --force-size/--force-address rely on; this is a
+    # reverse-engineering tool and writing outside a known slot is a
+    # legitimate experiment, as long as it is asked for.
+    blob = b"\x00" * (protocol.SLOT_CAPACITY[protocol.PHOTO_FRAME_FLASH_BASE] + 2048)
+    assert protocol.build_upload(blob, protocol.PHOTO_FRAME_FLASH_BASE, force=True)
+
+
+def test_an_unknown_address_has_no_capacity_to_check_against():
+    # No entry means no model of where the slot ends; inventing one would be
+    # worse than passing it through, which is what --force-address is for.
+    protocol.check_upload_fits(10_000_000, 0x0DEADBEE)
+
+
+def test_the_gif_slot_is_capped_at_the_vendor_ceiling():
+    assert (protocol.SLOT_CAPACITY[protocol.GIF_FLASH_BASE]
+            == protocol.VENDOR_MAX_GIF_BLOB_BYTES)
+    with pytest.raises(ValueError):
+        protocol.build_upload(b"\x00" * (protocol.VENDOR_MAX_GIF_BLOB_BYTES + 1),
+                              protocol.GIF_FLASH_BASE)
+
+
+def test_the_two_measurable_slots_match_the_firmware_table_stride():
+    """The firmware's partition list (re_notes/flash_slot_table.md) is six
+    bases on a uniform 0x60000 stride. For the two slots whose size can also
+    be got by subtracting adjacent bases, the two methods agree -- which is
+    what makes the table trustworthy where it can be checked."""
+    assert protocol.SLOT_STRIDE == 0x60000
+    for base in (protocol.BACKGROUND_FLASH_BASE, protocol.PHOTO_FRAME_FLASH_BASE):
+        assert protocol.SLOT_CAPACITY[base] == protocol.SLOT_STRIDE
+
+
+def test_the_gif_slot_is_not_assumed_to_be_one_stride():
+    """Regression test for a wrong turn worth not repeating. GIF is the last
+    table entry, so the stride cannot be checked by subtraction there, and
+    assuming it continued gave a 393216-byte cap. The vendor ships 200- and
+    214-frame 320x480 animations, which need multiple MB at any per-frame
+    rate the captures show (save_to_gif_1: 105131 bytes/frame for real photo
+    content), so that cap would refuse the vendor's own assets."""
+    assert protocol.SLOT_CAPACITY[protocol.GIF_FLASH_BASE] > protocol.SLOT_STRIDE
+
+    largest_vendor_asset_frames = 214
+    real_content_bytes_per_frame = 105131
+    protocol.check_upload_fits(
+        largest_vendor_asset_frames * real_content_bytes_per_frame // 2,
+        protocol.GIF_FLASH_BASE)
+
+
+def test_the_observed_maximum_is_not_used_as_a_bound():
+    """Every capture is 2-3 frames, so the largest one describes the sample,
+    not the hardware. Conflating the two is what produced the bad cap."""
+    assert (protocol.VENDOR_OBSERVED_MAX_GIF_BLOB_BYTES
+            < protocol.SLOT_CAPACITY[protocol.GIF_FLASH_BASE])
+    protocol.check_upload_fits(protocol.VENDOR_OBSERVED_MAX_GIF_BLOB_BYTES * 4,
+                               protocol.GIF_FLASH_BASE)

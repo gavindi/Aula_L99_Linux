@@ -5,7 +5,12 @@ description = "PySide6 GUI for the AULA L99 keyboard + touchscreen tools"
 requires-python = ">=3.10"
 dependencies = [
     "PySide6>=6.5",
-    "Pillow>=10.0",
+    # The Touchscreen tab opens whatever image, GIF or video the user picks,
+    # so Pillow's C decoders are the one place in this project where a
+    # malformed file meets memory-unsafe code. The floor is a security one
+    # rather than an API one -- nothing here needs a feature newer than 10.0
+    # -- so it tracks decoder fixes and is worth raising again over time.
+    "Pillow>=11.3",
     # user_lighting_tab imports this at module scope to parse saved profiles,
     # so the GUI won't start without it.
     "defusedxml",

@@ -143,3 +143,30 @@ def test_a_row_from_before_clipping_loads_as_the_whole_source():
 
 def test_a_mangled_clip_falls_back_to_the_whole_source():
     assert _source_from_csv_row(["a.gif", "50", "x", "y", "z", "w"]).clip == CLIP_FULL
+
+
+def test_a_non_finite_clip_falls_back_to_the_whole_source():
+    # min/max propagate NaN instead of clamping it, so without an explicit
+    # check every bound in _sane_clip is a no-op for one and it reaches
+    # _crop_box's int(), which raises. float("nan") also parses cleanly, so
+    # _source_from_csv_row's own except never sees it.
+    assert _sane_clip((float("nan"),) * 4) == CLIP_FULL
+    assert _source_from_csv_row(["a.gif", "50", "nan", "nan", "nan", "nan"]).clip == CLIP_FULL
+
+
+def test_an_infinite_clip_falls_back_to_the_whole_source():
+    # Infinities do clamp cleanly, unlike NaN, so this is a choice rather
+    # than a necessity: a saved clip holding one is corrupt either way, and
+    # CLIP_FULL is already what a row that can't describe its framing loads
+    # as. Treating both non-finite cases the same keeps the rule one line.
+    assert _sane_clip((float("-inf"), float("inf"), float("inf"), float("inf"))) == CLIP_FULL
+
+
+def test_a_clip_that_survives_sanitising_always_crops_to_real_pixels():
+    for clip in [(float("nan"),) * 4, (float("inf"),) * 4, (0.5, 0.5, 0.9, 0.9)]:
+        box = _crop_box(_sane_clip(clip), 640, 480)
+        if box is None:
+            continue
+        left, top, right, bottom = box
+        assert 0 <= left < right <= 640
+        assert 0 <= top < bottom <= 480

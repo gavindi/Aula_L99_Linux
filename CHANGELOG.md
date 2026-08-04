@@ -5,6 +5,207 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.31] - 2026-08-04
+
+**An oversized upload does not fail — it succeeds at writing over something
+else.** A memory-safety audit of the whole tree found no reachable
+out-of-bounds or use-after-free in the Python itself, and could not: every
+buffer operation here goes through `bytes`/`bytearray`/`struct`, which
+bounds-check and raise. The real equivalent is one address further out. The
+panel acks every packet it is given, so nothing about a transfer's success
+says the bytes landed where they were meant to, and `--width`/`--height` were
+unbounded ints that reached `build_image_file()` directly.
+
+The concrete case is `--height 960`: 614,411 bytes, whose final chunk is 11
+bytes long — an already-solved `CRC_INIT` entry — so every packet of it built,
+sent and acked normally while overwriting 221,195 bytes of the adjacent GIF
+slot. Nothing anywhere reported a problem. The `CRC_INIT` lookup had been
+acting as an accidental guard against this (an unsolved final-chunk length
+raises rather than sending a bad CRC), which is why it had never been hit: it
+only rejects the sizes it happens not to know, and 614,411 is one it does.
+
+The bound now lives in `build_upload()` rather than in each frontend, so
+nothing can reach the wire without passing it. `SLOT_CAPACITY` is derived from
+the gaps between the three known base addresses — and, for two of the three,
+that derivation is now confirmed against the panel's own firmware rather than
+resting on the gaps alone. Deliberately *not* used as a boundary:
+`0x04200000`, which the vendor binary references and which sits between the
+photo-frame and GIF bases. An ordinary 320x480 photo-frame image is 307,211
+bytes and so runs from `0x041E0000` to `0x0422B04B`, straight through it.
+Whatever that address is for, the vendor's own writes overlap it, and using it
+as a ceiling would reject uploads the device demonstrably accepts.
+
+**The flash map is in the firmware, not in the Windows software.** Asked
+whether disassembling the vendor's Windows binary would show how much memory
+the GIF area gets, the answer for the host-side software is no: `pic_scan.dll`,
+`Image2Bin.exe` and `SerialPortTool.exe` contain none of the three known base
+addresses, and `DeviceDriver.exe` appears to contain two only through
+misaligned reads straddling `(pointer, int)` pairs in an MFC table — it does
+not contain `0x041E0000` at all, which is the tell. The host software never
+knows the map; it is handed addresses. The firmware updaters do:
+`Windows/AULA L99/firmware/L99 ISP V1.23.exe` and the screen reset firmware
+exe each carry, twice, a six-entry list of flash bases on a uniform `0x60000`
+stride — `0x04060000`, `0x040C0000`, `0x04120000`, `0x04180000`, `0x041E0000`,
+`0x04240000`. The last three are the background, photo-frame and GIF bases, in
+order, matching exactly. So the 393,216 figure for the first two is now
+arrived at two independent ways, and `SLOT_STRIDE` names it. It also settles
+`0x04200000` on firmer ground than "the vendor's own writes overlap it": that
+address is not on the lattice at all, so it was never a slot base to begin
+with. Still unidentified, as are entries 1-3.
+
+**It does not follow that the GIF slot is also 393,216, and it briefly and
+wrongly did.** GIF is the *last* entry, so unlike the other five its extent
+cannot be got by subtracting a next base; assuming the stride continued was an
+inference, and it was made and enforced before being checked properly. It is
+false. The vendor ships 320x480 animations of 214 frames
+(`gif/AULA L99/0.gif`) and 200 frames (`gif/用户动画(1)/*.gif`); fitting 214
+frames into 393,216 bytes needs 1,837 bytes per frame, a rate only the flat
+solid-colour test captures ever reached (`save_to_gif_3`, 2,048). Real content
+in `save_to_gif_1` took 105,131 bytes per frame, putting that asset near 22 MB.
+A 393,216-byte cap would refuse the vendor's own assets and make most of its
+format unusable.
+
+Worth recording because the mistake was not obviously a mistake: "no capture
+exceeds 393,216 bytes" looked like independent corroboration and is worthless.
+Every capture in `wireshark_dumps/` is a two- or three-frame hand-made test —
+the vendor was never once observed uploading a real animation — so the maximum
+across them (315,392, `save_to_gif_1`) describes the sample, not the hardware,
+and sat just under the stride by coincidence. Reading a small sample as a bound
+is the same error as reading a format ceiling as a flash extent, one level up.
+`VENDOR_MAX_GIF_BLOB_BYTES` therefore stands, unchanged, as the GIF slot's
+stand-in.
+
+The second surface is the one place in this project where a malformed file
+meets memory-unsafe code: the Touchscreen tab hands an arbitrary user-chosen
+image, GIF or video to Pillow's C decoders and to `ffmpeg`. That can't be
+fixed here, only bounded and kept current, which is what the pixel cap and the
+raised dependency floor do.
+
+Several things were checked and left alone, which is worth recording so they
+are not "fixed" later: `build_packet()` fails *closed* on an unknown payload
+length; the `QImage(bytes, …)` in `_to_pixmap` is `.copy()`-ed before its
+backing buffer dies, which is the one available real use-after-free pattern
+and was already handled; every `subprocess` call is list-form; `settings.py`
+type-guards its JSON.
+
+### Security
+- `tools/aula_l99_screen/protocol.py`: `SLOT_CAPACITY` and
+  `check_upload_fits()`, called from `build_upload()`. Background and
+  photo-frame get 393,216 bytes each — the distance to the next known base,
+  and independently the stride of the firmware's own partition list, now
+  named `SLOT_STRIDE`. The GIF slot is the last entry in that list, so it has
+  no next base to be measured against and the stride cannot be checked there;
+  its entry stays `VENDOR_MAX_GIF_BLOB_BYTES` — "the most anything is known
+  to have written here", which is still the strongest statement the evidence
+  supports. An address with no entry passes unchecked: inventing a bound for
+  somewhere nothing is known about would be worse than saying there isn't one.
+- `tools/aula_l99_screen/cli.py`: `--address` is checked against the wire
+  format's 32-bit field (it previously raised `struct.error` out of
+  `build_packet`, which `main()` does not catch — a traceback rather than a
+  message) and must be one of the known targets unless `--force-address` is
+  given. `--width`/`--height` must be positive, and within the panel's own
+  unless `--force-size` is given.
+- The `VENDOR_MAX_GIF_BLOB_BYTES` ceiling is a refusal in both frontends
+  instead of a warning printed on the way to uploading anyway. "How much
+  flash is mapped above the GIF base is unverified" is a reason not to write
+  there, not a reason to write there and mention it. 200 raw-bitmap frames is
+  30.8MB against the 13.2MB ceiling, so this is reachable from the GUI with a
+  long dithered animation, not a theoretical case.
+- `tools/aula_l99_gui/touchscreen_tab.py`: `Image.MAX_IMAGE_PIXELS` is set to
+  64x the panel's own area (~9.8Mpx) rather than left at Pillow's generic
+  ~89Mpx default. Over it Pillow raises `DecompressionBombError`, which is
+  **not** an `OSError` — so the two `except OSError` handlers around an
+  `Image.open()` named it too, having previously let it through as an
+  unhandled exception out of a GUI slot.
+- `tools/aula_l99_gui/pyproject.toml`: Pillow floor raised from `>=10.0` to
+  `>=11.3`. This is a security floor, not an API one — nothing here needs a
+  feature newer than 10.0 — so it is worth raising again over time.
+- `tools/aula_l99_gui/key_layout.py`: parses the layout XML with `defusedxml`,
+  matching `user_lighting_tab`. Stdlib `ElementTree` expands internal
+  entities. This file ships with the package rather than being user-chosen,
+  but `package.sh` installs it into a writable tree, and there was no reason
+  for the GUI's two XML readers to have different footing.
+
+### Added
+- `tools/aula_l99_screen/tests/test_cli_args.py`: the upload arguments had no
+  coverage at all, which is part of why this went unnoticed — they decide
+  what gets written where, and the device is no help in telling you when they
+  are wrong.
+- Tests for the slot bounds (including the exact `--height 960` overrun and
+  the `force=` escape hatch), non-finite clip values, and a short block
+  reaching `parse_color_blocks`. 18 in total; the suite is 149 passing.
+- Three further tests pinning what the firmware table does and does not
+  license: the two measurable slots match `SLOT_STRIDE`, the GIF cap stays
+  *above* it, and `VENDOR_OBSERVED_MAX_GIF_BLOB_BYTES` is never used as a
+  bound. Regression tests against a wrong turn rather than against a bug —
+  the table invites the inference, so the next reader should meet the
+  counter-evidence before repeating it.
+- `tools/aula_l99_screen/re_notes/flash_slot_table.md`: file offsets of all
+  four copies of the table, the hexdumps, the parallel per-slot RAM pointer
+  array at `0x0081350C`+ that follows it, the per-capture frame counts and
+  write extents, the host-binary dead end, and a reproduction script. Leads
+  with both the finding and the non-sequitur, and ends with the cheapest
+  remaining lead: there is still no capture of the vendor uploading one of
+  its own stock GIFs, which would give the real per-frame rate and the true
+  maximum at once.
+- `build_upload(..., force=True)`: the deliberate-experiment path. This is a
+  reverse-engineering tool and writing outside a known slot is a legitimate
+  thing to want to try, so the CLI exposes it via `--force-size` /
+  `--force-address`. The GUI does not — overwriting unidentified flash is not
+  a button a GUI should have.
+
+### Fixed
+- `tools/aula_l99_gui/touchscreen_tab.py`: `_sane_clip()` returns `CLIP_FULL`
+  for any non-finite component. `min`/`max` propagate NaN rather than
+  clamping it, so every bound in a function whose whole job is "forced back
+  inside the source" was a no-op for one, and `float("nan")` parses cleanly
+  enough that `_source_from_csv_row`'s own `except` never saw it either. It
+  surfaced downstream as `cannot convert float NaN to integer` out of
+  `_crop_box`, or an unparseable `crop=iw*nan:…` for a video. Infinities do
+  clamp cleanly and are folded into the same rule anyway: a saved clip
+  holding one is corrupt either way, and `CLIP_FULL` is already what a row
+  that cannot describe its framing loads as.
+- `_video_duration_seconds()` (GUI) and `_video_source_frames()` (CLI):
+  `ffprobe` reports `inf` for some streams, which passed a `> 0` check and
+  then divided down to `fps=0`.
+- `tools/aula_l99_hacky/protocol.py`: `parse_color_blocks()` length-checks its
+  blocks, as `parse_stream_blocks()` and `parse_audio_block()` already did.
+  Not reachable today — both callers read via `get_feature()`, which always
+  returns exactly `PACKET_SIZE` bytes because the ioctl fills a preallocated
+  buffer — but it fails *silently*: the slicing returns a two-element
+  "colour" for a short block rather than raising, so a caller switching to
+  `read_report()` (which returns whatever arrived) would get wrong colours
+  instead of an error.
+- `tools/aula_l99_gui/user_lighting_tab.py`: a malformed `keycode` or
+  `rgbvalue` skips its `<item>` instead of aborting the whole profile load.
+  One bad attribute in a file shared across vendor models should not cost the
+  user the other 83 keys — the same policy the file already applied to an
+  unrecognised keycode.
+- `tools/aula_l99_gui/key_layout.py`: `_parse()` failures are re-raised naming
+  the file. This runs at import time, so a missing element or attribute was
+  otherwise a bare `TypeError` out of `import main_window`, before there was
+  a window to show anything in.
+- `tools/aula_l99_gui/monitor_stats.py`: a truncated `/proc/stat` cpu line
+  returns `None` like every other unreadable case, rather than `IndexError`.
+- `tools/aula_l99_hacky/device.py`: `_ioctl_code()` rejects a size wider than
+  the field's 14 bits, which would otherwise carry into the direction bits
+  and build a different ioctl entirely. Latent — callers pass
+  `PACKET_SIZE + 1` — so this documents the constraint as much as it enforces
+  it.
+
+### Changed
+- `tools/aula_l99_screen/protocol.py`: `build_gif_blob()`'s palette-size bound
+  is checked where the palettes are assembled, before any content is built,
+  instead of while the header is being filled in. A palette index goes into a
+  single byte of content in both modes, so an over-256-slot frame used to die
+  first in `bytearray.append` with `byte must be in range(0, 256)` rather than
+  the real explanation. Reachable only on the undithered path:
+  `is_ramp_legal_color` admits 252 colours, but `is_safe_gif_color` admits
+  any colour whose brightest channel is 255, which is ~195,000 of them.
+- `tools/aula_l99_gui/README.md`: a note that Pillow and `ffmpeg` are worth
+  keeping current, and why — the Python here can be wrong but not corrupted;
+  their decoders are where that distinction stops holding.
+
 ## [0.9.30] - 2026-08-04
 
 **The GUI can now be handed to someone who does not have Python, which was the
