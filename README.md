@@ -50,7 +50,8 @@ needed with the usual udev ACLs). Confirmed on real hardware:
   temperature, forecast highs/lows, weather condition and humidity — each
   field verified by writing a distinctive value and reading the panel
 - The audio spectrum feed (opcode `0x78`) driving the panel's analyser —
-  the host does the FFT, the keyboard just receives 23 levels
+  the host does the FFT, the keyboard just receives 23 levels (the panel
+  renders 17 of them)
 - Settings writes (opcode `0x17`): response time, sleep timer
 - `--send-hex` for replaying candidate packets straight from a capture
 
@@ -89,7 +90,7 @@ against the live panel — the full lab notebook is in the tool's
 ### [tools/aula_l99_gui/](tools/aula_l99_gui/README.md) — PySide6 GUI
 
 A desktop app wrapping both CLIs' protocol modules directly (no
-shelling-out), wearing the vendor's own extracted skin artwork. Six tabs:
+shelling-out), wearing the vendor's own extracted skin artwork. Seven tabs:
 
 **Device** — hidraw/serial discovery and selection
 
@@ -113,6 +114,10 @@ streamed at ~17 fps for single keys the firmware can't animate itself
 **Touchscreen** — image and GIF upload with live packet-by-packet progress
 
 ![Touchscreen tab](screenshots/04-Touchscreen1.png)
+
+**Music** — live 17-band spectrum for the panel's analyser, captured from an
+ALSA input device via `arecord` and streamed over the keyboard's audio feed
+(`0x78`, cable only), with an on-tab bar preview
 
 **Config** — polling and app settings
 
@@ -149,6 +154,10 @@ rather than a traceback if it is missing.
 `ffmpeg` and `ffprobe` on `PATH` (`apt install ffmpeg`). Every other source
 format is handled by Pillow. This applies to both the GUI's Touchscreen tab
 and the CLI's video path.
+
+**Another external binary, audio capture:** the GUI's Music tab needs
+`arecord` on `PATH` (part of `alsa-utils`) to capture from an ALSA input
+device; the spectrum maths itself is pure Python with no extra dependency.
 
 **None of the above applies to the packaged GUI.** `./package.sh` builds a
 self-contained tarball that carries its own CPython and Qt, so the binary

@@ -140,18 +140,31 @@ bottom of the tab. The window refuses to close while an upload or keyboard
 transaction is still in flight, since interrupting a screen upload partway through
 can freeze the panel.
 
+**Music tab** — drive the touchscreen's spectrum analyser from live audio.
+Pick an ALSA capture device (enumerated with `arecord -l`), press Start, and the
+tab streams the audio feed (opcode `0x78`) to the panel at ~21 frames/s: the host
+captures raw PCM via `arecord`, computes a 17-band spectrum with a pure-Python
+Goertzel FFT (`audio_spectrum.py`), and sends it over the *keyboard's* vendor
+channel — the cable only, since the spectrum feed is a cable path. The tab shows
+a live 17-bar preview of exactly what the panel renders (the analyser draws wire
+bands 0..16). The stream is not "busy": closing the app stops it quietly, and it
+holds the keyboard's colour poll off while it owns the hidraw handle. Requires
+`arecord` on `PATH`.
+
 ## Files
 
 - `main.py` — entry point (`sys.path` bootstrap + `QApplication`)
-- `main_window.py` — top-level window, hosts the four tabs
+- `main_window.py` — top-level window, hosts the tabs
 - `device_tab.py` — the Device tab and the `DeviceSelector` widget the other
   tabs are wired to; owns all enumeration, selection and auto-detect logic
-- `keyboard_tab.py` / `lighting_tab.py` / `touchscreen_tab.py` — the three
-  control tabs (RTC clock; per-key color and effects; image/GIF upload)
+- `keyboard_tab.py` / `lighting_tab.py` / `touchscreen_tab.py` — the control
+  tabs (RTC clock; per-key color and effects; image/GIF upload)
+- `music_tab.py` / `audio_spectrum.py` — the Music tab and its arecord-driven,
+  pure-Python Goertzel spectrum generator (the audio feed `0x78` to the panel)
 - `workers.py` — background `QThread` workers that do the actual device I/O, so the
-  UI stays responsive during a handshake or upload
+  UI stays responsive during a handshake, upload or spectrum stream
 - `device_utils.py` — device enumeration and permission-error hint text shared by
-  all three control tabs
+  the control tabs
 - `theme.py` / `slice_skin.py` / `assets/` — the vendor skin, see below
 
 ## The skin

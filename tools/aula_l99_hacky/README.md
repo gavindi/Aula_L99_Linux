@@ -19,6 +19,10 @@ Confirmed on real hardware (wired `0C45:800A`, interface 3):
 - The nine system-monitor and weather bytes of the `0x28` block — CPU/GPU load
   and temperature, current/high/low temperature, weather condition, humidity —
   each verified by writing a distinctive value and reading the panel.
+- The audio spectrum feed (`0x78`): 23 band levels, low frequency first, with
+  the ack/echo behaviour and band ordering confirmed by driving one band at a
+  time. Note the panel's analyser renders only 17 segments (wire bands 0..16);
+  bands 17..22 have no visible effect.
 - Every packet builder in `protocol.py` reproduces the vendor app's own packets
   byte-for-byte — see "Verifying against a capture" below.
 

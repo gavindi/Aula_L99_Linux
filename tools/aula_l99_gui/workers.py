@@ -10,12 +10,14 @@ I/O.
 """
 from __future__ import annotations
 
+import subprocess
 import time
 from datetime import datetime
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from . import audio_spectrum
 from aula_l99_hacky import protocol as kb_protocol
 from aula_l99_hacky.device import HidrawTransport
 from aula_l99_screen import protocol as screen_protocol
@@ -300,6 +302,143 @@ class MonitorStreamWorker(QObject):
             self.finished.emit(True, message)
         except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
             self.finished.emit(False, str(exc))
+
+
+class AudioSpectrumWorker(QObject):
+    """Streams a live spectrum to the keyboard's audio feed (opcode 0x78).
+
+    Captures raw mono S16_LE PCM from an `arecord` subprocess on *this* thread,
+    computes one frame of band levels per chunk via `level_fn` (a pure
+    callable, no widget access), and sends each frame with
+    kb_protocol.build_audio_frame() until stopped.
+
+    Same shape as ColorStreamWorker/MonitorStreamWorker for the same reasons:
+    the transport stays open for the whole run so the device is only ever
+    claimed for these sends, and nothing is retried -- a frame that misses its
+    ack is stale AUDIO_FRAME_SECONDS later, so resending would just push the
+    next one back.
+
+    The frame cadence comes from the chunk read: a CHUNK_SAMPLES-sized read
+    from a 48 kHz stream blocks ~42.7ms, which is close to the vendor's
+    0.047s frame period, so the loop is naturally paced and the extra sleep is
+    just to keep from outpacing that budget when the send is unusually fast.
+
+    `arecord_cmd` is the argv for a raw capture on stdout (see
+    audio_spectrum.arecord_command). The subprocess is owned and reaped here;
+    stop() asks it to terminate so the worker thread's blocking read returns
+    instead of sitting on a live pipe.
+    """
+
+    frame = Signal(object)  # list[int] of band levels, for the tab's preview
+    finished = Signal(bool, str)
+
+    def __init__(self, device_path: str, arecord_cmd: list[str],
+                 level_fn: Callable[[bytes], list[int]],
+                 chunk_bytes: int = 4096,
+                 period: float = kb_protocol.AUDIO_FRAME_SECONDS,
+                 gap: float = kb_protocol.PACKET_GAP_SECONDS,
+                 timeout: float = 1.0):
+        super().__init__()
+        self._device_path = device_path
+        self._arecord_cmd = arecord_cmd
+        self._level_fn = level_fn
+        self._chunk_bytes = chunk_bytes
+        self._period = period
+        self._gap = gap
+        self._timeout = timeout
+        self._stop = False
+
+    def stop(self) -> None:
+        """Ask the loop to finish after the chunk it is on, and end the
+        capture.
+
+        Called straight from the GUI thread rather than through a queued
+        signal for the same reason the other stream workers do it: this
+        thread is inside `run()` for the whole session and never returns to
+        its event loop, so a queued slot would not be delivered until the
+        loop had already ended. A lone bool assignment is safe to do that way;
+        terminating the subprocess is what lets a blocking read() on the pipe
+        actually return.
+        """
+        self._stop = True
+        proc = getattr(self, "_proc", None)
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            proc = subprocess.Popen(
+                self._arecord_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            self.finished.emit(False, f"could not start arecord: {exc}")
+            return
+        self._proc = proc
+        try:
+            frames = late = failures = 0
+            with HidrawTransport(self._device_path, timeout_seconds=self._timeout) as transport:
+                while not self._stop:
+                    frame_started = time.monotonic()
+                    data = proc.stdout.read(self._chunk_bytes)
+                    if not data:
+                        break
+                    if len(data) < self._chunk_bytes:
+                        data += b"\x00" * (self._chunk_bytes - len(data))
+                    levels = self._level_fn(data)
+                    for tx in kb_protocol.build_audio_frame(levels):
+                        transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+                        time.sleep(self._gap)
+                        if tx.expect_reply:
+                            reply = transport.get_feature(
+                                kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)[1:]
+                            time.sleep(self._gap)
+                            if not _is_acked(tx, reply):
+                                failures += 1
+                    frames += 1
+                    self.frame.emit(levels)
+                    remaining = self._period - (time.monotonic() - frame_started)
+                    if remaining > 0:
+                        time.sleep(remaining)
+                    else:
+                        late += 1
+                # The panel holds the last frame it received, so a stream that
+                # just stops leaves a frozen analyser on screen. Push one
+                # all-zero frame so the bars drop and the display clears --
+                # the "decay/hold/blank" question in re_notes turned out to be
+                # "hold", and a blank frame is the exit. Sent whenever frames
+                # were actually streamed, manual stop and capture EOF alike.
+                # Deliberately *inside* the `with`: the transport must still be
+                # open for this last send.
+                if frames:
+                    for tx in kb_protocol.build_audio_frame(
+                            [0] * kb_protocol.AUDIO_BAND_COUNT):
+                        transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
+                        time.sleep(self._gap)
+                        if tx.expect_reply:
+                            transport.get_feature(
+                                kb_protocol.REPORT_ID, kb_protocol.PACKET_SIZE + 1)
+                    self.frame.emit([0] * audio_spectrum.SPECTRUM_BAND_COUNT)
+            stderr = proc.stderr.read().decode(errors="replace").strip() if proc.stderr else ""
+            message = f"audio spectrum stopped after {frames} frame(s)"
+            if failures:
+                message += f" ({failures} not acked)"
+            if late:
+                message += f" ({late} over the {self._period * 1000:.0f}ms frame budget)"
+            if frames == 0 and stderr:
+                message += f"; arecord: {stderr}"
+            self.finished.emit(True, message)
+        except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
+            self.finished.emit(False, str(exc))
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
 
 def _is_acked(tx, reply: bytes | bytearray | None) -> bool:

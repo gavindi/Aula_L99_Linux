@@ -28,8 +28,9 @@ vendor app does.
 
 `--spectrum` is the same idea for the panel's spectrum analyser: the host does
 the FFT and sends 23 band levels, so driving one band at a time is how to
-confirm which bar is which. Decoded from one capture and not yet tested on
-hardware -- see re_notes/audio_spectrum_block.md.
+confirm which bar is which. Confirmed on hardware; note the panel's analyser
+renders only 17 of the 23 bands (wire bands 0..16) -- see
+re_notes/audio_spectrum_block.md.
 
 A udev rule granting the logged-in user access to the keyboard's hidraw nodes
 is usually already in place, so root is typically not needed.
@@ -422,7 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
         "audio spectrum",
         f"Push one frame of band levels to the panel's spectrum analyser. "
         f"Up to {protocol.AUDIO_BAND_COUNT} values, low frequency first; "
-        f"anything omitted is silent.")
+        f"anything omitted is silent. The panel renders only the low 17 of "
+        f"the 23 bands (wire bands 0..16).")
     audio.add_argument("--spectrum", metavar="LEVELS",
                        help="band levels, e.g. '100,80,60' or '0 0 0 100'")
     audio.add_argument("--spectrum-scale", type=int,

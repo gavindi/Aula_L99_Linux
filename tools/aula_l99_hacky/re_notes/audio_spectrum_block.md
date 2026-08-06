@@ -4,11 +4,23 @@ Decoded from `wireshark_dumps/save_to_gif_17.pcapng`, which caught the vendor
 app feeding the panel's spectrum analyser while music played: 137 frames over
 about 6.5 seconds. Everything below reproduces all 137 byte-for-byte.
 
-**Not confirmed on hardware.** Every claim here is read off one capture plus a
-cross-check against `DeviceDriver.exe`. Contrast
-[system_monitor_block.md](system_monitor_block.md), where each field was
-confirmed by writing a distinctive value and reading the panel; that has not
-been done here, which is why `--spectrum` takes explicit levels.
+**Confirmed on hardware.** Every claim below was read off one capture plus a
+cross-check against `DeviceDriver.exe`, then verified by sending frames to a
+wired `0C45:800A` keyboard and watching the panel:
+
+- The transaction shape holds: the commit and the `0x78` command come back
+  acked (byte 3 = 0x01), and the data block comes back echoed verbatim with
+  the ack bit clear, exactly as the capture predicted.
+- There are **23 band levels on the wire, low frequency first**, and driving
+  one band at a time lights the expected bar in order.
+- The panel's analyser has **17 on-screen segments, edge to edge**, mapping to
+  wire bands 0..16. Bands 17..22 produce no visible change: the keyboard
+  accepts all 23 numbers and the display renders only the low 17 of them.
+
+The wire format is unchanged by that last point -- `--spectrum` still sends
+up to `AUDIO_BAND_COUNT` (23) values because that is what the feed carries;
+the 17-segment display is a property of the panel's analyser, not of the
+protocol.
 
 ## The host does the FFT
 
@@ -133,15 +145,22 @@ guards the reading.
   the capture turns it on or off. An RTC write during the stream carried
   `view` = 1, the same as everywhere else, so it is not a distinct screen view
   in the sense byte 1 of the RTC block means.
-- **What consumes it.** 23 bands does not match the 16-column key matrix, and
-  per-key colour has its own opcodes (`0x23` persistent, `0x20` realtime), so
-  the panel is much the better bet -- and the panel is where a spectrum
-  analyser was observed. But the capture alone does not prove the keyboard
-  does not also light up.
+- **What consumes it, and the 17/23 split.** The panel's analyser is now
+  confirmed as the consumer, and it renders only **17 segments** for wire
+  bands 0..16, edge to edge; bands 17..22 have no visible effect. Whether the
+  keyboard itself also lights up remains untested -- per-key colour has its own
+  opcodes (`0x23` persistent, `0x20` realtime), and the 23 bands do not match
+  the 16-column key matrix, so it was never a strong candidate. Why the feed
+  carries 23 bands but the display draws 17 is unknown; the obvious guess is
+  the vendor's FFT divides the spectrum into more bands than the analyser's
+  widget renders, so the high six are simply not drawn.
 - **What happens to a frame that is never followed by another.** `--spectrum`
   sends one frame by default; `--spectrum-hold` resends it because a lone
-  frame may only be on screen for a frame period. Whether the panel decays,
-  holds, or blanks is untested.
+  frame may only be on screen for a frame period. On the panel it **holds**:
+  stop the stream and the analyser freezes on the last frame it received,
+  bars included. The GUI's Music tab works around this by sending one
+  all-zero frame on stop, which drops the bars back to zero. Whether the
+  panel eventually blanks by itself, and how long that takes, is untested.
 - **Whether the 47ms period matters.** It is the vendor's rate, not
   necessarily a requirement, and the same app leaves ~36.7ms between packets
   everywhere for reasons that turned out to be host-side.

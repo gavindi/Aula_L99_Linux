@@ -40,6 +40,7 @@ HORIZONTAL = {
     "icon/tab_light.png": ("icon", STATES4),
     "icon/tab_userlight.png": ("icon", STATES4),
     "icon/tab_tft.png": ("icon", STATES4),
+    "icon/tab_music.png": ("icon", STATES4),
     "icon/tab_config.png": ("icon", STATES4),
 }
 

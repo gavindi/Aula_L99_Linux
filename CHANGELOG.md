@@ -5,6 +5,68 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-06
+
+**The GUI can now drive the panel's spectrum analyser from live audio.** A new
+Music tab captures from an ALSA input device via `arecord`, computes a 17-band
+spectrum with a pure-Python Goertzel FFT, and streams it to the panel over the
+keyboard's audio feed (opcode `0x78`, cable only) at ~21 frames/s, with a live
+17-bar preview of exactly what the analyser renders.
+
+### Added
+- `audio_spectrum.py`: `arecord -l` device parsing, a log-spaced 17-band Goertzel
+  spectrum with a Hann window and dB-scaled 0..100 levels, and the `arecord`
+  command builder. Pure standard-library, no numpy, so the packaged build is
+  unchanged.
+- `music_tab.py`: the Music tab (audio-device picker + Refresh, Start/Stop, a
+  hand-painted `SpectrumPreview` bar widget, status lines), wired to the keyboard
+  `DeviceSelector` since the spectrum feed is a cable path.
+- `AudioSpectrumWorker` in `workers.py`: owns an `arecord` subprocess and the
+  hidraw transport for the whole run, sends `build_audio_frame()` per chunk,
+  nothing retried — same shape as the colour-stream and monitor workers.
+- Ten new tests in `tests/test_audio_spectrum.py` covering the Goertzel maths
+  (a full-scale sine lights only its band; silence is all zeroes; clipping
+  clamps), device parsing, the worker's wire output (commit → `0x78` → block,
+  bands 17..22 zero), and its failure path.
+- The `tab_music` icon slices (the vendor sheet was already in `assets/`, it was
+  just never sliced or wired up).
+
+### Changed
+- `main_window.py`: Music tab inserted between Touchscreen and Config; the stream
+  pauses colour polling like a User Lighting animation but is not "busy".
+- `theme.py`: `TAB_ICONS["Music"] = "tab_music"`; `slice_skin.py` now slices the
+  `tab_music.png` sheet.
+
+### Notes
+- The spectrum feed is a *cable-only* path, so Start is gated on the wired
+  keyboard being selected; the dongle cannot carry it.
+- The tab produces exactly the 17 bands the panel renders (wire bands 0..16);
+  the remaining 6 of the 23 the block carries are zero-padded by
+  `build_audio_blocks`.
+- The first device listing is deferred to the first event-loop iteration: the
+  `arecord -l` subprocess runs on a worker thread, and starting that thread
+  inside `MainWindow.__init__` aborts Qt on teardown.
+
+## [0.9.32] - 2026-08-06
+
+**The audio spectrum feed is confirmed on hardware — and the panel's analyser
+renders only 17 of the 23 bands.** Sent frames to a wired `0C45:800A`
+keyboard and watched the panel: the commit and `0x78` command come back acked,
+the data block echoes verbatim with the ack bit clear, and driving one band at
+a time lights the expected bar in order. The display has 17 on-screen segments,
+edge to edge, mapping to wire bands 0..16; bands 17..22 have no visible effect.
+The wire format is unchanged — `AUDIO_BAND_COUNT` stays 23, since that is what
+the feed carries; the 17-segment display is a panel property, not a protocol
+constant.
+
+### Changed
+- `re_notes/audio_spectrum_block.md`: marked confirmed on hardware, added the
+  17/23 display finding.
+- `tools/aula_l99_hacky/README.md` and the top-level `README.md`: the spectrum
+  feed is now in the confirmed list, with the 17-of-23 caveat.
+- `cli.py`'s `--spectrum` help and module docstring: note the panel renders
+  only the low 17 bands.
+
 ## [0.9.31] - 2026-08-04
 
 **An oversized upload does not fail — it succeeds at writing over something

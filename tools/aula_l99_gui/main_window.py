@@ -26,6 +26,7 @@ from .debug_log import DebugLog
 from .device_tab import DeviceTab
 from .keyboard_tab import KeyboardTab
 from .lighting_tab import LightingTab
+from .music_tab import MusicTab
 from .touchscreen_tab import TouchscreenTab
 from .user_lighting_tab import UserLightingTab
 
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         self._lighting_tab = LightingTab(self._device_tab.keyboard, self._debug_log)
         self._user_lighting_tab = UserLightingTab(self._device_tab.keyboard, self._debug_log)
         self._touchscreen_tab = TouchscreenTab(self._device_tab.screen, self._debug_log)
+        self._music_tab = MusicTab(self._device_tab.keyboard, self._debug_log)
         self._config_tab = ConfigTab(self._device_tab.keyboard, self._debug_log)
         # The Config tab hosts the controls; KeyboardTab still does the work,
         # since it owns the poll thread an RTC write has to be sequenced
@@ -207,12 +209,14 @@ class MainWindow(QMainWindow):
         # more -- they're kept here for the icon lookup and shown as tooltips,
         # which is the only thing naming an unlabelled button for the user.
         self._tab_titles = [
-            "Device", "Keyboard", "Lighting", "User Lighting", "Touchscreen", "Config",
+            "Device", "Keyboard", "Lighting", "User Lighting", "Touchscreen",
+            "Music", "Config",
         ]
         for widget, title in zip(
             (
                 self._device_tab, self._keyboard_tab, self._lighting_tab,
-                self._user_lighting_tab, self._touchscreen_tab, self._config_tab,
+                self._user_lighting_tab, self._touchscreen_tab, self._music_tab,
+                self._config_tab,
             ),
             self._tab_titles,
         ):
@@ -246,14 +250,17 @@ class MainWindow(QMainWindow):
 
         for tab in (
             self._device_tab, self._keyboard_tab, self._lighting_tab,
-            self._user_lighting_tab, self._touchscreen_tab, self._config_tab,
+            self._user_lighting_tab, self._touchscreen_tab, self._music_tab,
+            self._config_tab,
         ):
             tab.busy_changed.connect(self._on_any_busy_changed)
-        # A User Lighting animation isn't "busy" -- it runs for minutes and
-        # must not raise the loading overlay or block closing -- but colour
-        # polling still has to stand off while it owns the hidraw handle, so it
-        # goes through the same handler.
+        # A User Lighting animation and the Music spectrum stream aren't
+        # "busy" -- they run for minutes and must not raise the loading
+        # overlay or block closing -- but colour polling still has to stand
+        # off while either owns the hidraw handle, so they go through the
+        # same handler.
         self._user_lighting_tab.streaming_changed.connect(self._on_any_busy_changed)
+        self._music_tab.streaming_changed.connect(self._on_any_busy_changed)
 
         central = QWidget()
         central_layout = QVBoxLayout(central)
@@ -398,6 +405,7 @@ class MainWindow(QMainWindow):
             or self._lighting_tab.is_busy
             or self._user_lighting_tab.is_busy
             or self._touchscreen_tab.is_busy
+            or self._music_tab.is_busy
             or self._config_tab.is_busy
         )
         self._loading_overlay.setVisible(busy)
@@ -410,12 +418,13 @@ class MainWindow(QMainWindow):
         # progress, not just its own tab's -- another tab's transaction can
         # be holding the keyboard's hidraw handle open, and interleaving a
         # colour-query read with it could confuse the firmware's stateful
-        # begin/commit/end session. A User Lighting animation and the
-        # system-monitor stream both hold the handle for their whole run, so
-        # they pause it too (but neither is "busy" -- see above).
+        # begin/commit/end session. A User Lighting animation and the Music
+        # spectrum stream both hold the handle for their whole run, so they
+        # pause it too (but neither is "busy" -- see above).
         self._keyboard_tab.set_external_busy(
             busy
             or self._user_lighting_tab.is_streaming
+            or self._music_tab.is_streaming
             or self._keyboard_tab.is_monitoring,
         )
         # Same aggregate gates the Config tab's Set Clock button and monitor
@@ -457,10 +466,11 @@ class MainWindow(QMainWindow):
         # -- it's frequent and lightweight, not worth nagging the user to
         # wait out), but its QThread still has to actually stop before this
         # window gets torn down, or Qt aborts the process on exit. A User
-        # Lighting animation is outside that check for the same reason and
-        # needs the same treatment.
+        # Lighting animation and the Music spectrum stream are outside that
+        # check for the same reason and need the same treatment.
         self._keyboard_tab.shutdown()
         self._user_lighting_tab.shutdown()
+        self._music_tab.shutdown()
         if self._tray_icon is not None:
             self._tray_icon.hide()
         if self._tray_enabled and self._tray_quit_requested:
