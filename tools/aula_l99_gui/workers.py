@@ -337,7 +337,11 @@ class AudioSpectrumWorker(QObject):
                  chunk_bytes: int = 4096,
                  period: float = kb_protocol.AUDIO_FRAME_SECONDS,
                  gap: float = kb_protocol.PACKET_GAP_SECONDS,
-                 timeout: float = 1.0):
+                 timeout: float = 1.0,
+                 rhythm: int = kb_protocol.AUDIO_RHYTHM_DEFAULT,
+                 background_mode: int = kb_protocol.AUDIO_BACKGROUND_MODE_DEFAULT,
+                 amplitude: int = kb_protocol.AUDIO_AMPLITUDE_DEFAULT,
+                 background_brightness: int = kb_protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT):
         super().__init__()
         self._device_path = device_path
         self._arecord_cmd = arecord_cmd
@@ -346,6 +350,10 @@ class AudioSpectrumWorker(QObject):
         self._period = period
         self._gap = gap
         self._timeout = timeout
+        self._rhythm = rhythm
+        self._background_mode = background_mode
+        self._amplitude = amplitude
+        self._background_brightness = background_brightness
         self._stop = False
 
     def stop(self) -> None:
@@ -388,7 +396,18 @@ class AudioSpectrumWorker(QObject):
                     if len(data) < self._chunk_bytes:
                         data += b"\x00" * (self._chunk_bytes - len(data))
                     levels = self._level_fn(data)
-                    for tx in kb_protocol.build_audio_frame(levels):
+                    # Amplitude is the panel's 0..100 bar-height scale: scale
+                    # the computed levels to it so the scale byte and the
+                    # levels agree (build_audio_blocks checks levels <= scale).
+                    if self._amplitude < kb_protocol.AUDIO_AMPLITUDE_DEFAULT:
+                        levels = [
+                            round(level * self._amplitude / 100.0)
+                            for level in levels
+                        ]
+                    for tx in kb_protocol.build_audio_frame(
+                            levels, scale=self._amplitude,
+                            mode=self._background_mode, style=self._rhythm,
+                            background_brightness=self._background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)
                         if tx.expect_reply:
@@ -414,7 +433,10 @@ class AudioSpectrumWorker(QObject):
                 # open for this last send.
                 if frames:
                     for tx in kb_protocol.build_audio_frame(
-                            [0] * kb_protocol.AUDIO_BAND_COUNT):
+                            [0] * kb_protocol.AUDIO_BAND_COUNT,
+                            scale=self._amplitude,
+                            mode=self._background_mode, style=self._rhythm,
+                            background_brightness=self._background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)
                         if tx.expect_reply:

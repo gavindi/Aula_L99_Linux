@@ -62,3 +62,50 @@ def test_file_is_plain_json_readable_without_qt(monkeypatch, tmp_path):
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     assert data == {"monitor": {"running": True}}
+
+
+def test_music_settings_default_to_protocol_defaults(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    from aula_l99_hacky import protocol as kb_protocol
+
+    saved = settings.music_settings()
+    assert saved["rhythm"] == kb_protocol.AUDIO_RHYTHM_DEFAULT
+    assert saved["background_mode"] == kb_protocol.AUDIO_BACKGROUND_MODE_DEFAULT
+    assert saved["amplitude"] == kb_protocol.AUDIO_AMPLITUDE_DEFAULT
+    assert saved["background_brightness"] == (
+        kb_protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT)
+
+
+def test_music_settings_round_trip(monkeypatch, tmp_path):
+    path = _config(monkeypatch, tmp_path)
+    settings.set_music_settings({
+        "rhythm": 3, "background_mode": 9,
+        "amplitude": 40, "background_brightness": 77,
+    })
+    assert settings.music_settings() == {
+        "rhythm": 3, "background_mode": 9,
+        "amplitude": 40, "background_brightness": 77,
+    }
+    assert path.exists()
+
+
+def test_music_settings_are_plain_json(monkeypatch, tmp_path):
+    import json
+
+    _config(monkeypatch, tmp_path)
+    settings.set_music_settings({"rhythm": 5, "amplitude": 10})
+    with open(settings.config_path(), encoding="utf-8") as fh:
+        data = json.load(fh)
+    assert data["music"]["rhythm"] == 5
+    assert data["music"]["amplitude"] == 10
+
+
+def test_music_settings_merge_on_partial_write(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    settings.set_music_settings({"rhythm": 2, "amplitude": 30})
+    # A later write of only some keys keeps the earlier ones in place.
+    settings.set_music_settings({"background_mode": 6})
+    saved = settings.music_settings()
+    assert saved["rhythm"] == 2
+    assert saved["background_mode"] == 6
+    assert saved["amplitude"] == 30

@@ -116,6 +116,38 @@ them are only provisionally constant:
 under the first reading and too strict under the second. If it turns out to be
 Amplitude, drop the check rather than widening it quietly.
 
+### The Music Rhythm tab's controls (confirmed, then guessed)
+
+The four controls were confirmed from two independent vendor sources:
+
+- **Language strings** (`Windows/AULA L99/language/1033.lan`, UTF-16):
+  `102 = Rhythm`, `103 = Amplitude`, `104 = Background Mode`,
+  `105 = Background Brightness`. The two dropdowns are both populated from the
+  same 15-entry list, strings `106..120` (Green/Yellow/Red, Rainbow, Reverse
+  Rainbow, Gradient, Spectrum Cycle, White, Red, Orange, Yellow, Green, Cyan,
+  Off, Blue, Purple, Ambilight).
+- **SQLite schema** in `DeviceDriver.exe`: `t_musiclayer_data(profile, name,
+  deviceindex, foremode, fore_amplitude, backmode, backb_right, sel)` -- the
+  fields the Music Rhythm tab persists. `foremode` is the Rhythm dropdown,
+  `fore_amplitude` the Amplitude slider, `backmode` the Background Mode
+  dropdown and `backb_right` (background bright) the Background Brightness
+  slider.
+
+Their **byte locations are best guesses**, not confirmed readings:
+
+| control | DB field | block byte | default | status |
+|---|---|---|---|---|
+| Rhythm | `foremode` | 1 (`style`) | `0x08` | plausible -- collides with the "spectrum" effect |
+| Amplitude | `fore_amplitude` | 2 (`scale`) | `0x64` = 100 | plausible -- a 0..100 control sitting at 100 |
+| Background Mode | `backmode` | 0 (`mode`) | `0x04` | guess -- no capture with a different value |
+| Background Brightness | `backb_right` | 26 (first tail byte) | `0x00` | guess -- bytes 26..63 were zero in every frame |
+
+The entry->byte mapping for both dropdowns is the entry's index into the
+15-entry list (0..14), so an untouched tab sends exactly the captured `04 08
+64` with a zero tail. The GUI's Music tab exposes all four controls and drives
+these bytes; the two Background fields need a non-default capture or a
+hardware check to be promoted from hypothesis to reading.
+
 I looked for the builder in `DeviceDriver.exe` to settle this -- searching for
 a `C6 /r` byte store of immediate `0x04`, `0x08` and `0x64` within one window
 -- and found nothing. That is weak evidence that these come from variables

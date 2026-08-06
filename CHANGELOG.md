@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-08-06
+
+**The Music tab now carries the four controls of the vendor's "Music Rhythm"
+tab.** The Rhythm and Background Mode dropdowns are populated from the same
+15-entry list the Windows app uses (its language strings 106-120), and the
+Amplitude and Background Brightness sliders drive the height of the spectrum
+and the panel screen's background. The four settings were confirmed from the
+vendor app's own `t_musiclayer_data` SQLite schema (`foremode`,
+`fore_amplitude`, `backmode`, `backb_right`); where they land on the wire is
+documented as hypothesis rather than confirmed, since the only capture is at
+default settings.
+
+### Added
+- `music_tab.py`: a "Music Settings" group with Rhythm and Background Mode
+  dropdowns plus Amplitude and Background Brightness sliders, persisting to
+  `config.json` under `music` and restoring on the next launch.
+- `protocol.py`: `AUDIO_RHYTHM_NAMES` / `AUDIO_BACKGROUND_MODE_NAMES` (the
+  15-entry shared list), the four control defaults, and a background-brightness
+  byte written to the first never-written tail byte of the audio block.
+- `settings.py`: `music_settings()` / `set_music_settings()` accessors.
+- `AudioSpectrumWorker` now takes the four settings and sends them on every
+  frame, scaling levels to the Amplitude so they agree with the scale byte.
+- Tests: the worker's wire output carries the configured settings (Rhythm ->
+  byte 1, Background Mode -> byte 0, Amplitude -> byte 2, Brightness -> tail);
+  the settings round-trip and merge; the tab's four controls exist with the
+  captured defaults and restore from disk.
+
+### Changed
+- `re_notes/audio_spectrum_block.md`: documents the Music Rhythm tab's four
+  controls, the entry->byte mapping, and which bytes are hypothesis.
+
+### Notes
+- The Rhythm (byte 1, `0x08`) and Amplitude (byte 2, `0x64`) placements are
+  corroborated by the single capture's default values; Background Mode
+  (byte 0, `0x04`) and Background Brightness (tail byte 26, `0x00`) are best
+  guesses that need a non-default capture or a hardware check to confirm.
+
 ## [0.10.0] - 2026-08-06
 
 **The GUI can now drive the panel's spectrum analyser from live audio.** A new

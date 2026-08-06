@@ -27,13 +27,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from aula_l99_hacky import protocol as kb_protocol
 
-from . import audio_spectrum, theme
+from . import audio_spectrum, settings, theme
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
@@ -162,6 +163,32 @@ class MusicTab(QWidget):
         preview_layout.addWidget(self.preview)
         layout.addWidget(preview_group, stretch=1)
 
+        settings_group = QGroupBox("Music Settings")
+        settings_layout = QVBoxLayout(settings_group)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Rhythm"))
+        self.rhythm_combo = QComboBox()
+        self.rhythm_combo.addItems(list(kb_protocol.AUDIO_RHYTHM_NAMES))
+        row.addWidget(self.rhythm_combo, stretch=1)
+        settings_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Background Mode"))
+        self.background_mode_combo = QComboBox()
+        self.background_mode_combo.addItems(
+            list(kb_protocol.AUDIO_BACKGROUND_MODE_NAMES))
+        row.addWidget(self.background_mode_combo, stretch=1)
+        settings_layout.addLayout(row)
+
+        self.amplitude_slider = self._build_labeled_slider(
+            settings_layout, "Amplitude",
+            kb_protocol.AUDIO_AMPLITUDE_DEFAULT)
+        self.background_brightness_slider = self._build_labeled_slider(
+            settings_layout, "Background Brightness",
+            kb_protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT)
+        layout.addWidget(settings_group)
+
         controls = QHBoxLayout()
         self.start_button = QPushButton("Start")
         self.start_button.setEnabled(False)
@@ -175,8 +202,44 @@ class MusicTab(QWidget):
         layout.addWidget(self.stream_status)
 
         self._sync_actions()
+        self._load_settings()
+        self.rhythm_combo.currentIndexChanged.connect(self._save_settings)
+        self.background_mode_combo.currentIndexChanged.connect(self._save_settings)
+        self.amplitude_slider.valueChanged.connect(self._save_settings)
+        self.background_brightness_slider.valueChanged.connect(self._save_settings)
 
     # -- device handling --------------------------------------------------
+
+    def _build_labeled_slider(self, parent_layout, title: str, default: int,
+                              minimum: int = 0, maximum: int = 100) -> QSlider:
+        parent_layout.addWidget(QLabel(title))
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setValue(default)
+        parent_layout.addWidget(slider)
+
+        value_label = QLabel(str(default))
+        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        slider.valueChanged.connect(lambda value: value_label.setText(str(value)))
+        parent_layout.addWidget(value_label)
+
+        return slider
+
+    def _load_settings(self) -> None:
+        saved = settings.music_settings()
+        self.rhythm_combo.setCurrentIndex(saved["rhythm"])
+        self.background_mode_combo.setCurrentIndex(saved["background_mode"])
+        self.amplitude_slider.setValue(saved["amplitude"])
+        self.background_brightness_slider.setValue(saved["background_brightness"])
+
+    def _save_settings(self) -> None:
+        settings.set_music_settings({
+            "rhythm": self.rhythm_combo.currentIndex(),
+            "background_mode": self.background_mode_combo.currentIndex(),
+            "amplitude": self.amplitude_slider.value(),
+            "background_brightness": self.background_brightness_slider.value(),
+        })
 
     def _on_device_changed(self, _status: str, enabled: bool, _found: bool,
                            _kind: str) -> None:
@@ -248,7 +311,13 @@ class MusicTab(QWidget):
 
         arecord_cmd = audio_spectrum.arecord_command(plughw)
         level_fn = audio_spectrum.levels_from_pcm
-        self._stream_worker = AudioSpectrumWorker(device_path, arecord_cmd, level_fn)
+        self._stream_worker = AudioSpectrumWorker(
+            device_path, arecord_cmd, level_fn,
+            rhythm=self.rhythm_combo.currentIndex(),
+            background_mode=self.background_mode_combo.currentIndex(),
+            amplitude=self.amplitude_slider.value(),
+            background_brightness=self.background_brightness_slider.value(),
+        )
         self._stream_worker.frame.connect(self.preview.set_levels)
         self._stream_worker.finished.connect(self._on_stream_finished)
         self._stream_thread = start_worker(self._stream_worker)

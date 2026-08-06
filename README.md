@@ -117,7 +117,10 @@ streamed at ~17 fps for single keys the firmware can't animate itself
 
 **Music** — live 17-band spectrum for the panel's analyser, captured from an
 ALSA input device via `arecord` and streamed over the keyboard's audio feed
-(`0x78`, cable only), with an on-tab bar preview
+(`0x78`, cable only), with an on-tab bar preview. The tab also carries the
+vendor "Music Rhythm" controls: Rhythm and Background Mode dropdowns (the
+same 15-entry list the Windows app uses) and Amplitude / Background Brightness
+sliders, all persisted across launches.
 
 **Config** — polling and app settings
 

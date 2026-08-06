@@ -166,6 +166,44 @@ def test_audio_header_bytes_are_where_the_capture_put_them():
     assert block[protocol.AUDIO_OFF_LEVELS] == 1
 
 
+def test_audio_background_brightness_lands_in_the_tail():
+    """The background-brightness byte is a best-guess mapping into the first
+    never-written tail byte -- the Music Rhythm tab's Background Brightness
+    slider (see re_notes/audio_spectrum_block.md). It defaults to zero, which
+    is what every captured frame's tail held."""
+    block = protocol.build_audio_blocks([1])[0]
+    assert block[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == (
+        protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT)
+    nondefault = protocol.build_audio_blocks([1], background_brightness=0x55)[0]
+    assert nondefault[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 0x55
+    # ...and nothing else in the tail moves.
+    assert (block[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS + 1:] ==
+            nondefault[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS + 1:])
+
+
+def test_audio_music_settings_ride_the_header_bytes():
+    """Rhythm -> byte 1, Amplitude -> byte 2, Background Mode -> byte 0. All
+    three are the Music Rhythm tab's controls mapped onto the block header;
+    the first two are corroborated by the single capture's default values."""
+    block = protocol.build_audio_blocks(
+        [1], scale=55, mode=3, style=9, background_brightness=7)[0]
+    assert block[protocol.AUDIO_OFF_SCALE] == 55
+    assert block[protocol.AUDIO_OFF_STYLE] == 9
+    assert block[protocol.AUDIO_OFF_MODE] == 3
+    assert block[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
+
+
+def test_audio_rhythm_and_background_lists_match_the_vendor():
+    """Both dropdowns are populated from the same 15-entry language range
+    (strings 106..120) in the original software."""
+    assert len(protocol.AUDIO_RHYTHM_NAMES) == 15
+    assert protocol.AUDIO_RHYTHM_NAMES == protocol.AUDIO_BACKGROUND_MODE_NAMES
+    assert "Spectrum Cycle" in protocol.AUDIO_RHYTHM_NAMES
+    assert "Ambilight" in protocol.AUDIO_RHYTHM_NAMES
+    assert protocol.AUDIO_RHYTHM_DEFAULT == protocol.AUDIO_STYLE_DEFAULT
+    assert protocol.AUDIO_BACKGROUND_MODE_DEFAULT == protocol.AUDIO_MODE_DEFAULT
+
+
 def test_audio_block_has_no_trailer():
     """Every other outbound block in this protocol ends AA 55; this one does
     not, in all 137 captured frames. Adding one would be the natural 'fix'."""

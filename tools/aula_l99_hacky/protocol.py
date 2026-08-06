@@ -308,6 +308,36 @@ AUDIO_MODE_DEFAULT = 0x04
 AUDIO_STYLE_DEFAULT = 0x08
 AUDIO_SCALE_DEFAULT = 0x64
 
+# The Music Rhythm tab's two dropdowns and two sliders, and where they land on
+# the wire. The four controls were confirmed from the vendor app's language
+# file (strings 102..105) and its t_musiclayer_data SQLite schema (columns
+# foremode / fore_amplitude / backmode / backb_right); the byte *locations*
+# are best guesses -- the only capture is at default settings, so only bytes 0
+# and 1 (the 0x08 rhythm and 0x64 amplitude) are corroborated by data, and
+# even those only weakly. Byte 0 is read as the background-mode colour and
+# byte 26 (the first "never written" tail byte) as the background brightness;
+# both are documented hypotheses in re_notes/audio_spectrum_block.md, not
+# confirmed readings.
+AUDIO_OFF_BACKGROUND_BRIGHTNESS = 26
+AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT = 0
+AUDIO_AMPLITUDE_DEFAULT = 100
+
+# The shared dropdown list from the vendor app's language file (strings
+# 106..120): the Rhythm and Background Mode dropdowns are both populated from
+# this same 15-entry range in the original software, so both use it here. The
+# byte value for an entry is its index into the list; a selected index is the
+# style/mode byte verbatim. Defaults hold the captured wire bytes (0x08 on
+# byte 1, 0x04 on byte 0) so an untouched Music tab sends exactly what the
+# capture shows.
+AUDIO_RHYTHM_NAMES = (
+    "Green/Yellow/Red", "Rainbow", "Reverse Rainbow", "Gradient",
+    "Spectrum Cycle", "White", "Red", "Orange", "Yellow", "Green", "Cyan",
+    "Off", "Blue", "Purple", "Ambilight",
+)
+AUDIO_RHYTHM_DEFAULT = 8  # byte 1 == 0x08 in the only capture
+AUDIO_BACKGROUND_MODE_NAMES = AUDIO_RHYTHM_NAMES
+AUDIO_BACKGROUND_MODE_DEFAULT = 4  # byte 0 == 0x04 in the only capture
+
 # The vendor app's frame period, measured as the median gap between
 # consecutive frames. Bands run low frequency to high: the opening frames of
 # the capture are loud at band 0 and silent above band 4, and one late frame
@@ -651,13 +681,22 @@ def build_stream_frame(colors: dict[int, tuple[int, int, int]]) -> list[Transact
 
 def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
                        mode: int = AUDIO_MODE_DEFAULT,
-                       style: int = AUDIO_STYLE_DEFAULT) -> list[bytes]:
+                       style: int = AUDIO_STYLE_DEFAULT,
+                       background_brightness: int = AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT) -> list[bytes]:
     """The single data block of one audio spectrum frame (opcode 0x78).
 
     `levels` is up to AUDIO_BAND_COUNT band magnitudes, low frequency first.
     A short list is padded with zeroes, so passing one value drives band 0 and
     leaves the rest silent -- which is the useful shape for working out which
     bar of the panel is which band.
+
+    `scale`, `mode` and `style` are the block's three header bytes (bytes
+    2, 0 and 1). `mode` and `style` are read as the Music Rhythm tab's
+    Background Mode and Rhythm selections (a 0..14 index into
+    AUDIO_BACKGROUND_MODE_NAMES / AUDIO_RHYTHM_NAMES) and `scale` as its
+    Amplitude slider -- see the block notes above. `background_brightness`
+    is written to the first never-written tail byte (26) on the same reading.
+    All four are hypotheses for the unconfirmed ones, not measured values.
 
     Levels are checked against `scale` rather than against AUDIO_LEVEL_MAX,
     because no captured frame ever exceeded byte 2 and the honest reading of
@@ -668,7 +707,8 @@ def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
     if len(levels) > AUDIO_BAND_COUNT:
         raise ValueError(
             f"at most {AUDIO_BAND_COUNT} bands, got {len(levels)}")
-    for byte_value, name in ((scale, "scale"), (mode, "mode"), (style, "style")):
+    for byte_value, name in ((scale, "scale"), (mode, "mode"), (style, "style"),
+                             (background_brightness, "background_brightness")):
         if not 0 <= byte_value <= 0xFF:
             raise ValueError(f"{name} must be 0..255, got {byte_value}")
     for band, level in enumerate(levels):
@@ -680,6 +720,7 @@ def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
     block[AUDIO_OFF_MODE] = mode
     block[AUDIO_OFF_STYLE] = style
     block[AUDIO_OFF_SCALE] = scale
+    block[AUDIO_OFF_BACKGROUND_BRIGHTNESS] = background_brightness
     block[AUDIO_OFF_LEVELS:AUDIO_OFF_LEVELS + len(levels)] = bytes(levels)
     return [bytes(block)]
 

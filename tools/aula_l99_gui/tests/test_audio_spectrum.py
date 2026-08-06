@@ -250,6 +250,44 @@ def test_audio_spectrum_worker_sends_audio_frames():
     assert frames[0][8] > 90
 
 
+def test_audio_spectrum_worker_sends_configured_music_settings():
+    """The worker carries the Music tab's Rhythm / Background Mode / Amplitude
+    / Background Brightness onto every frame's block, and scales levels to the
+    amplitude before sending (so the levels agree with the scale byte)."""
+    bands = audio_spectrum.band_frequencies()
+    samples = _sine(32767, bands[8])
+    pcm = struct.pack(f"<{len(samples)}h", *samples)
+    pcm = pcm + pcm
+
+    fake_proc = _FakePopen(pcm)
+    fake_hidraw = _FakeHidraw()
+    worker = workers.AudioSpectrumWorker(
+        "/dev/hidraw6", ["arecord", "-l"], audio_spectrum.levels_from_pcm,
+        rhythm=9, background_mode=3, amplitude=50, background_brightness=7)
+
+    results = {}
+    worker.finished.connect(lambda ok, msg: results.setdefault("finished", (ok, msg)))
+
+    with patch.object(workers.subprocess, "Popen", lambda *a, **k: fake_proc):
+        with patch.object(workers, "HidrawTransport", lambda *a, **k: fake_hidraw):
+            worker.run()
+
+    assert results["finished"][0] is True
+    written = [w[1:] for w in fake_hidraw.written]
+    blocks = [
+        written[i + 1] for i, w in enumerate(written)
+        if w[1] == kb_protocol.OP_AUDIO
+    ]
+    assert blocks, "expected at least one audio block"
+    for block in blocks:
+        assert block[kb_protocol.AUDIO_OFF_STYLE] == 9
+        assert block[kb_protocol.AUDIO_OFF_MODE] == 3
+        assert block[kb_protocol.AUDIO_OFF_SCALE] == 50
+        assert block[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
+        # Levels are scaled to amplitude 50, so none may exceed the scale byte.
+        assert max(block[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]) <= 50
+
+
 def test_audio_spectrum_worker_reports_arecord_failure():
     fake_proc = _FakePopen(b"")
     fake_hidraw = _FakeHidraw()
