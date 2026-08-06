@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=AULA L99 GUI
+GenericName=Keyboard control
+Comment=Control the AULA L99 keyboard lighting and touchscreen
+# Placeholders, rewritten by the install.sh shipped alongside this file. The
+# binary's absolute path is only known once the build is unpacked somewhere.
+Exec=@EXEC@
+Icon=aula-l99-gui
+Terminal=false
+Categories=Settings;HardwareSettings;

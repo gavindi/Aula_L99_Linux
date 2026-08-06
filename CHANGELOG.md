@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4] - 2026-08-06
+
+**The packaged build can now be put in the desktop environment's launcher.**
+Nuitka has no `.desktop` support of its own — its icon options are Windows- and
+macOS-only — so the dist now carries the pieces and an installer for them.
+`install.sh` (shipped inside the unpacked build) rewrites an `@EXEC@`
+placeholder in the launcher template with the binary's absolute path — only
+known once the tarball is unpacked — and drops the `.desktop` file and a
+256x256 icon into the per-user `~/.local/share/applications` and
+`~/.local/share/icons/hicolor/256x256/apps`, so no root is needed and any
+desktop environment picks them up. `--uninstall` removes them again. The icon
+is derived at pack time from the vendor's own `DeviceDriver.ico`, whose largest
+frame is 64x64, upscaled with Lanczos by the build venv's Pillow — the only
+fitting launcher art the vendor ships.
+
+### Added
+- `packaging/aula-l99-gui.desktop`: the launcher template, with `@EXEC@`
+  standing in for the not-yet-known binary path. Validated with
+  `desktop-file-validate` (Categories is `Settings;HardwareSettings;`, which is
+  the pair the validator wants).
+- `packaging/install.sh`: installs the launcher and icon per-user; the binary
+  path is escaped for sed (spaces quoted in `Exec=`, `&`/`\` escaped), the
+  `update-desktop-database` refresh is attempted when present, and
+  `--uninstall` removes the two files.
+- `package.sh`: `--include-data-files` ships the `.desktop` template into the
+  dist (alongside `install.sh`, which `cp`-s in with the executable bit set);
+  the pack phase renders `icon.png` from the vendor ico via the build venv's
+  Pillow. All four files land in the tarball, so the recipient unpacks, runs
+  `./install.sh`, and has a launcher.
+
+### Changed
+- `tools/aula_l99_gui/README.md`: the packaged-build section mentions
+  `./install.sh` (and `--uninstall`) inside the unpacked build.
+
 ## [0.10.3] - 2026-08-06
 
 **Stopping the Music stream now hands the keyboard back to its own lighting.**

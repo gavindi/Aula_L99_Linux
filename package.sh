@@ -3,7 +3,9 @@
 # a tarball, so the app can be handed to someone who has no Python, no venv and
 # no intention of acquiring either. The result carries its own CPython, its own
 # Qt, and the skin assets; the only outside requirement left is ffmpeg, and
-# only for video sources on the Touchscreen tab.
+# only for video sources on the Touchscreen tab. The dist also ships an
+# install.sh that adds a .desktop launcher and icon for the unpacked build to
+# the user's ~/.local/share (see packaging/).
 #
 # This buys distribution, not speed. Measured against `./run.sh` on the same
 # machine, the packaged binary reaches its first window in ~0.37s versus ~0.34s
@@ -75,6 +77,11 @@ export PATH="$PWD/$BUILD_VENV/bin:$PATH"
 # out fails *silently* -- theme.load_font() returns "" by design and Qt falls
 # back to the platform font -- so the build would look fine while quietly
 # losing the skin's typography.
+#
+# The .desktop launcher template (packaging/aula-l99-gui.desktop) ships in the
+# dist so the install.sh beside it can rewrite its @EXEC@ placeholder with the
+# real binary path at install time; the launcher icon is derived from the
+# vendor's DeviceDriver.ico at pack time below.
 "$BUILD_VENV/bin/python" -m nuitka \
     --standalone \
     --enable-plugin=pyside6 \
@@ -84,6 +91,7 @@ export PATH="$PWD/$BUILD_VENV/bin:$PATH"
     --include-data-dir=aula_l99_gui/assets/layouts=aula_l99_gui/assets/layouts \
     --include-data-dir=aula_l99_gui/assets/device=aula_l99_gui/assets/device \
     --include-data-dir=aula_l99_gui/font=aula_l99_gui/font \
+    --include-data-files="$SCRIPT_DIR/packaging/aula-l99-gui.desktop"=aula-l99-gui.desktop \
     --noinclude-qt-translations \
     --output-dir="$OUT_DIR" \
     --output-filename="$DIST_NAME" \
@@ -99,6 +107,24 @@ TARBALL="$OUT_DIR/$DIST_NAME-$VERSION-$ARCH.tar.gz"
 # tarball unpacks into something a human recognises.
 rm -rf "$OUT_DIR/$DIST_NAME"
 mv "$OUT_DIR/main.dist" "$OUT_DIR/$DIST_NAME"
+
+# Derive the 256x256 launcher icon from the vendor's DeviceDriver.ico (whose
+# largest frame is 64x64; the upscale is Lanczos, and the venv's Pillow is the
+# same one the app pins). The .desktop template came in via --include-data-files
+# above; install.sh rewrites its @EXEC@ and drops both into ~/.local/share.
+"$BUILD_VENV/bin/python" - "$OUT_DIR/$DIST_NAME" <<'PY'
+import sys
+from pathlib import Path
+
+from PIL import Image
+
+dist = Path(sys.argv[1])
+ico = Image.open(dist / "aula_l99_gui/assets/skins/theme1/DeviceDriver.ico").convert("RGBA")
+ico.resize((256, 256), Image.Resampling.LANCZOS).save(dist / "icon.png")
+PY
+cp "$SCRIPT_DIR/packaging/install.sh" "$OUT_DIR/$DIST_NAME/install.sh"
+chmod +x "$OUT_DIR/$DIST_NAME/install.sh"
+
 tar -czf "$TARBALL" -C "$OUT_DIR" "$DIST_NAME"
 
 echo

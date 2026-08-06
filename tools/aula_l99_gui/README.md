@@ -48,8 +48,10 @@ no wish to set one up:
 The result is `build/aula-l99-gui-<version>-<arch>.tar.gz` — about 56 MB
 packed, 147 MB unpacked — containing its own CPython and Qt alongside the skin
 assets. Unpack it anywhere and run the `aula-l99-gui` binary inside; nothing
-needs installing. `ffmpeg`/`ffprobe` remain an outside requirement, and only
-for video sources.
+needs installing. For a launcher icon in the desktop environment, run
+`./install.sh` inside the unpacked build (it drops a `.desktop` file and the
+icon into `~/.local/share`, no root needed; `--uninstall` removes them).
+`ffmpeg`/`ffprobe` remain an outside requirement, and only for video sources.
 
 Note that this buys distribution and nothing else. Measured on one machine, the
 packaged binary reaches its first window in ~0.37 s against ~0.34 s for the
