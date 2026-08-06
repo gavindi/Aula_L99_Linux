@@ -228,8 +228,8 @@ def test_audio_spectrum_worker_sends_audio_frames():
             assert header[8] == 1  # one data block follows
             block = written[i + 1]
             assert block[0:3] == bytes([
-                kb_protocol.AUDIO_MODE_DEFAULT,
-                kb_protocol.AUDIO_STYLE_DEFAULT,
+                kb_protocol.AUDIO_RHYTHM_DEFAULT,
+                kb_protocol.AUDIO_BACKGROUND_MODE_DEFAULT,
                 kb_protocol.AUDIO_SCALE_DEFAULT,
             ])
             levels = block[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]
@@ -280,8 +280,8 @@ def test_audio_spectrum_worker_sends_configured_music_settings():
     ]
     assert blocks, "expected at least one audio block"
     for block in blocks:
-        assert block[kb_protocol.AUDIO_OFF_STYLE] == 9
-        assert block[kb_protocol.AUDIO_OFF_MODE] == 3
+        assert block[kb_protocol.AUDIO_OFF_RHYTHM] == 9
+        assert block[kb_protocol.AUDIO_OFF_BACKGROUND_MODE] == 3
         assert block[kb_protocol.AUDIO_OFF_SCALE] == 50
         assert block[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
         # Levels are scaled to amplitude 50, so none may exceed the scale byte.
@@ -332,15 +332,15 @@ def test_audio_spectrum_worker_settings_apply_mid_stream():
     # The frame signal fires *after* its block is written, so the first block
     # carries the constructor's settings and every later one the update.
     first, *rest = blocks
-    assert first[kb_protocol.AUDIO_OFF_STYLE] == 8
-    assert first[kb_protocol.AUDIO_OFF_MODE] == 4
+    assert first[kb_protocol.AUDIO_OFF_RHYTHM] == 8
+    assert first[kb_protocol.AUDIO_OFF_BACKGROUND_MODE] == 4
     assert first[kb_protocol.AUDIO_OFF_SCALE] == 100
     assert first[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 0
     assert max(first[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]) > 50
     assert rest, "expected later frames carrying the updated settings"
     for block in rest:
-        assert block[kb_protocol.AUDIO_OFF_STYLE] == 9
-        assert block[kb_protocol.AUDIO_OFF_MODE] == 3
+        assert block[kb_protocol.AUDIO_OFF_RHYTHM] == 9
+        assert block[kb_protocol.AUDIO_OFF_BACKGROUND_MODE] == 3
         assert block[kb_protocol.AUDIO_OFF_SCALE] == 50
         assert block[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
         # Levels are rescaled to the new amplitude, so they agree with the

@@ -294,49 +294,46 @@ AUDIO_BAND_COUNT = 23
 AUDIO_OFF_LEVELS = 3
 AUDIO_LEVEL_MAX = 100
 
-# Bytes 0..2. Named rather than inlined because two of the three are only
-# provisionally constants -- see re_notes/audio_spectrum_block.md. Byte 1
-# collides with EFFECT_NAMES[0x08] == "spectrum", which may be the Music
-# Rhythm tab's rhythm style leaking through, or may be coincidence. Byte 2 is
-# 100, which is either the full-scale denominator the levels are relative to
-# or that tab's Amplitude slider, also a 0..100 control. One capture at one
-# setting cannot tell those apart.
-AUDIO_OFF_MODE = 0
-AUDIO_OFF_STYLE = 1
+# Bytes 0..2. The header of the audio block. Byte 2 is 100, which is either
+# the full-scale denominator the levels are relative to or the Music Rhythm
+# tab's Amplitude slider, also a 0..100 control; one capture at one setting
+# cannot tell those apart.
+AUDIO_OFF_RHYTHM = 0
+AUDIO_OFF_BACKGROUND_MODE = 1
 AUDIO_OFF_SCALE = 2
-AUDIO_MODE_DEFAULT = 0x04
-AUDIO_STYLE_DEFAULT = 0x08
 AUDIO_SCALE_DEFAULT = 0x64
 
 # The Music Rhythm tab's two dropdowns and two sliders, and where they land on
 # the wire. The four controls were confirmed from the vendor app's language
 # file (strings 102..105) and its t_musiclayer_data SQLite schema (columns
-# foremode / fore_amplitude / backmode / backb_right); the byte *locations*
-# are best guesses -- the only capture is at default settings, so only bytes 0
-# and 1 (the 0x08 rhythm and 0x64 amplitude) are corroborated by data, and
-# even those only weakly. Byte 0 is read as the background-mode colour and
-# byte 26 (the first "never written" tail byte) as the background brightness;
-# both are documented hypotheses in re_notes/audio_spectrum_block.md, not
-# confirmed readings.
+# foremode / fore_amplitude / backmode / backb_right). The byte *locations*
+# were first guessed from the single default-settings capture, then corrected
+# on hardware: moving the GUI's Rhythm dropdown changed the panel analyser's
+# background, so byte 0 is the Rhythm (foreground) style and byte 1 the
+# Background Mode -- the reverse of the original guess. Byte 26 (the first
+# "never written" tail byte) is read as the background brightness. The two
+# Background bytes still want a non-default capture to pin their exact
+# readings, but the rhythm/background swap is confirmed.
 AUDIO_OFF_BACKGROUND_BRIGHTNESS = 26
 AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT = 0
 AUDIO_AMPLITUDE_DEFAULT = 100
 
-# The shared dropdown list from the vendor app's language file (strings
-# 106..120): the Rhythm and Background Mode dropdowns are both populated from
-# this same 15-entry range in the original software, so both use it here. The
-# byte value for an entry is its index into the list; a selected index is the
-# style/mode byte verbatim. Defaults hold the captured wire bytes (0x08 on
-# byte 1, 0x04 on byte 0) so an untouched Music tab sends exactly what the
-# capture shows.
+# The shared dropdown list for the Music Rhythm tab's two dropdowns, ordered
+# by the byte each entry sends (a selected index is the header byte verbatim):
+# the original guess put "Off" last, but a hardware check (sending byte 1 as
+# 0x00 vs 0x0B and watching the panel) showed byte 0 = "Off" -- the no-background
+# state -- so Off leads the list and every entry after it follows. Both the
+# Rhythm and Background Mode dropdowns use this same list. Defaults hold the
+# captured wire bytes (0x04 on byte 0, 0x08 on byte 1) so an untouched Music
+# tab sends exactly what the capture shows.
 AUDIO_RHYTHM_NAMES = (
-    "Green/Yellow/Red", "Rainbow", "Reverse Rainbow", "Gradient",
+    "Off", "Green/Yellow/Red", "Rainbow", "Reverse Rainbow", "Gradient",
     "Spectrum Cycle", "White", "Red", "Orange", "Yellow", "Green", "Cyan",
-    "Off", "Blue", "Purple", "Ambilight",
+    "Blue", "Purple", "Ambilight",
 )
-AUDIO_RHYTHM_DEFAULT = 8  # byte 1 == 0x08 in the only capture
+AUDIO_RHYTHM_DEFAULT = 0x04  # byte 0 == 0x04 in the only capture
 AUDIO_BACKGROUND_MODE_NAMES = AUDIO_RHYTHM_NAMES
-AUDIO_BACKGROUND_MODE_DEFAULT = 4  # byte 0 == 0x04 in the only capture
+AUDIO_BACKGROUND_MODE_DEFAULT = 0x08  # byte 1 == 0x08 in the only capture
 
 # The vendor app's frame period, measured as the median gap between
 # consecutive frames. Bands run low frequency to high: the opening frames of
@@ -680,8 +677,8 @@ def build_stream_frame(colors: dict[int, tuple[int, int, int]]) -> list[Transact
 
 
 def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
-                       mode: int = AUDIO_MODE_DEFAULT,
-                       style: int = AUDIO_STYLE_DEFAULT,
+                       rhythm: int = AUDIO_RHYTHM_DEFAULT,
+                       background_mode: int = AUDIO_BACKGROUND_MODE_DEFAULT,
                        background_brightness: int = AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT) -> list[bytes]:
     """The single data block of one audio spectrum frame (opcode 0x78).
 
@@ -690,13 +687,14 @@ def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
     leaves the rest silent -- which is the useful shape for working out which
     bar of the panel is which band.
 
-    `scale`, `mode` and `style` are the block's three header bytes (bytes
-    2, 0 and 1). `mode` and `style` are read as the Music Rhythm tab's
-    Background Mode and Rhythm selections (a 0..14 index into
-    AUDIO_BACKGROUND_MODE_NAMES / AUDIO_RHYTHM_NAMES) and `scale` as its
-    Amplitude slider -- see the block notes above. `background_brightness`
-    is written to the first never-written tail byte (26) on the same reading.
-    All four are hypotheses for the unconfirmed ones, not measured values.
+    `scale`, `rhythm` and `background_mode` are the block's three header bytes
+    (bytes 2, 0 and 1). `rhythm` and `background_mode` are the Music Rhythm
+    tab's Rhythm and Background Mode selections (a 0..14 index into
+    AUDIO_RHYTHM_NAMES / AUDIO_BACKGROUND_MODE_NAMES) and `scale` its
+    Amplitude slider -- see the block notes above. The rhythm/background byte
+    placement was reversed by the original guess and corrected on hardware.
+    `background_brightness` is written to the first never-written tail byte
+    (26) on the same reading.
 
     Levels are checked against `scale` rather than against AUDIO_LEVEL_MAX,
     because no captured frame ever exceeded byte 2 and the honest reading of
@@ -707,7 +705,8 @@ def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
     if len(levels) > AUDIO_BAND_COUNT:
         raise ValueError(
             f"at most {AUDIO_BAND_COUNT} bands, got {len(levels)}")
-    for byte_value, name in ((scale, "scale"), (mode, "mode"), (style, "style"),
+    for byte_value, name in ((scale, "scale"), (rhythm, "rhythm"),
+                             (background_mode, "background_mode"),
                              (background_brightness, "background_brightness")):
         if not 0 <= byte_value <= 0xFF:
             raise ValueError(f"{name} must be 0..255, got {byte_value}")
@@ -717,8 +716,8 @@ def build_audio_blocks(levels: list[int], scale: int = AUDIO_SCALE_DEFAULT,
                 f"band {band} level must be 0..{scale} (the scale byte), got {level}")
 
     block = bytearray(PACKET_SIZE)
-    block[AUDIO_OFF_MODE] = mode
-    block[AUDIO_OFF_STYLE] = style
+    block[AUDIO_OFF_RHYTHM] = rhythm
+    block[AUDIO_OFF_BACKGROUND_MODE] = background_mode
     block[AUDIO_OFF_SCALE] = scale
     block[AUDIO_OFF_BACKGROUND_BRIGHTNESS] = background_brightness
     block[AUDIO_OFF_LEVELS:AUDIO_OFF_LEVELS + len(levels)] = bytes(levels)

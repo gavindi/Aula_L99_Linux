@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-08-06
+
+**Stopping the Music stream now hands the keyboard back to its own lighting.**
+The 0x78 spectrum feed lights the keyboard as well as the panel's analyser,
+and the keyboard stayed in that music mode after Stop -- the all-zero frame
+that clears the panel leaves the keyboard lit, and it only returned to its
+stored pattern when the app quit and the host session closed. The tab now
+snapshots the keyboard's lighting before the stream starts and, on stop,
+restores it the same way the User Lighting tab restores its base colours
+after an animation: select `EFFECT_CUSTOM`, then a persistent `0x23` colour
+write.
+
+### Changed
+- `music_tab.py`: `_start_stream` snapshots the keyboard's colours (via
+  `read_colors`) before the feed overrides them, and `_on_stream_finished`
+  restores them on stop by selecting `EFFECT_CUSTOM` and writing the colours
+  through a `KeyboardWorker` -- skipped on failure and during shutdown (the
+  keyboard returns to its stored pattern when the app quits, so a shutdown
+  restore would start a thread the teardown would then have to wait for). A
+  quick Stop -> Start waits out any restore still in flight and cancels a
+  pending one.
+- `re_notes/audio_spectrum_block.md`: the keyboard-lighting question is now
+  answered -- the keyboard lights up from the 0x78 feed and stays lit after
+  the feed stops, which is why the GUI restores it.
+- Tests: the Music tab's snapshot/restore behaviour is covered -- the snapshot
+  taken at stream start, the restore's `EFFECT_CUSTOM` + `0x23` transaction
+  shape, and the failure/shutdown skip paths.
+
 ## [0.10.2] - 2026-08-06
 
 **The Music tab's four controls now apply to a capture that is already
@@ -15,7 +43,22 @@ settings in `config.json`; the panel kept drawing the old frame header and
 level scaling until the stream was stopped and restarted. The worker now holds
 the four values as a single snapshot it re-reads every frame, and the tab
 pushes each control change onto the live worker, so the next frame carries the
-new style/mode/scale and rescales the levels to the new Amplitude.
+new style/mode and rescales the levels to the new Amplitude.
+
+**The Rhythm and Background Mode dropdowns were wired to the wrong bytes.**
+The original guess put the Rhythm style on byte 1 (where `0x08` collided with
+the "spectrum" effect) and the Background Mode on byte 0; a hardware check
+reversed it -- moving the Rhythm dropdown changed the panel analyser's
+background. The swap was confirmed, so Rhythm now drives byte 0 and Background
+Mode byte 1, and the control defaults follow the captured wire bytes (`0x04`
+on byte 0, `0x08` on byte 1).
+
+**The Music Rhythm list was ordered wrong at the low end.** A byte-level
+hardware check (sending the background byte as `0x00` vs `0x0B`) showed that
+`0x00` clears the analyser background while `0x0B` draws a colour -- so **Off
+is byte 0**, not the index-11 the vendor's language-file position implied. The
+shared dropdown list now starts with Off and every other entry shifts up by
+one, with the byte an entry sends equal to its new index.
 
 ### Changed
 - `workers.py`: `AudioSpectrumWorker` keeps its four Music controls in one
@@ -25,6 +68,22 @@ new style/mode/scale and rescales the levels to the new Amplitude.
 - `music_tab.py`: `_save_settings` now also calls
   `set_music_settings()` on the running worker, and logs it to the debug log;
   `_start_stream` uses the same `_music_settings()` helper.
+- `protocol.py`: the audio block's header offsets are renamed to the
+  confirmed reading -- `AUDIO_OFF_RHYTHM` (byte 0) and
+  `AUDIO_OFF_BACKGROUND_MODE` (byte 1) replace the provisional
+  `AUDIO_OFF_MODE`/`AUDIO_OFF_STYLE`, and `build_audio_blocks()` takes
+  `rhythm=`/`background_mode=` to match. The two dropdown defaults swap to the
+  captured wire values (`AUDIO_RHYTHM_DEFAULT` = 4, `AUDIO_BACKGROUND_MODE_DEFAULT` = 8).
+  `AUDIO_RHYTHM_NAMES` is reordered so Off leads the list and index = byte.
+- `cli.py`: `cmd_spectrum` gains `--spectrum-rhythm`, `--spectrum-background-mode`
+  and `--spectrum-background-brightness` overrides for the block's three
+  header bytes, so a non-default control value can be confirmed on hardware.
+- `re_notes/audio_spectrum_block.md`: the Rhythm/Background Mode byte
+  placement is corrected from hypothesis to hardware-confirmed, with the
+  original swap documented and the Off = byte 0 finding recorded.
+- Tests: the wire assertions follow the renamed offsets, the protocol test
+  asserts the corrected Rhythm -> byte 0 / Background Mode -> byte 1 mapping
+  and pins Off at index 0, and the GUI's dropdown tests expect Off first.
 
 ## [0.10.1] - 2026-08-06
 

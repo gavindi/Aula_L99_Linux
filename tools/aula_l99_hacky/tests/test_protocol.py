@@ -160,8 +160,9 @@ def test_captured_audio_block_round_trips(name):
 
 def test_audio_header_bytes_are_where_the_capture_put_them():
     block = protocol.build_audio_blocks([1])[0]
-    assert block[protocol.AUDIO_OFF_MODE] == protocol.AUDIO_MODE_DEFAULT
-    assert block[protocol.AUDIO_OFF_STYLE] == protocol.AUDIO_STYLE_DEFAULT
+    assert block[protocol.AUDIO_OFF_RHYTHM] == protocol.AUDIO_RHYTHM_DEFAULT
+    assert block[protocol.AUDIO_OFF_BACKGROUND_MODE] == (
+        protocol.AUDIO_BACKGROUND_MODE_DEFAULT)
     assert block[protocol.AUDIO_OFF_SCALE] == protocol.AUDIO_SCALE_DEFAULT
     assert block[protocol.AUDIO_OFF_LEVELS] == 1
 
@@ -182,26 +183,32 @@ def test_audio_background_brightness_lands_in_the_tail():
 
 
 def test_audio_music_settings_ride_the_header_bytes():
-    """Rhythm -> byte 1, Amplitude -> byte 2, Background Mode -> byte 0. All
-    three are the Music Rhythm tab's controls mapped onto the block header;
-    the first two are corroborated by the single capture's default values."""
+    """Rhythm -> byte 0, Amplitude -> byte 2, Background Mode -> byte 1. The
+    first two are corroborated by the single capture's default values; the
+    rhythm/background placement was swapped from the original guess after a
+    hardware check (the Rhythm dropdown moves the panel's background)."""
     block = protocol.build_audio_blocks(
-        [1], scale=55, mode=3, style=9, background_brightness=7)[0]
+        [1], scale=55, rhythm=9, background_mode=3, background_brightness=7)[0]
     assert block[protocol.AUDIO_OFF_SCALE] == 55
-    assert block[protocol.AUDIO_OFF_STYLE] == 9
-    assert block[protocol.AUDIO_OFF_MODE] == 3
+    assert block[protocol.AUDIO_OFF_RHYTHM] == 9
+    assert block[protocol.AUDIO_OFF_BACKGROUND_MODE] == 3
     assert block[protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
 
 
 def test_audio_rhythm_and_background_lists_match_the_vendor():
-    """Both dropdowns are populated from the same 15-entry language range
-    (strings 106..120) in the original software."""
+    """Both dropdowns are populated from the same 15-entry range (strings
+    106..120) in the original software, and the byte an entry sends is its
+    index. Off leads the list: a hardware check (background byte 0x00 vs 0x0B
+    on the panel) showed byte 0 is the no-background state, so Off = 0, with
+    every other entry shifted up by one from the original guess."""
     assert len(protocol.AUDIO_RHYTHM_NAMES) == 15
     assert protocol.AUDIO_RHYTHM_NAMES == protocol.AUDIO_BACKGROUND_MODE_NAMES
-    assert "Spectrum Cycle" in protocol.AUDIO_RHYTHM_NAMES
+    assert protocol.AUDIO_RHYTHM_NAMES.index("Off") == 0
+    assert protocol.AUDIO_RHYTHM_NAMES.index("Green/Yellow/Red") == 1
+    assert protocol.AUDIO_RHYTHM_NAMES.index("Spectrum Cycle") == 5
     assert "Ambilight" in protocol.AUDIO_RHYTHM_NAMES
-    assert protocol.AUDIO_RHYTHM_DEFAULT == protocol.AUDIO_STYLE_DEFAULT
-    assert protocol.AUDIO_BACKGROUND_MODE_DEFAULT == protocol.AUDIO_MODE_DEFAULT
+    assert protocol.AUDIO_RHYTHM_DEFAULT == 0x04
+    assert protocol.AUDIO_BACKGROUND_MODE_DEFAULT == 0x08
 
 
 def test_audio_block_has_no_trailer():

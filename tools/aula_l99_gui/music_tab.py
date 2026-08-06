@@ -15,6 +15,11 @@ off -- see MainWindow._on_any_busy_changed.
 The spectrum feed is cable-only (cli.py's `--spectrum` is _require_cable),
 so the tab is driven by the *keyboard* DeviceSelector and Start is gated on a
 wired device being enabled.
+
+The 0x78 feed lights the keyboard as well as the panel's analyser, and the
+keyboard stays in that music mode after the feed stops (it only reverts when
+the host session closes), so the tab snapshots the keyboard's lighting before
+the stream starts and hands it back on stop -- see `_restore_keyboard`.
 """
 from __future__ import annotations
 
@@ -41,6 +46,8 @@ from .device_utils import KEYBOARD_PERMISSION_HINT
 from .workers import (
     AudioSpectrumWorker,
     CallableResultWorker,
+    KeyboardWorker,
+    read_colors,
     start_worker,
 )
 
@@ -48,6 +55,13 @@ from .workers import (
 # figure is one chunk read (~43ms) plus its I/O; this only matters if the
 # device stops answering and the transport sits on its own timeout.
 STREAM_STOP_WAIT_MS = 3000
+
+# Inter-packet gaps for the colour snapshot read at stream start and the
+# restore write on stop. Both are one-shot paths, and ~3-5ms between packets
+# is plenty (the realtime colour stream runs at 3ms), so they stay quick
+# rather than inheriting the vendor poll's ~37ms gap.
+RESTORE_READ_GAP = 0.005
+RESTORE_GAP = 0.003
 
 # The panel's analyser renders 17 segments (wire bands 0..16); bands 17..22 of
 # the 23 the block carries are ignored. This tab produces exactly the visible
@@ -124,6 +138,18 @@ class MusicTab(QWidget):
         # queried via isRunning(); this flag is what shutdown waits on.
         self._refresh_active = False
         self._devices: list[audio_spectrum.CaptureDevice] = []
+        # The keyboard's lighting just before the stream started, so stop can
+        # hand it back. The 0x78 feed lights the keyboard as well as the
+        # panel, and it stays in that music mode after the feed stops.
+        self._restore_colors: dict[int, tuple[int, int, int]] | None = None
+        self._restore_worker = None
+        self._restore_thread = None
+        # True while the restore write is in flight; shutdown and a fresh
+        # stream both wait on it (same shape as _refresh_active, for the same
+        # reason: the C++ QThread is deleteLater'd on finish and cannot be
+        # queried via isRunning()).
+        self._restore_active = False
+        self._shutting_down = False
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
@@ -302,6 +328,12 @@ class MusicTab(QWidget):
 
     def _start_stream(self) -> None:
         self._stop_stream()  # only ever one stream on the device at a time
+        # A colour restore from a just-stopped stream may still be writing;
+        # wait it out so its writes can't interleave with this stream's
+        # frames, and cancel any restore the old stream would still trigger.
+        if self._restore_active and self._restore_thread is not None:
+            self._restore_thread.wait(STREAM_STOP_WAIT_MS)
+        self._restore_colors = None
         if not self._device_ready:
             QMessageBox.warning(
                 self, "Music", "The spectrum feed needs the wired cable keyboard; "
@@ -319,6 +351,17 @@ class MusicTab(QWidget):
         if not plughw:
             QMessageBox.warning(self, "Music", "No audio input device selected.")
             return
+
+        # The spectrum feed lights the keyboard as well as the panel, and the
+        # keyboard stays in that music mode after the feed stops (the blank
+        # frame on stop clears the panel's analyser, not the keyboard's
+        # lighting). Snapshot what the keyboard was showing so stop can hand
+        # it back. A failed read just means no restore.
+        try:
+            self._restore_colors = read_colors(
+                device_path, gap=RESTORE_READ_GAP)
+        except OSError:
+            self._restore_colors = None
 
         arecord_cmd = audio_spectrum.arecord_command(plughw)
         level_fn = audio_spectrum.levels_from_pcm
@@ -360,6 +403,50 @@ class MusicTab(QWidget):
             if "permission" in message.lower():
                 text = f"{message}\n\n{KEYBOARD_PERMISSION_HINT}"
             QMessageBox.critical(self, "Music Error", text)
+            self._restore_colors = None
+            return
+        self._restore_keyboard()
+
+    def _restore_keyboard(self) -> None:
+        """Hand the keyboard back to the lighting it had before the stream.
+
+        The 0x78 spectrum feed lights the keyboard as well as the panel's
+        analyser, and the keyboard stays in that music mode once the feed
+        stops -- the all-zero frame on stop clears the panel, not the
+        keyboard (it only reverts when the app quits and the host session
+        closes). Restore the snapshot taken at stream start the same way
+        user_lighting_tab puts its base colours back after an animation:
+        select custom per-key mode, then write the colours, so the write is
+        not ignored by a running effect/music mode.
+        """
+        colors = self._restore_colors
+        self._restore_colors = None
+        if self._shutting_down or not colors:
+            return
+        device_path = self._selector.current_path()
+        if device_path is None:
+            return
+        transactions = (
+            kb_protocol.build_effect_transfer(
+                kb_protocol.EFFECT_CUSTOM,
+                speed=kb_protocol.EFFECT_SPEED_DEFAULT,
+                brightness=kb_protocol.EFFECT_BRIGHTNESS_MAX)
+            + kb_protocol.build_color_transfer(colors)
+        )
+        self._restore_worker = KeyboardWorker(
+            device_path, transactions, gap=RESTORE_GAP)
+        self._restore_worker.finished.connect(self._on_restore_finished)
+        self._restore_active = True
+        self._restore_thread = start_worker(self._restore_worker)
+        self._restore_thread.finished.connect(self._on_restore_thread_stopped)
+        self._debug_log.append(
+            "Music", "-- restored keyboard lighting after stream")
+
+    def _on_restore_finished(self, success: bool, message: str) -> None:
+        self._debug_log.append("Music", f"-- keyboard restore: {message}")
+
+    def _on_restore_thread_stopped(self) -> None:
+        self._restore_active = False
 
     def _set_streaming(self, streaming: bool) -> None:
         if streaming == self._streaming:
@@ -390,7 +477,16 @@ class MusicTab(QWidget):
         """Stop the stream thread before the window is torn down -- Qt aborts
         the process if a QThread is still running at that point (the same
         reason KeyboardTab and UserLightingTab have one of these). Also waits
-        out a device listing that is still in flight, for the same reason."""
+        out a device listing or keyboard-restore write that is still in
+        flight, for the same reason.
+
+        The keyboard restore is skipped here: the keyboard returns to its
+        own stored pattern when the app quits and the host session ends, so
+        re-applying colours would be pointless (and would start a thread the
+        teardown would then have to wait for)."""
+        self._shutting_down = True
         self._stop_stream()
         if self._refresh_active and self._refresh_thread is not None:
             self._refresh_thread.wait(STREAM_STOP_WAIT_MS)
+        if self._restore_active and self._restore_thread is not None:
+            self._restore_thread.wait(STREAM_STOP_WAIT_MS)

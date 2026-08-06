@@ -426,7 +426,7 @@ class AudioSpectrumWorker(QObject):
                         ]
                     for tx in kb_protocol.build_audio_frame(
                             levels, scale=amplitude,
-                            mode=background_mode, style=rhythm,
+                            rhythm=rhythm, background_mode=background_mode,
                             background_brightness=background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)
@@ -456,7 +456,7 @@ class AudioSpectrumWorker(QObject):
                     for tx in kb_protocol.build_audio_frame(
                             [0] * kb_protocol.AUDIO_BAND_COUNT,
                             scale=amplitude,
-                            mode=background_mode, style=rhythm,
+                            rhythm=rhythm, background_mode=background_mode,
                             background_brightness=background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)

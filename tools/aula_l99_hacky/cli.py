@@ -30,7 +30,10 @@ vendor app does.
 the FFT and sends 23 band levels, so driving one band at a time is how to
 confirm which bar is which. Confirmed on hardware; note the panel's analyser
 renders only 17 of the 23 bands (wire bands 0..16) -- see
-re_notes/audio_spectrum_block.md.
+re_notes/audio_spectrum_block.md. The block's header bytes 0, 1 and 26 can be
+sent non-default with `--spectrum-rhythm`, `--spectrum-background-mode` and
+`--spectrum-background-brightness` -- the way the Music Rhythm tab's four
+controls get confirmed on hardware.
 
 A udev rule granting the logged-in user access to the keyboard's hidraw nodes
 is usually already in place, so root is typically not needed.
@@ -335,7 +338,11 @@ def cmd_spectrum(args: argparse.Namespace) -> int:
 
     try:
         levels = protocol.parse_audio_levels(args.spectrum)
-        transactions = protocol.build_audio_frame(levels, args.spectrum_scale)
+        transactions = protocol.build_audio_frame(
+            levels, args.spectrum_scale,
+            rhythm=args.spectrum_rhythm,
+            background_mode=args.spectrum_background_mode,
+            background_brightness=args.spectrum_background_brightness)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -431,6 +438,24 @@ def build_parser() -> argparse.ArgumentParser:
                        default=protocol.AUDIO_SCALE_DEFAULT, metavar="N",
                        help="the value levels are relative to (default "
                             "%(default)s; the vendor app only ever sent 100)")
+    audio.add_argument("--spectrum-rhythm", type=int,
+                       default=protocol.AUDIO_RHYTHM_DEFAULT, metavar="N",
+                       help="byte 0 of the block, the Music Rhythm tab's "
+                            "Rhythm index (default %(default)s; setting this "
+                            "is how a non-default value gets confirmed on "
+                            "hardware)")
+    audio.add_argument("--spectrum-background-mode", type=int,
+                       default=protocol.AUDIO_BACKGROUND_MODE_DEFAULT, metavar="N",
+                       help="byte 1 of the block, the Music Rhythm tab's "
+                            "Background Mode index (default %(default)s; "
+                            "setting this is how a non-default value gets "
+                            "confirmed on hardware)")
+    audio.add_argument("--spectrum-background-brightness", type=int,
+                       default=protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT,
+                       metavar="N",
+                       help="byte 26, the first tail byte, the Music Rhythm "
+                            "tab's Background Brightness slider (default "
+                            "%(default)s; unconfirmed on hardware)")
     audio.add_argument("--spectrum-hold", type=float, default=0.0, metavar="SECS",
                        help="keep resending the frame for this long (default "
                             "%(default)s, one frame only); a single frame may "

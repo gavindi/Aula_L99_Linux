@@ -101,12 +101,18 @@ first. Both of those frames are pinned in the tests for exactly this reason.
 ### Bytes 0..2 are the soft part
 
 These are named constants in `protocol.py` rather than inlined, because two of
-them are only provisionally constant:
+them were only provisionally constant:
 
-- **Byte 1 = `0x08`** collides with `EFFECT_NAMES[0x08] == "spectrum"`. The
-  vendor app has a "Music Rhythm" tab (language string 56) whose controls
-  include "Rhythm" (102) and "Amplitude" (103), so a rhythm-style selector
-  leaking into byte 1 is plausible. So is coincidence.
+- **Byte 0** was guessed to be the Background Mode and **byte 1** the Rhythm
+  style, because byte 1's `0x08` collides with `EFFECT_NAMES[0x08] ==
+  "spectrum"`. A hardware check overturned that: driving the GUI's Rhythm
+  dropdown (wired to byte 1 at the time) changed the panel analyser's
+  *background*, so byte 0 is the Rhythm (foreground) style and byte 1 the
+  Background Mode -- the reverse of the guess. The two dropdowns were swapped
+  in `protocol.py` and the GUI to match. A second hardware check pinned the
+  list order: sending byte 1 as `0x00` cleared the analyser background while
+  `0x0B` drew a colour, so **Off = byte 0**, not the index-11 the language-file
+  order implied. The dropdowns therefore start with Off and index = byte.
 - **Byte 2 = `0x64`** is either the full-scale value the levels are relative
   to, or that tab's Amplitude slider, which is also a 0..100 control that
   would sit at 100 by default. One capture at one setting cannot separate
@@ -123,9 +129,11 @@ The four controls were confirmed from two independent vendor sources:
 - **Language strings** (`Windows/AULA L99/language/1033.lan`, UTF-16):
   `102 = Rhythm`, `103 = Amplitude`, `104 = Background Mode`,
   `105 = Background Brightness`. The two dropdowns are both populated from the
-  same 15-entry list, strings `106..120` (Green/Yellow/Red, Rainbow, Reverse
+  same 15-entry range, strings `106..120` (Green/Yellow/Red, Rainbow, Reverse
   Rainbow, Gradient, Spectrum Cycle, White, Red, Orange, Yellow, Green, Cyan,
-  Off, Blue, Purple, Ambilight).
+  Off, Blue, Purple, Ambilight). The language-file *position* is not the byte:
+  hardware showed **Off = 0**, so the list used here starts with Off and every
+  other entry shifts up by one.
 - **SQLite schema** in `DeviceDriver.exe`: `t_musiclayer_data(profile, name,
   deviceindex, foremode, fore_amplitude, backmode, backb_right, sel)` -- the
   fields the Music Rhythm tab persists. `foremode` is the Rhythm dropdown,
@@ -133,20 +141,23 @@ The four controls were confirmed from two independent vendor sources:
   dropdown and `backb_right` (background bright) the Background Brightness
   slider.
 
-Their **byte locations are best guesses**, not confirmed readings:
+Their **byte locations** were first guessed, then one of the two was settled
+on hardware:
 
 | control | DB field | block byte | default | status |
 |---|---|---|---|---|
-| Rhythm | `foremode` | 1 (`style`) | `0x08` | plausible -- collides with the "spectrum" effect |
+| Rhythm | `foremode` | 0 | `0x04` | **confirmed by hardware** -- the GUI's Rhythm dropdown moves the panel's background when wrongly placed on byte 1 |
 | Amplitude | `fore_amplitude` | 2 (`scale`) | `0x64` = 100 | plausible -- a 0..100 control sitting at 100 |
-| Background Mode | `backmode` | 0 (`mode`) | `0x04` | guess -- no capture with a different value |
+| Background Mode | `backmode` | 1 | `0x08` | **confirmed by hardware** -- the swap above |
 | Background Brightness | `backb_right` | 26 (first tail byte) | `0x00` | guess -- bytes 26..63 were zero in every frame |
 
 The entry->byte mapping for both dropdowns is the entry's index into the
-15-entry list (0..14), so an untouched tab sends exactly the captured `04 08
-64` with a zero tail. The GUI's Music tab exposes all four controls and drives
-these bytes; the two Background fields need a non-default capture or a
-hardware check to be promoted from hypothesis to reading.
+15-entry list (0..14), which now starts with Off (byte 0) followed by the
+other 14 entries in the language-file order, so an untouched tab sends exactly
+the captured `04 08 64` with a zero tail. The GUI's Music tab exposes all four
+controls and drives these bytes; the background-brightness byte (26) still
+needs a non-default capture or a hardware check to be promoted from hypothesis
+to reading.
 
 I looked for the builder in `DeviceDriver.exe` to settle this -- searching for
 a `C6 /r` byte store of immediate `0x04`, `0x08` and `0x64` within one window
@@ -177,15 +188,20 @@ guards the reading.
   the capture turns it on or off. An RTC write during the stream carried
   `view` = 1, the same as everywhere else, so it is not a distinct screen view
   in the sense byte 1 of the RTC block means.
-- **What consumes it, and the 17/23 split.** The panel's analyser is now
-  confirmed as the consumer, and it renders only **17 segments** for wire
-  bands 0..16, edge to edge; bands 17..22 have no visible effect. Whether the
-  keyboard itself also lights up remains untested -- per-key colour has its own
-  opcodes (`0x23` persistent, `0x20` realtime), and the 23 bands do not match
-  the 16-column key matrix, so it was never a strong candidate. Why the feed
-  carries 23 bands but the display draws 17 is unknown; the obvious guess is
-  the vendor's FFT divides the spectrum into more bands than the analyser's
-  widget renders, so the high six are simply not drawn.
+- **What consumes it, and the 17/23 split.** The panel's analyser is the
+  primary consumer, and it renders only **17 segments** for wire bands 0..16,
+  edge to edge; bands 17..22 have no visible effect. The keyboard itself also
+  lights up from the feed: streaming 0x78 frames puts it into a music-driven
+  lighting mode, and it **stays** there once the feed stops -- the all-zero
+  frame the GUI sends on stop clears the panel's analyser but not the
+  keyboard, which only returns to its stored pattern when the host session
+  closes (app quit). The GUI's Music tab therefore snapshots the keyboard's
+  lighting before the stream starts and hands it back on stop (select
+  `EFFECT_CUSTOM`, then a `0x23` colour write) the same way the User Lighting
+  tab restores its base colours after an animation. Why the feed carries 23
+  bands but the display draws 17 is unknown; the obvious guess is the vendor's
+  FFT divides the spectrum into more bands than the analyser's widget renders,
+  so the high six are simply not drawn.
 - **What happens to a frame that is never followed by another.** `--spectrum`
   sends one frame by default; `--spectrum-hold` resends it because a lone
   frame may only be on screen for a frame period. On the panel it **holds**:
