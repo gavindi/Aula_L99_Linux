@@ -40,7 +40,8 @@ README with full protocol documentation and usage.
 ### [tools/aula_l99_hacky/](tools/aula_l99_hacky/README.md) — keyboard CLI
 
 Talks to the keyboard's vendor HID channel via `/dev/hidraw*` (no root
-needed with the usual udev ACLs). Confirmed on real hardware:
+needed with the udev rule in [packaging/90-aula-l99.rules](packaging/90-aula-l99.rules)).
+Confirmed on real hardware:
 
 - Session handshake, per-key RGB **write and read-back** (84 keys)
 - All 20 built-in lighting effects, with speed/brightness
@@ -188,15 +189,23 @@ python3 -m aula_l99_screen.cli --upload picture.png
 
 # build a standalone GUI tarball (no Python needed to run the result)
 ./package.sh
+
+# or build an installable .deb (desktop entry, icon, udev rule included)
+./make_deb.sh
 ```
 
 See [Requirements](#requirements) above for what to install, and
 [tools/aula_l99_gui/README.md](tools/aula_l99_gui/README.md) for venv/`uv`
 setup.
 
-**Permissions:** the keyboard needs read/write on its hidraw node (a udev
-rule granting the logged-in user an ACL is typical); the touchscreen needs
-membership in the `dialout` group. No root otherwise.
+**Permissions:** the touchscreen is a USB serial port (`/dev/ttyACMn`) and
+needs membership in the `dialout` group. The keyboard needs read/write on its
+hidraw node — installing the packaged `.deb` (see below) brings
+`packaging/90-aula-l99.rules`, a udev rule that grants it (`MODE="0660"`,
+`GROUP="plugdev"` plus `TAG+="uaccess"`, so systemd-logind hands the logged-in
+desktop session access with no group membership); without the `.deb`, drop the
+rules file into `/usr/lib/udev/rules.d/` yourself (or rely on the usual distro
+hidraw ACL). No root otherwise.
 
 ## How the reverse engineering was done
 
@@ -250,6 +259,8 @@ test_images/             image/GIF test fixtures
 run.sh                   launch the GUI
 compile.sh               byte-compile everything under tools/
 package.sh               build a standalone GUI tarball with Nuitka
+make_deb.sh              build an installable .deb from that tarball build
+packaging/               .deb pieces: udev rule, launcher template, installer
 CHANGELOG.md             detailed, versioned history of the whole effort
 ```
 
