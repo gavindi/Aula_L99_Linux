@@ -99,6 +99,44 @@ def test_changing_controls_persists_them(tab, monkeypatch, tmp_path):
     }
 
 
+def test_changing_controls_pushes_them_to_the_running_stream(tab):
+    """While a capture is live, moving the four controls must reach the
+    stream worker immediately (mid-stream, no restart) as well as persist."""
+    calls = []
+
+    class _StubWorker:
+        def set_music_settings(self, **kwargs):
+            calls.append(kwargs)
+
+        def stop(self):
+            pass
+
+    tab._stream_worker = _StubWorker()
+    tab._streaming = True
+    tab.rhythm_combo.setCurrentIndex(3)
+    tab.background_mode_combo.setCurrentIndex(9)
+    tab.amplitude_slider.setValue(40)
+    tab.background_brightness_slider.setValue(77)
+    assert calls == [
+        {"rhythm": 3, "background_mode": 4,
+         "amplitude": 100, "background_brightness": 0},
+        {"rhythm": 3, "background_mode": 9,
+         "amplitude": 100, "background_brightness": 0},
+        {"rhythm": 3, "background_mode": 9,
+         "amplitude": 40, "background_brightness": 0},
+        {"rhythm": 3, "background_mode": 9,
+         "amplitude": 40, "background_brightness": 77},
+    ]
+
+
+def test_changing_controls_does_not_touch_a_stopped_stream(tab):
+    """With no worker running, a control change only persists -- it must not
+    crash on a None worker."""
+    tab._stream_worker = None
+    tab._streaming = False
+    tab.rhythm_combo.setCurrentIndex(2)
+
+
 def test_controls_restore_from_saved_settings(tab, monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     settings.set_music_settings({

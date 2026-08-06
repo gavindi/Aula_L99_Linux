@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-08-06
+
+**The Music tab's four controls now apply to a capture that is already
+running.** They were read once at Start and frozen into the stream worker for
+its whole run, so moving the Rhythm / Background Mode dropdowns or the
+Amplitude / Background Brightness sliders mid-capture only changed the saved
+settings in `config.json`; the panel kept drawing the old frame header and
+level scaling until the stream was stopped and restarted. The worker now holds
+the four values as a single snapshot it re-reads every frame, and the tab
+pushes each control change onto the live worker, so the next frame carries the
+new style/mode/scale and rescales the levels to the new Amplitude.
+
+### Changed
+- `workers.py`: `AudioSpectrumWorker` keeps its four Music controls in one
+  tuple snapshot instead of four attributes; a new `set_music_settings()`
+  swaps it in with a single assignment (the same cross-thread model as
+  `stop()`'s `_stop` flag), and `run()` reads the snapshot fresh each frame.
+- `music_tab.py`: `_save_settings` now also calls
+  `set_music_settings()` on the running worker, and logs it to the debug log;
+  `_start_stream` uses the same `_music_settings()` helper.
+
 ## [0.10.1] - 2026-08-06
 
 **The Music tab now carries the four controls of the vendor's "Music Rhythm"

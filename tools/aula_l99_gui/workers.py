@@ -350,11 +350,26 @@ class AudioSpectrumWorker(QObject):
         self._period = period
         self._gap = gap
         self._timeout = timeout
-        self._rhythm = rhythm
-        self._background_mode = background_mode
-        self._amplitude = amplitude
-        self._background_brightness = background_brightness
+        # The Music tab's four controls as one immutable snapshot rather than
+        # four attributes, so the GUI thread can swap in new values with a
+        # single assignment -- the same cross-thread model as `stop()`'s
+        # `_stop` flag below. `run()` reads the snapshot between PCM chunks
+        # (~43ms apart), so a change applies from the next frame on.
+        self._music = (rhythm, background_mode, amplitude, background_brightness)
         self._stop = False
+
+    def set_music_settings(self, rhythm: int, background_mode: int,
+                           amplitude: int, background_brightness: int) -> None:
+        """Update the four Music tab controls on a stream that is running.
+
+        Called straight from the GUI thread, like stop(): this worker's thread
+        is inside `run()` for the whole session and never returns to its event
+        loop, so a queued slot would not be delivered until the stream had
+        already ended. A single tuple assignment is the same safety class as
+        the `_stop` flag assignment; the next frame the loop sends picks the
+        new values up.
+        """
+        self._music = (rhythm, background_mode, amplitude, background_brightness)
 
     def stop(self) -> None:
         """Ask the loop to finish after the chunk it is on, and end the
@@ -390,6 +405,11 @@ class AudioSpectrumWorker(QObject):
             with HidrawTransport(self._device_path, timeout_seconds=self._timeout) as transport:
                 while not self._stop:
                     frame_started = time.monotonic()
+                    # Read the Music controls fresh each frame: the GUI thread
+                    # swaps the whole tuple in set_music_settings() mid-stream,
+                    # and a change must show up on the next frame, not the next
+                    # Start.
+                    rhythm, background_mode, amplitude, background_brightness = self._music
                     data = proc.stdout.read(self._chunk_bytes)
                     if not data:
                         break
@@ -399,15 +419,15 @@ class AudioSpectrumWorker(QObject):
                     # Amplitude is the panel's 0..100 bar-height scale: scale
                     # the computed levels to it so the scale byte and the
                     # levels agree (build_audio_blocks checks levels <= scale).
-                    if self._amplitude < kb_protocol.AUDIO_AMPLITUDE_DEFAULT:
+                    if amplitude < kb_protocol.AUDIO_AMPLITUDE_DEFAULT:
                         levels = [
-                            round(level * self._amplitude / 100.0)
+                            round(level * amplitude / 100.0)
                             for level in levels
                         ]
                     for tx in kb_protocol.build_audio_frame(
-                            levels, scale=self._amplitude,
-                            mode=self._background_mode, style=self._rhythm,
-                            background_brightness=self._background_brightness):
+                            levels, scale=amplitude,
+                            mode=background_mode, style=rhythm,
+                            background_brightness=background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)
                         if tx.expect_reply:
@@ -432,11 +452,12 @@ class AudioSpectrumWorker(QObject):
                 # Deliberately *inside* the `with`: the transport must still be
                 # open for this last send.
                 if frames:
+                    rhythm, background_mode, amplitude, background_brightness = self._music
                     for tx in kb_protocol.build_audio_frame(
                             [0] * kb_protocol.AUDIO_BAND_COUNT,
-                            scale=self._amplitude,
-                            mode=self._background_mode, style=self._rhythm,
-                            background_brightness=self._background_brightness):
+                            scale=amplitude,
+                            mode=background_mode, style=rhythm,
+                            background_brightness=background_brightness):
                         transport.set_feature(bytes([kb_protocol.REPORT_ID]) + tx.outgoing)
                         time.sleep(self._gap)
                         if tx.expect_reply:

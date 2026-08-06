@@ -233,13 +233,24 @@ class MusicTab(QWidget):
         self.amplitude_slider.setValue(saved["amplitude"])
         self.background_brightness_slider.setValue(saved["background_brightness"])
 
-    def _save_settings(self) -> None:
-        settings.set_music_settings({
+    def _music_settings(self) -> dict:
+        return {
             "rhythm": self.rhythm_combo.currentIndex(),
             "background_mode": self.background_mode_combo.currentIndex(),
             "amplitude": self.amplitude_slider.value(),
             "background_brightness": self.background_brightness_slider.value(),
-        })
+        }
+
+    def _save_settings(self) -> None:
+        settings.set_music_settings(self._music_settings())
+        # The stream reads its Music controls fresh each frame, so push the new
+        # values onto a running worker -- a live capture picks them up on the
+        # next frame rather than on the next Start.
+        worker = self._stream_worker
+        if worker is not None:
+            worker.set_music_settings(**self._music_settings())
+            self._debug_log.append(
+                "Music", "-- settings changed while streaming")
 
     def _on_device_changed(self, _status: str, enabled: bool, _found: bool,
                            _kind: str) -> None:
@@ -313,10 +324,7 @@ class MusicTab(QWidget):
         level_fn = audio_spectrum.levels_from_pcm
         self._stream_worker = AudioSpectrumWorker(
             device_path, arecord_cmd, level_fn,
-            rhythm=self.rhythm_combo.currentIndex(),
-            background_mode=self.background_mode_combo.currentIndex(),
-            amplitude=self.amplitude_slider.value(),
-            background_brightness=self.background_brightness_slider.value(),
+            **self._music_settings(),
         )
         self._stream_worker.frame.connect(self.preview.set_levels)
         self._stream_worker.finished.connect(self._on_stream_finished)

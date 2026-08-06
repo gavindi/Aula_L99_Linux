@@ -288,6 +288,66 @@ def test_audio_spectrum_worker_sends_configured_music_settings():
         assert max(block[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]) <= 50
 
 
+def test_audio_spectrum_worker_settings_apply_mid_stream():
+    """A running worker must pick up set_music_settings() changes from the
+    next frame on -- that is how the Music tab edits its four controls while
+    a capture is live (no restart)."""
+    bands = audio_spectrum.band_frequencies()
+    samples = _sine(32767, bands[8])
+    pcm = struct.pack(f"<{len(samples)}h", *samples)
+    # Enough chunks for several frames: the first carries the constructor's
+    # settings, the rest the mid-stream update.
+    pcm = pcm * 6
+
+    fake_proc = _FakePopen(pcm)
+    fake_hidraw = _FakeHidraw()
+    worker = workers.AudioSpectrumWorker(
+        "/dev/hidraw6", ["arecord", "-l"], audio_spectrum.levels_from_pcm,
+        rhythm=8, background_mode=4, amplitude=100, background_brightness=0)
+
+    frames = []
+    updated = False
+
+    def _update_after_first_frame(levels):
+        nonlocal updated
+        frames.append(levels)
+        if not updated:
+            updated = True
+            worker.set_music_settings(
+                rhythm=9, background_mode=3, amplitude=50,
+                background_brightness=7)
+
+    worker.frame.connect(_update_after_first_frame)
+    worker.finished.connect(lambda *a: None)
+
+    with patch.object(workers.subprocess, "Popen", lambda *a, **k: fake_proc):
+        with patch.object(workers, "HidrawTransport", lambda *a, **k: fake_hidraw):
+            worker.run()
+
+    written = [w[1:] for w in fake_hidraw.written]
+    blocks = [
+        written[i + 1] for i, w in enumerate(written)
+        if w[1] == kb_protocol.OP_AUDIO
+    ]
+    # The frame signal fires *after* its block is written, so the first block
+    # carries the constructor's settings and every later one the update.
+    first, *rest = blocks
+    assert first[kb_protocol.AUDIO_OFF_STYLE] == 8
+    assert first[kb_protocol.AUDIO_OFF_MODE] == 4
+    assert first[kb_protocol.AUDIO_OFF_SCALE] == 100
+    assert first[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 0
+    assert max(first[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]) > 50
+    assert rest, "expected later frames carrying the updated settings"
+    for block in rest:
+        assert block[kb_protocol.AUDIO_OFF_STYLE] == 9
+        assert block[kb_protocol.AUDIO_OFF_MODE] == 3
+        assert block[kb_protocol.AUDIO_OFF_SCALE] == 50
+        assert block[kb_protocol.AUDIO_OFF_BACKGROUND_BRIGHTNESS] == 7
+        # Levels are rescaled to the new amplitude, so they agree with the
+        # new scale byte and none may exceed it.
+        assert max(block[3:3 + audio_spectrum.SPECTRUM_BAND_COUNT]) <= 50
+
+
 def test_audio_spectrum_worker_reports_arecord_failure():
     fake_proc = _FakePopen(b"")
     fake_hidraw = _FakeHidraw()
