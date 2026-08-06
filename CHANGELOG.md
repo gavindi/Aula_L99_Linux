@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] - 2026-08-07
+
+**The Music tab's four settings controls now match the vendor app's
+two-column layout.** Rhythm and Background Mode were label-beside dropdowns
+stacked above two label-above-control sliders, all in a single column; the
+vendor reference app instead lays out Rhythm and Amplitude in a left column
+and Background Mode and Background Brightness in a right column, each
+control's label sitting directly above it. `MusicTab._build_ui` now builds
+the two columns as separate `QVBoxLayout`s combined in a `QHBoxLayout` — the
+same "column builder + row" convention `user_lighting_tab.py`'s colour
+picker already uses for its palette/channel columns — rather than
+introducing a `QGridLayout`, which nothing else in the GUI package uses.
+
+### Changed
+- `music_tab.py`: Rhythm/Amplitude and Background Mode/Background Brightness
+  now sit in their own columns, each with its label above its control,
+  inside the existing "Music Settings" group box.
+- `_build_labeled_slider`'s value readout now shows a `%` suffix (`"100%"`
+  rather than `"100"`), matching the vendor app's slider labels.
+
 ## [0.10.5] - 2026-08-07
 
 **The packaged build is now installable as a proper `.deb`, so the dist is no

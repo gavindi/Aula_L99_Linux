@@ -192,27 +192,30 @@ class MusicTab(QWidget):
         settings_group = QGroupBox("Music Settings")
         settings_layout = QVBoxLayout(settings_group)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Rhythm"))
+        columns_row = QHBoxLayout()
+
+        left_column = QVBoxLayout()
+        left_column.addWidget(QLabel("Rhythm"))
         self.rhythm_combo = QComboBox()
         self.rhythm_combo.addItems(list(kb_protocol.AUDIO_RHYTHM_NAMES))
-        row.addWidget(self.rhythm_combo, stretch=1)
-        settings_layout.addLayout(row)
+        left_column.addWidget(self.rhythm_combo)
+        self.amplitude_slider = self._build_labeled_slider(
+            left_column, "Amplitude",
+            kb_protocol.AUDIO_AMPLITUDE_DEFAULT)
+        columns_row.addLayout(left_column, stretch=1)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Background Mode"))
+        right_column = QVBoxLayout()
+        right_column.addWidget(QLabel("Background Mode"))
         self.background_mode_combo = QComboBox()
         self.background_mode_combo.addItems(
             list(kb_protocol.AUDIO_BACKGROUND_MODE_NAMES))
-        row.addWidget(self.background_mode_combo, stretch=1)
-        settings_layout.addLayout(row)
-
-        self.amplitude_slider = self._build_labeled_slider(
-            settings_layout, "Amplitude",
-            kb_protocol.AUDIO_AMPLITUDE_DEFAULT)
+        right_column.addWidget(self.background_mode_combo)
         self.background_brightness_slider = self._build_labeled_slider(
-            settings_layout, "Background Brightness",
+            right_column, "Background Brightness",
             kb_protocol.AUDIO_BACKGROUND_BRIGHTNESS_DEFAULT)
+        columns_row.addLayout(right_column, stretch=1)
+
+        settings_layout.addLayout(columns_row)
         layout.addWidget(settings_group)
 
         controls = QHBoxLayout()
@@ -245,9 +248,9 @@ class MusicTab(QWidget):
         slider.setValue(default)
         parent_layout.addWidget(slider)
 
-        value_label = QLabel(str(default))
+        value_label = QLabel(f"{default}%")
         value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        slider.valueChanged.connect(lambda value: value_label.setText(str(value)))
+        slider.valueChanged.connect(lambda value: value_label.setText(f"{value}%"))
         parent_layout.addWidget(value_label)
 
         return slider
