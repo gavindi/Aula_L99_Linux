@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-08-07
+
+**The packaged build is now installable as a proper `.deb`, so the dist is no
+longer a tarball the recipient has to unpack and wire up by hand.** `make_deb.sh`
+packs the Nuitka-compiled `build/` tree into an apt package with
+`dpkg-deb --build` on a staged tree rather than debhelper — there is no source
+to compile, only a self-contained binary to lay down. The binary goes in
+`/usr/lib/aula-l99-gui` (every file in the dist is read-only: the skin assets
+and layout XML are parsed at import time, never written back), a three-line
+wrapper on `/usr/bin` points at it — a symlink was deliberately avoided, since
+Nuitka resolves its resource paths from the binary's location and `argv[0]` of
+a symlink is the *link's* path — and the launcher entry, a 256x256 icon and the
+changelog/copyright go under `/usr/share`. Unlike the tarball's per-user
+`install.sh`, the `.deb` owns its own fixed paths, so its `.desktop` file is
+written with the real `Exec=` line rather than an `@EXEC@` placeholder.
+
+The dependencies are `Recommends` rather than `Depends` because the app
+degrades gracefully without them: it checks `PATH` and shows a targeted error
+when `ffmpeg` (video sources) or `arecord` (Music tab) is missing, so apt
+installs them by default without making the package uninstallable without them.
+The package's `postinst` refreshes the desktop database and reloads and
+re-triggers udev best-effort, so a freshly plugged keyboard gets its hidraw
+access rule without a reboot.
+
+### Added
+- `make_deb.sh`: stages `build/deb-root` from the existing `package.sh` dist
+  (or runs `package.sh --rebuild` first on request), derives the Debian
+  architecture from `uname -m` (x86_64 → amd64, aarch64 → arm64) and the
+  version from `pyproject.toml`, and builds/verifies the `.deb` — `dpkg-deb
+  --info` and `-c` always, `desktop-file-validate` and `lintian` when present.
+  Builds to `build/aula-l99-gui_<version>_<arch>.deb` (~44MB).
+- `packaging/90-aula-l99.rules`: the udev rule now shipped inside the package,
+  granting the logged-in desktop session access to the keyboard's hidraw node
+  for both the wired keyboard (`0c45:800a`) and the 2.4G dongle (`05ac:024f`),
+  on USB interface 3 — `MODE="0660"`, `GROUP="plugdev"`, plus `TAG+="uaccess"`
+  so systemd-logind hands the session access without any group membership.
+
+### Changed
+- `make_deb.sh` copies the dist wholesale minus the tarball's own `install.sh`
+  and `@EXEC@` `.desktop` template: the `.deb` provides both properly under
+  `/usr/share`, and shipping the per-user installer that would overwrite them
+  would be wrong. The icon is reused from the dist's `icon.png` (itself derived
+  from the vendor's `DeviceDriver.ico`), and the rules file lives outside the
+  dist in `packaging/` since the tarball's own per-user install would have had
+  no use for it.
+
 ## [0.10.4] - 2026-08-06
 
 **The packaged build can now be put in the desktop environment's launcher.**

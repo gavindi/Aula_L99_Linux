@@ -1,0 +1,8 @@
+# AULA L99 keyboard vendor HID channel (/dev/hidraw): the wired keyboard
+# (0c45:800a) and the 2.4G dongle (05ac:024f), both on USB interface 3 -- see
+# CABLE_VID/CABLE_PID/DONGLE_VID/DONGLE_PID in tools/aula_l99_hacky/device.py.
+# MODE/GROUP is the classic dialout-style grant; TAG+="uaccess" additionally
+# lets systemd-logind give the logged-in desktop session access without any
+# group membership.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="800a", ATTRS{bInterfaceNumber}=="03", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="024f", ATTRS{bInterfaceNumber}=="03", MODE="0660", GROUP="plugdev", TAG+="uaccess"
