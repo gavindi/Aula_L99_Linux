@@ -12,3 +12,35 @@ echo "---"
 grep -n "_build_single_image_group\|_on_choose_image\|_on_upload_image\|SINGLE_IMAGE_TARGETS\|target_combo\|image_preview" aula_l99_gui/touchscreen_tab.py
 echo "---leftover check done---"
 grep -n "_on_upload_gif\b" aula_l99_gui/touchscreen_tab.py
+
+
+_Level 1
+Key Response Time
+"Delay setting parameters for Level 1: Wired: approximately 2-3 ms, 2.4GHz: approximately 5-6 ms, Bluetooth: approximately 12-13 ms.
+Note: Parameters may vary due to different devices and surrounding environmental interference.
+Different switch types may lead to key chatter if the delay setting is too low. If key chatter occurs, please increase the delay setting.
+
+_Level 2
+Key Response Time
+"Delay setting parameters for Level 2: Wired: approximately 5-6 ms, 2.4GHz: approximately 7-9 ms, Bluetooth: approximately 15-16 ms.
+Note: Parameters may vary due to different devices and surrounding environmental interference.
+Different switch types may lead to key chatter if the delay setting is too low. If key chatter occurs, please increase the delay setting.
+
+_Level 3
+Key Response Time
+"Delay setting parameters for Level 3: Wired: approximately 8-9 ms, 2.4GHz: approximately 10-12 ms, Bluetooth: approximately 18-19 ms.
+Note: Parameters may vary due to different devices and surrounding environmental interference.
+Different switch types may lead to key chatter if the delay setting is too low. If key chatter occurs, please increase the delay setting.
+
+_Level 4
+Key Response Time
+"Delay setting parameters for Level 4: Wired: approximately 13-14 ms, 2.4GHz: approximately 15-17 ms, Bluetooth: approximately 23-24 ms.
+Note: Parameters may vary due to different devices and surrounding environmental interference.
+Different switch types may lead to key chatter if the delay setting is too low. If key chatter occurs, please increase the delay setting.
+
+_Level 5
+Key Response Time
+"Delay setting parameters for Level 5: Wired: approximately 17-18 ms, 2.4GHz: approximately 19-21 ms, Bluetooth: approximately 27-28 ms.
+Note: Parameters may vary due to different devices and surrounding environmental interference.
+Different switch types may lead to key chatter if the delay setting is too low. If key chatter occurs, please increase the delay setting.
+
