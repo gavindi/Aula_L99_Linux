@@ -143,6 +143,13 @@ class KeyboardTab(QWidget):
         """Retune colour polling live, from the Config tab's spin box."""
         self._poll_timer.setInterval(interval_ms)
 
+    def set_settings(self, response_time: int, sleep_time: int) -> None:
+        """Write the settings panel (response-time level and sleep-time
+        value), from the Config tab's dropdowns. The write carries both
+        slots, as the vendor app's does."""
+        self._run_transactions(
+            kb_protocol.build_settings_transfer(sleep_time, response_time))
+
     @property
     def is_busy(self) -> bool:
         return self._busy

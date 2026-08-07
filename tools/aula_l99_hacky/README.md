@@ -197,6 +197,55 @@ Two capture routes, in order of preference:
    truncates data at 32 of 64 bytes. Use the binary interface via `tshark` if
    you need full payloads this way.
 
+**The shim, built:** `capture/` in this directory holds the shim source
+(`wine_ioctl_shim.c`), a build script, a launcher that kills `wineserver` and
+preloads the shim into the vendor app, and a log parser:
+
+```bash
+cd tools/aula_l99_hacky/capture
+./build_shim.sh                                        # → wine_ioctl_shim.so
+./run_vendor_capture.sh effect_05                      # app + shim; log → logs/effect_05.log
+python3 parse_shim_log.py logs/effect_05.log           # events in order, poll loop stripped
+python3 parse_shim_log.py logs/effect_05.log --hex --dir OUT   # --send-hex-pasteable payloads
+python3 parse_shim_log.py logs/effect_05.log --verify  # sessions byte-checked against protocol.py
+```
+
+The launcher has presets for the two settings-panel dropdowns — they print
+the in-app steps before launching, and the parser's `--settings` mode
+tabulates the resulting `0x17` rounds (per-write byte 6 = sleep-time /
+byte 8 = response-time, with a changed-slot column); see
+`re_notes/settings_write.md`:
+
+```bash
+./run_vendor_capture.sh response_time   # sweep Response Time 1 -> 5 in the app
+python3 parse_shim_log.py logs/response_time.log --settings
+./run_vendor_capture.sh sleep_timer     # sweep Sleep Time 0 -> 3 in the app
+python3 parse_shim_log.py logs/sleep_timer.log --settings
+# or one session covering both dropdowns:
+./run_vendor_capture.sh settings
+python3 parse_shim_log.py logs/settings.log --settings
+```
+
+`run_vendor_capture.sh` runs `wineserver -k` first (mandatory, see above), then
+launches `Windows/AULA L99/DeviceDriver.exe` with `LD_PRELOAD` set to the shim
+and `AULA_IOCTL_LOG` pointing at `logs/<name>.log`; quit the app to close the
+capture. Name one log file per UI action. Every captured event is also echoed
+to the terminal the app was launched from, so the live exchange is visible
+while you change settings.
+
+The shim logs only the AULA devices, resolved by VID/PID from sysfs (and the
+keyboard's vendor interface 3): `0c45:800a` (cable), `05ac:024f` (dongle) and
+`eeef:268a` (touchscreen ttyACM). Other hidraw devices are invisible to it —
+otherwise every mouse report and keystroke would land in the log. Override the
+list with `AULA_IOCTL_DEVICES="vid:pid[:iface],..."` (`*` logs everything).
+Ioctls on the vendor channel carry the 65-byte report (`0x00` report-id byte
++ the 64-byte packet); the parser strips the report id, so its packets always
+match `protocol.py`. The shim logs hidraw ioctls
+(`HIDIOCSFEATURE`/`HIDIOCGFEATURE`, full payloads both directions) plus
+`read`/`write` on the allowed nodes. Note it is built for the wine prefix's
+architecture — a win32 prefix needs `-m32` (and `gcc-multilib`); this win64
+prefix needs neither.
+
 `strace` alone is not enough: it cannot dump `ioctl` argument buffers, and this
 device is driven entirely by feature-report ioctls, not `write()`.
 

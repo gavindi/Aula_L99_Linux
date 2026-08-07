@@ -420,3 +420,65 @@ def test_parse_color_blocks_round_trips_a_full_read():
     # build_color_query_commands.
     blocks = protocol.build_color_blocks(colors)[:-1]
     assert protocol.parse_color_blocks(blocks) == colors
+
+
+def test_sleep_time_minutes_cover_every_wire_value():
+    """The sleep-time byte's meanings, indexed by the wire value 0..3
+    (settings_write.md): 0 = no sleep, 1 = 1 min, 2 = 5 min, 3 = 30 min."""
+    assert len(protocol.SLEEP_TIME_MINUTES) == 4
+    assert protocol.SLEEP_TIME_MINUTES == (0, 1, 5, 30)
+    assert protocol.RESPONSE_TIME_MIN == 1
+    assert protocol.RESPONSE_TIME_MAX == 5
+
+
+def test_response_time_levels_cover_every_wire_value():
+    """Every response-time level 1..5 carries a (min, max) delay range for
+    each of the vendor app's three links, low to high (settings_write.md)."""
+    assert set(protocol.RESPONSE_TIME_DELAYS_MS) == set(range(1, 6))
+    for level, links in protocol.RESPONSE_TIME_DELAYS_MS.items():
+        assert len(links) == len(protocol.RESPONSE_TIME_LINKS)
+        for low, high in links:
+            assert 0 < low <= high
+
+
+# The settings block exactly as the capture shim caught it on real hardware
+# (logs/sleep_timer.log, first 0x17 write): sleep time 1, response time 1.
+CAPTURED_SETTINGS_BLOCK = bytes.fromhex(
+    "00010000000001000100" + "00" * 52 + "aa55"
+)
+
+
+def test_settings_block_reproduced_exactly():
+    assert len(CAPTURED_SETTINGS_BLOCK) == protocol.PACKET_SIZE
+    assert protocol.build_settings_blocks(1, 1) == [CAPTURED_SETTINGS_BLOCK]
+
+
+def test_settings_block_layout_and_ranges():
+    block = protocol.build_settings_blocks(0, 5)[0]
+    assert block[protocol.SETTINGS_OFF_TAG0] == 0x00
+    assert block[protocol.SETTINGS_OFF_TAG1] == 0x01
+    assert block[protocol.SETTINGS_OFF_SLEEP] == 0
+    assert block[protocol.SETTINGS_OFF_RESPONSE] == 5
+    assert block[protocol.TRAILER_OFFSET:protocol.TRAILER_OFFSET + 2] == protocol.TRAILER
+    with pytest.raises(ValueError):
+        protocol.build_settings_blocks(4, 1)
+    with pytest.raises(ValueError):
+        protocol.build_settings_blocks(-1, 1)
+    with pytest.raises(ValueError):
+        protocol.build_settings_blocks(1, 0)
+    with pytest.raises(ValueError):
+        protocol.build_settings_blocks(1, 6)
+
+
+def test_settings_transfer_framing_and_header():
+    """The 0x17 header carries byte 2 = 0x01, the one command that does --
+    build_command's byte2 argument exists for it."""
+    transactions = protocol.build_settings_transfer(2, 3)
+    assert [tx.name for tx in transactions] == [
+        "begin", "settings", "settings-block0", "commit", "end"]
+    begin, cmd, block, commit, end = [tx.outgoing for tx in transactions]
+    assert begin == protocol.build_command(protocol.OP_BEGIN)
+    assert cmd == protocol.build_command(protocol.OP_SETTINGS_WRITE, 1, byte2=1)
+    assert block == protocol.build_settings_blocks(2, 3)[0]
+    assert commit == protocol.build_command(protocol.OP_COMMIT)
+    assert end == protocol.build_command(protocol.OP_END)

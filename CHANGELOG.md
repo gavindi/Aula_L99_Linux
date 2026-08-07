@@ -5,6 +5,67 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7] - 2026-08-07
+
+**The Settings tab now has the two keyboard-panel dropdowns, backed by the
+first new protocol decode to come out of a reusable capture toolchain.** The
+vendor's response-time and sleep-time panel (opcode `0x17`) is now fully
+understood and drivable from this project's own GUI and CLI.
+
+The decoding came from a new, reusable capture setup for the vendor app under
+Wine: `tools/aula_l99_hacky/capture/` holds an `LD_PRELOAD` shim that logs the
+app's HID feature-report ioctls in `winedevice.exe` with full 65-byte payloads
+(the `0x00` report-id byte plus the 64-byte packet), a launcher that kills
+`wineserver` before preloading it, and a parser that strips the vendor's
+~27 Hz colour poll, normalises the report-id byte away, and byte-checks
+captured sessions against the protocol builders. The shim logs only the AULA
+devices, resolved from sysfs by VID/PID and interface — otherwise every mouse
+report and keystroke lands in the capture, which is exactly what happened to
+the first attempt. The `0x17` panel then decoded cleanly: byte 6 is the sleep
+time (0..3 = no sleep / 1 / 5 / 30 minutes) and byte 8 the response-time
+level (1..5, with the vendor's documented per-link delays), both slots
+written on every change, with a byte-2 = `0x01` header quirk no other command
+shares. This corrected an earlier reading that had the two slots swapped.
+
+The GUI and CLI now drive it. The Settings tab's new "Keyboard Settings"
+group has the two dropdowns (Level 1..5 with per-link delay tooltips; No
+sleep / 1 / 5 / 30 minutes); each change writes the whole panel immediately,
+like the vendor app, and persists to `config.json`. The new `--settings
+SLEEP LEVEL` CLI command writes the same panel and records its values in the
+same ledger, which the tab re-reads every time it is entered. There is no
+settings-read opcode — every capture, shim and USBPcap alike, shows the
+vendor app only ever *writes* the panel — so the ledger is the only source of
+truth the UI can have.
+
+### Added
+- `tools/aula_l99_hacky/capture/`: `wine_ioctl_shim.c` (LD_PRELOAD shim over
+  `ioctl`/`read`/`write`; full payloads in both directions; events echoed to
+  the console; a VID/PID + interface whitelist with `AULA_IOCTL_DEVICES` to
+  override and `*` for everything), `build_shim.sh`, `run_vendor_capture.sh`
+  (presets for the two settings sweeps), `parse_shim_log.py` (`--settings`
+  tabulates the panel writes, `--verify` byte-checks sessions against the
+  builders, `--hex` for `--send-hex` paste).
+- `protocol.py`: `build_settings_blocks()` / `build_settings_transfer()`,
+  anchored byte-for-byte against a live shim capture; `build_command(..., byte2=)`
+  for the `0x17` header quirk; `SLEEP_TIME_MINUTES`,
+  `RESPONSE_TIME_DELAYS_MS` / `RESPONSE_TIME_LINKS`.
+- `cli.py`: `--settings SLEEP LEVEL`, recording the applied values in the
+  GUI's config ledger.
+- `config_tab.py`: the "Keyboard Settings" group with the two dropdowns, and
+  `refresh()`, which re-reads the shared ledger when the tab is entered.
+- Tests: the settings-block capture anchor, transfer framing/header and range
+  validation; config-tab dropdown population, labels, emitted values,
+  persistence, restore-without-writing and refresh-without-emitting.
+
+### Changed
+- `re_notes/settings_write.md`: the panel layout is corrected and confirmed —
+  byte 6 = sleep time, byte 8 = response time (the earlier notes had them
+  swapped), both slots on every write, with the sleep and response meanings
+  recorded.
+- `settings.py`: `keyboard_settings()` / `set_keyboard_settings()` — the
+  shared ledger for the panel, written by the GUI on each change and by the
+  CLI on each `--settings` write.
+
 ## [0.10.6] - 2026-08-07
 
 **The Music tab's four settings controls now match the vendor app's

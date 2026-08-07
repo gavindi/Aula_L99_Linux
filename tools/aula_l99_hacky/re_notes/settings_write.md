@@ -27,9 +27,13 @@ END     (0x04 0xF0 ...)                    -> ack
 ```
 
 `OP_SETTINGS_WRITE`'s command header is byte-for-byte identical in both
-captures (`04 17 01 00 00 00 00 01`), regardless of which dropdown changed —
+captures (`04 17 01 00 00 00 00 00 01`), regardless of which dropdown changed —
 it just means "one settings block follows," same as `OP_COLOR_SET`/`OP_RTC`
-declaring their own block counts.
+declaring their own block counts. Note byte 2 = `0x01`: no other command sets
+it. It was confirmed against a live capture from the vendor app under Wine
+(the capture shim, which also showed the vendor's ioctls carry the 65-byte
+report — `0x00` report-id byte plus the 64-byte packet). `build_command()`
+now takes a `byte2` argument for this.
 
 ## Data block layout
 
@@ -40,32 +44,47 @@ captures; everything else observed was constant zero:
 ```
 [0]    0x00               (constant, purpose unknown -- maybe a sub-type tag)
 [1]    0x01               (constant, ditto)
-[6]    response-time value, 1..5
-[8]    sleep-time value, 0..3
+[6]    sleep-time value, 0..3
+[8]    response-time value, 1..5
 ```
+
+The sleep-time byte is fully decoded: 0 = no sleep, 1 = 1 minute, 2 = 5
+minutes, 3 = 30 minutes — the vendor app's own dropdown labels
+(`protocol.SLEEP_TIME_MINUTES`). The response-time byte is fully decoded
+too: the levels 1..5 carry the vendor app's documented per-link delays
+(`protocol.RESPONSE_TIME_DELAYS_MS`) — level 1 ≈ 2-3 ms wired / 5-6 ms
+2.4GHz / 12-13 ms Bluetooth, rising to level 5 ≈ 17-18 / 19-21 / 27-28 ms
+(the app calls these "approximately", noting switch type and environment
+shift them).
 
 Both fields are present in *every* write, not just the one the user is
 changing -- this looks like the vendor app applies the whole settings panel
-as one unit rather than one field at a time. Cross-validated between the two
-captures: `response_time_1` ends with byte[8] (sleep-time slot) sitting at
-its last-known value; `sleep_time_1`, captured afterwards, opens with that
-exact same byte[8] held constant across all 4 of its own rounds while
-byte[6] (response-time slot) sweeps instead. If these were two independent
-single-field writes at different offsets, that carry-over wouldn't line up.
+as one unit rather than one field at a time. Cross-validated between the
+captures: `response_time_1` ends with byte[8] (response-time slot) at its
+last-known value; `sleep_time_1`, captured afterwards, opens with that exact
+same byte[8] held constant across all 4 of its own rounds while byte[6]
+(sleep-time slot) sweeps instead. If these were two independent single-field
+writes at different offsets, that carry-over wouldn't line up.
 
 Evidence (block bytes, 0-indexed, after stripping the report):
 
-| capture | byte[6] (response-time) | byte[8] (sleep-time) |
+| capture | byte[6] (sleep-time) | byte[8] (response-time) |
 |---|---|---|
 | `response_time_1`, 5 rounds | `02` constant | `01,02,03,04,05` |
 | `sleep_time_1`, 4 rounds | `00,01,02,03` | `05` constant |
+| `sleep_timer.log` (capture shim), 14 writes | `01,02,00,01,02,03,0,1,2,3...` sweeping | `01` constant |
+| `response_time.log` (capture shim), 11 writes | `02` constant | `01,02,03,04,05,01,02,03,04,05,01` |
 
-Not yet known: what byte[6]=`02` constant during the response-time test
-actually means (it never changed, so it's not confirmed as "the value" —
-could equally be a fixed category tag with the real response-time value
-living somewhere unexamined). The safer reading is: byte[8] is confirmed as
-the sleep-time value (0..3, cross-validated); byte[6] is very likely the
-response-time value (1..5) but only single-capture evidence supports it.
+The shim captures settle the slot assignment. The sleep-timer capture holds
+the Sleep Time dropdown being stepped: byte[6] swept the four-value range
+`0..3` (exactly the app's sleep options, including 0 = no sleep) while
+byte[8] held `01` the whole time. The response-time capture is the mirror
+image: byte[8] swept `1..5` while the Response Time dropdown moved through
+its five levels and byte[6] held `02` (sleep still at 5 minutes). Earlier
+notes had this mapping backwards (they assumed the capture names were
+swapped); the names were right all along. Both slots are now fully decoded:
+sleep meanings in `protocol.SLEEP_TIME_MINUTES`, response levels in
+`protocol.RESPONSE_TIME_DELAYS_MS`.
 
 ## Commit reply counter
 
@@ -103,6 +122,32 @@ none of the `0x17`/`0x11`/`0x27` opcodes above have anything to do with the
 monitor data. What was wrong was the inference that the panel being a separate
 device meant the *data* had to reach it over that device's own port -- the
 keyboard receives it and forwards it.
+
+## Recapturing with the shim
+
+The open question above — byte[6] vs byte[8] mapping — is exactly what the
+`capture/` tooling in this repo is for (see the README's "Capturing more from
+the vendor app"). The old captures came from a Windows box with USBPcap; the
+vendor app runs under Wine here, so the same sweeps were redone with the
+shim in minutes. Both sweeps have since answered it (byte 6 = sleep-time,
+byte 8 = response-time, meanings in `protocol.SLEEP_TIME_MINUTES` /
+`protocol.RESPONSE_TIME_DELAYS_MS`):
+
+```bash
+cd tools/aula_l99_hacky/capture
+./run_vendor_capture.sh response_time   # in the app: Response Time 1 -> 2 -> 3 -> 4 -> 5
+python3 parse_shim_log.py logs/response_time.log --settings
+./run_vendor_capture.sh sleep_timer     # in the app: Sleep Time 0 -> 1 -> 2 -> 3
+python3 parse_shim_log.py logs/sleep_timer.log --settings
+```
+
+`--settings` prints one row per `0x17` write: both slots, which one changed
+since the previous write, and any block anomaly (bad trailer, nonzero bytes
+outside the known fields). Because every write carries both slots, either
+sweep alone identifies the slot that moves; doing both cross-validates. The
+sleep-timer sweep already settled it: byte 6 = sleep-time (0..3, meaning in
+`protocol.SLEEP_TIME_MINUTES`), byte 8 = response-time (1..5, meaning
+unknown).
 
 ## Tooling note
 

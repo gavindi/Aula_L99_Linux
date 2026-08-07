@@ -161,6 +161,11 @@ holds the keyboard's colour poll off while it owns the hidraw handle. Requires
   tabs are wired to; owns all enumeration, selection and auto-detect logic
 - `keyboard_tab.py` / `lighting_tab.py` / `touchscreen_tab.py` — the control
   tabs (RTC clock; per-key color and effects; image/GIF upload)
+- `config_tab.py` — the Settings tab: keyboard clock, the response-time and
+  sleep-time dropdowns (opcode `0x17`, written to the keyboard on every
+  change exactly like the vendor app; the dropdowns re-read the shared
+  settings ledger each time the tab is entered), the system-monitor toggle
+  and the colour-poll interval
 - `music_tab.py` / `audio_spectrum.py` — the Music tab and its arecord-driven,
   pure-Python Goertzel spectrum generator (the audio feed `0x78` to the panel)
 - `workers.py` — background `QThread` workers that do the actual device I/O, so the

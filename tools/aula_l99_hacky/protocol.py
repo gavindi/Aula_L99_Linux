@@ -91,7 +91,13 @@ OP_COLOR_QUERY = 0xF5    # read back the keyboard's current per-key colour.
                          # has no physical keys mapped into it.
 OP_EFFECT = 0x13         # select a built-in effect (1 block out)
 OP_SETTINGS_WRITE = 0x17 # apply the settings-panel block (1 block out); see
-                         # re_notes/settings_write.md for the block layout
+                         # re_notes/settings_write.md for the block layout.
+                         # Unlike every other command, its header carries
+                         # byte 2 = 0x01 as well as the block count at byte 8
+                         # (captured from the vendor app under Wine via the
+                         # capture shim; meaning of byte 2 unknown, seen only
+                         # as 0x01). build_command() takes a byte2 argument
+                         # for it.
 OP_AUDIO = 0x78          # push one frame of audio spectrum levels (1 block
                          # out). The host captures the PC's audio and does the
                          # FFT; the device only receives 23 numbers. See the
@@ -202,6 +208,43 @@ RTC_DONGLE_SHIFT = 4
 # what the vendor app would have put on the wire.
 MONITOR_VALUE_MIN = -128
 MONITOR_VALUE_MAX = 255
+
+# --- settings-panel block (opcode 0x17) -------------------------------------
+# Layout per re_notes/settings_write.md: tags at bytes 0..1, sleep time at
+# byte 6, response time at byte 8, everything else zero, AA 55 at 62..63.
+# The slot assignment is confirmed by a shim capture of the sleep-timer
+# dropdown: byte 6 swept 0..3 (the app's four sleep values) while byte 8
+# held constant -- earlier captures had read this mapping backwards.
+SETTINGS_OFF_TAG0 = 0
+SETTINGS_OFF_TAG1 = 1
+SETTINGS_OFF_SLEEP = 6
+SETTINGS_OFF_RESPONSE = 8
+
+# Sleep-time wire values and their meaning, indexed by the byte on the wire:
+# 0 = no sleep, 1 = 1 minute, 2 = 5 minutes, 3 = 30 minutes. The byte range
+# 0..3 was cross-validated between captures in settings_write.md; the mapping
+# to minutes is the vendor app's own dropdown labels.
+SLEEP_TIME_MINUTES = (0, 1, 5, 30)
+
+# Response-time wire values are 1..5 on byte 8, confirmed by two sweeps
+# (response_time_1.pcapng and a shim capture: byte 8 swept 1..5 while the
+# Response Time dropdown moved, byte 6 holding constant).
+RESPONSE_TIME_MIN = 1
+RESPONSE_TIME_MAX = 5
+
+# Response-time level -> approximate per-link delays in ms, from the vendor
+# app's own Response Time verbose text: level 1 is ~2-3 ms wired / 5-6 ms
+# 2.4GHz / 12-13 ms Bluetooth, through level 5 at ~17-18 / 19-21 / 27-28 ms.
+# "Approximately", and the text notes actual values vary with the switch type
+# and environment.
+RESPONSE_TIME_DELAYS_MS = {
+    1: ((2, 3), (5, 6), (12, 13)),
+    2: ((5, 6), (7, 9), (15, 16)),
+    3: ((8, 9), (10, 12), (18, 19)),
+    4: ((13, 14), (15, 17), (23, 24)),
+    5: ((17, 18), (19, 21), (27, 28)),
+}
+RESPONSE_TIME_LINKS = ("wired", "2.4GHz", "bluetooth")
 
 # Byte 3 of a reply is an ack flag the device sets once it has processed the
 # command.
@@ -512,12 +555,14 @@ def parse_audio_levels(value: str) -> list[int]:
     return levels
 
 
-def build_command(opcode: int, block_count: int = 0) -> bytes:
+def build_command(opcode: int, block_count: int = 0, byte2: int = 0) -> bytes:
     """A 64-byte command header. `block_count` is how many raw data blocks the
-    host will send immediately afterwards."""
+    host will send immediately afterwards. `byte2` covers the one command that
+    sets it: OP_SETTINGS_WRITE's header is 04 17 01 ... (byte 2 = 0x01)."""
     packet = bytearray(PACKET_SIZE)
     packet[0] = CMD_PREFIX
     packet[1] = opcode
+    packet[2] = byte2
     packet[8] = block_count
     return bytes(packet)
 
@@ -823,13 +868,14 @@ def build_rtc_blocks(when: datetime, monitor: MonitorData | None = None,
     return [bytes(block)]
 
 
-def build_transfer(opcode: int, blocks: list[bytes], name: str) -> list[Transaction]:
+def build_transfer(opcode: int, blocks: list[bytes], name: str, byte2: int = 0) -> list[Transaction]:
     """Wrap a data transfer in the session framing the vendor app always uses:
-    begin, command + blocks, commit, end."""
+    begin, command + blocks, commit, end. `byte2` is passed through to
+    build_command() for the one command that sets it (OP_SETTINGS_WRITE)."""
     transactions = [
         Transaction("begin", build_command(OP_BEGIN), expect_reply=True,
                     retry_until_ack=True),
-        Transaction(name, build_command(opcode, len(blocks)), expect_reply=True,
+        Transaction(name, build_command(opcode, len(blocks), byte2), expect_reply=True,
                     retry_until_ack=True),
     ]
     transactions += [
@@ -897,6 +943,45 @@ def build_effect_transfer(effect_id: int, **kwargs) -> list[Transaction]:
 def build_rtc_transfer(when: datetime, monitor: MonitorData | None = None,
                        view: int = 1) -> list[Transaction]:
     return build_transfer(OP_RTC, build_rtc_blocks(when, monitor, view), "rtc")
+
+
+def build_settings_blocks(sleep_time: int, response_time: int) -> list[bytes]:
+    """The single data block of the settings-panel write (opcode 0x17).
+
+    The block carries the whole settings panel: the sleep-time byte (0..3:
+    0 = no sleep, 1 = 1 min, 2 = 5 min, 3 = 30 min -- SLEEP_TIME_MINUTES) and
+    the response-time byte (1..5, levels in RESPONSE_TIME_DELAYS_MS), plus the
+    constant tags and the AA 55 trailer -- see re_notes/settings_write.md.
+    The vendor app writes both slots on every change, so callers always send
+    both.
+    """
+    if not 0 <= sleep_time < len(SLEEP_TIME_MINUTES):
+        raise ValueError(
+            f"sleep time must be 0..{len(SLEEP_TIME_MINUTES) - 1} "
+            f"(SLEEP_TIME_MINUTES), got {sleep_time}")
+    if not RESPONSE_TIME_MIN <= response_time <= RESPONSE_TIME_MAX:
+        raise ValueError(
+            f"response time must be {RESPONSE_TIME_MIN}..{RESPONSE_TIME_MAX}, "
+            f"got {response_time}")
+
+    block = bytearray(PACKET_SIZE)
+    block[SETTINGS_OFF_TAG0] = 0x00
+    block[SETTINGS_OFF_TAG1] = 0x01
+    block[SETTINGS_OFF_SLEEP] = sleep_time
+    block[SETTINGS_OFF_RESPONSE] = response_time
+    block[TRAILER_OFFSET:TRAILER_OFFSET + 2] = TRAILER
+    return [bytes(block)]
+
+
+def build_settings_transfer(sleep_time: int, response_time: int) -> list[Transaction]:
+    """Write the settings panel (opcode 0x17): both dropdowns in one write.
+
+    The 0x17 command header carries byte 2 = 0x01, unlike every other command
+    -- see the OP_SETTINGS_WRITE note.
+    """
+    return build_transfer(OP_SETTINGS_WRITE,
+                          build_settings_blocks(sleep_time, response_time),
+                          "settings", byte2=1)
 
 
 def build_cable_handshake() -> list[Transaction]:

@@ -19,3 +19,7 @@ __pycache__/
 *.code-workspace
 Aula_L99.code-workspace
 
+# Capture tooling build artifacts and logs
+tools/aula_l99_hacky/capture/wine_ioctl_shim.so
+tools/aula_l99_hacky/capture/logs/
+

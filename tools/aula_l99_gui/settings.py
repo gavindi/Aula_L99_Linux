@@ -87,3 +87,44 @@ def set_music_settings(settings: dict) -> None:
         json.dump(data, fh, indent=2)
         fh.write("\n")
     tmp.replace(path)
+
+
+def keyboard_settings() -> dict:
+    """The Settings tab's keyboard-panel dropdowns' last-used values: sleep
+    time 0..3 and response-time level 1..5. Unknown keys default to the
+    lowest wire value so a fresh install starts at the first dropdown entry.
+
+    This is the shared ledger for the panel: the GUI writes it on every
+    dropdown change and the CLI records its --settings writes here too, so
+    entering the Config tab (see ConfigTab.refresh) always shows what was
+    last applied. The keyboard stores the panel itself, so nothing is
+    written to hardware just by loading these.
+    """
+    from aula_l99_hacky import protocol as kb_protocol
+
+    saved = _read().get("keyboard", {})
+    defaults = {
+        "sleep_time": 0,
+        "response_time": kb_protocol.RESPONSE_TIME_MIN,
+    }
+    return {
+        key: int(saved.get(key, default))
+        if key in defaults else default
+        for key, default in defaults.items()
+    }
+
+
+def set_keyboard_settings(settings: dict) -> None:
+    """Persist the Settings tab's keyboard-panel dropdown values (see
+    keyboard_settings()). Missing keys leave any previously saved values in
+    place."""
+    data = _read()
+    data.setdefault("keyboard", {}).update(
+        {str(key): int(value) for key, value in settings.items()})
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    tmp.replace(path)

@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
         self._config_tab.set_clock_requested.connect(self._keyboard_tab.set_clock_now)
         self._config_tab.poll_interval_changed.connect(self._keyboard_tab.set_poll_interval)
         self._config_tab.monitor_toggled.connect(self._keyboard_tab.set_monitoring)
+        self._config_tab.settings_changed.connect(self._keyboard_tab.set_settings)
         self._keyboard_tab.monitoring_changed.connect(self._on_any_busy_changed)
         self._keyboard_tab.monitoring_changed.connect(self._on_monitor_state_changed)
         self._keyboard_tab.monitoring_changed.connect(self._config_tab._on_monitoring_changed)
@@ -297,6 +298,11 @@ class MainWindow(QMainWindow):
         # tab could show up-to-5s-stale state right after switching to it.
         if self._tabs.widget(current) is self._device_tab:
             self._device_tab.refresh_all()
+        # Same for the Config tab's keyboard-panel dropdowns: re-read the
+        # shared settings ledger so settings applied elsewhere (the CLI, or
+        # another GUI run) show up when the tab is entered.
+        if self._tabs.widget(current) is self._config_tab:
+            self._config_tab.refresh()
 
     def _create_tray_icon(self) -> None:
         if self._tray_icon is not None:

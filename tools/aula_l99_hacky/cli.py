@@ -331,6 +331,44 @@ def cmd_rtc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_settings(args: argparse.Namespace) -> int:
+    device = find_l99()
+    if not _require_cable(device, "the settings panel"):
+        return 1
+
+    try:
+        sleep_time = int(args.settings[0], 0)
+        response_time = int(args.settings[1], 0)
+        transactions = protocol.build_settings_transfer(sleep_time, response_time)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    minutes = protocol.SLEEP_TIME_MINUTES[sleep_time]
+    delays = protocol.RESPONSE_TIME_DELAYS_MS[response_time]
+    print(f"using {device.path}; sleep time {sleep_time} "
+          f"({'no sleep' if minutes == 0 else f'{minutes} min'}), "
+          f"response level {response_time} "
+          f"(wired ~{delays[0][0]}-{delays[0][1]} ms)")
+    if _run_sequence(device, transactions, args):
+        return 1
+    _record_settings(sleep_time, response_time)
+    return 0
+
+
+def _record_settings(sleep_time: int, response_time: int) -> None:
+    """Record the applied values in the GUI's settings ledger, so the Config
+    tab shows them the next time it is entered. Best-effort: the write to the
+    keyboard is the point; the ledger is only the GUI's display state."""
+    try:
+        from aula_l99_gui import settings as gui_settings
+        gui_settings.set_keyboard_settings(
+            {"sleep_time": sleep_time, "response_time": response_time})
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        print(f"warning: could not record settings in the GUI config: {exc}",
+              file=sys.stderr)
+
+
 def cmd_spectrum(args: argparse.Namespace) -> int:
     device = find_l99()
     if not _require_cable(device, "the audio spectrum feed"):
@@ -421,6 +459,12 @@ def build_parser() -> argparse.ArgumentParser:
                              "live readout on the panel like the vendor app's "
                              "~1 Hz stream; a single send already updates the "
                              "panel, this just keeps it fresh")
+    parser.add_argument("--settings", nargs=2, metavar=("SLEEP", "LEVEL"),
+                        help="write the settings panel (opcode 0x17): sleep "
+                             "time 0..3 (0=no sleep, 1=1min, 2=5min, 3=30min) "
+                             "and response-time level 1..5 (per-link delays in "
+                             "protocol.RESPONSE_TIME_DELAYS_MS); both are "
+                             "written on every change, as the vendor app does")
     parser.add_argument("--send-hex", metavar="HEX", help="send one raw packet and print the reply")
 
     # The panel's spectrum analyser. Levels are explicit for the same reason
@@ -530,6 +574,8 @@ def main() -> int:
             return cmd_read_color(args)
         if args.rtc:
             return cmd_rtc(args)
+        if args.settings:
+            return cmd_settings(args)
         if args.spectrum:
             return cmd_spectrum(args)
         if args.send_hex:

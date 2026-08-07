@@ -1,7 +1,7 @@
 """Config tab: the settings that aren't about one particular piece of
-content -- the keyboard's onboard clock and the colour-poll rate -- plus the
-consolidated debug log every other control tab writes into instead of
-keeping its own isolated log widget.
+content -- the keyboard's onboard clock and settings panel, the colour-poll
+rate -- plus the consolidated debug log every other control tab writes into
+instead of keeping its own isolated log widget.
 
 Pure UI as far as the hardware is concerned: both controls are forwarded as
 signals and carried out by KeyboardTab, which owns the poll thread they'd
@@ -9,9 +9,10 @@ otherwise race (see its module docstring).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -23,6 +24,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aula_l99_hacky import protocol as kb_protocol
+
+from . import settings
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .keyboard_tab import (
@@ -37,6 +41,7 @@ class ConfigTab(QWidget):
     set_clock_requested = Signal()
     poll_interval_changed = Signal(int)
     monitor_toggled = Signal(bool)  # checked = stream CPU/GPU load
+    settings_changed = Signal(int, int)  # (response-time level, sleep-time value)
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
         super().__init__()
@@ -45,9 +50,14 @@ class ConfigTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_keyboard_group())
+        layout.addWidget(self._build_settings_group())
         layout.addWidget(self._build_monitor_group())
         layout.addWidget(self._build_poll_group())
         layout.addWidget(self._build_log_group(debug_log), stretch=1)
+
+        self._load_settings_values()
+        self.response_combo.currentIndexChanged.connect(self._on_settings_changed)
+        self.sleep_combo.currentIndexChanged.connect(self._on_settings_changed)
 
         selector.changed.connect(self._on_device_changed)
         self._sync_actions()
@@ -70,6 +80,84 @@ class ConfigTab(QWidget):
         self.progress_bar = QProgressBar()
         column.addWidget(self.progress_bar)
         return group
+
+    def _build_settings_group(self) -> QGroupBox:
+        group = QGroupBox("Keyboard Settings")
+        column = QVBoxLayout(group)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Response Time:"))
+        self.response_combo = QComboBox()
+        for level in range(kb_protocol.RESPONSE_TIME_MIN,
+                           kb_protocol.RESPONSE_TIME_MAX + 1):
+            delays = kb_protocol.RESPONSE_TIME_DELAYS_MS[level]
+            self.response_combo.addItem(f"Level {level}", level)
+            links = " · ".join(
+                f"{name} ~{low}-{high} ms"
+                for name, (low, high) in zip(kb_protocol.RESPONSE_TIME_LINKS, delays))
+            self.response_combo.setItemData(
+                self.response_combo.count() - 1, links, Qt.ToolTipRole)
+        row.addWidget(self.response_combo)
+        row.addStretch(1)
+        column.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Sleep Time:"))
+        self.sleep_combo = QComboBox()
+        for value, minutes in enumerate(kb_protocol.SLEEP_TIME_MINUTES):
+            if minutes == 0:
+                label = "No sleep"
+            elif minutes == 1:
+                label = "1 minute"
+            else:
+                label = f"{minutes} minutes"
+            self.sleep_combo.addItem(label, value)
+        row.addWidget(self.sleep_combo)
+        row.addStretch(1)
+        column.addLayout(row)
+
+        # Both dropdowns write the whole panel on every change, exactly like
+        # the vendor app -- see re_notes/settings_write.md.
+        hint = QLabel("Each change is written to the keyboard immediately.")
+        hint.setEnabled(False)
+        column.addWidget(hint)
+        return group
+
+    def _load_settings_values(self) -> None:
+        """Restore the dropdowns from saved state. Runs before the change
+        signals are connected, so loading never writes to hardware."""
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Re-read the saved keyboard-panel values and move the dropdowns to
+        match, without emitting or writing anything. Called when the tab is
+        entered, so the dropdowns show the last-applied settings from
+        whatever wrote them -- this GUI or the CLI, which share the same
+        config ledger. There is no settings-read opcode on the keyboard (the
+        vendor app never reads the panel back; every capture shows only
+        0x17 writes), so this is the only source of truth the UI has.
+        """
+        saved = settings.keyboard_settings()
+        for combo, key in ((self.response_combo, "response_time"),
+                           (self.sleep_combo, "sleep_time")):
+            index = combo.findData(saved[key])
+            if index >= 0 and combo.currentIndex() != index:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+
+    @staticmethod
+    def _set_combo_value(combo: QComboBox, value: int) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _on_settings_changed(self) -> None:
+        response = self.response_combo.currentData()
+        sleep = self.sleep_combo.currentData()
+        settings.set_keyboard_settings(
+            {"response_time": response, "sleep_time": sleep})
+        self.settings_changed.emit(response, sleep)
 
     def _build_monitor_group(self) -> QGroupBox:
         group = QGroupBox("System Monitor")
@@ -133,6 +221,8 @@ class ConfigTab(QWidget):
 
     def _sync_actions(self) -> None:
         self.set_clock_button.setEnabled(self._device_ready and not self._external_busy)
+        self.response_combo.setEnabled(self._device_ready and not self._external_busy)
+        self.sleep_combo.setEnabled(self._device_ready and not self._external_busy)
         # The monitor toggle must stay clickable while checked so the user can
         # stop the stream even though everything else is disabled for it.
         checked = self.monitor_toggle.isChecked()
