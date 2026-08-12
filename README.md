@@ -241,7 +241,11 @@ hidraw ACL). No root otherwise.
   per-length lookup table solved from captures)
 - The panel's content-validation mechanism (its behaviour is mapped across
   ~20 hardware data points; the algorithm isn't decoded)
-- Keyboard macros; the 2.4G dongle's colour/effect/settings path (its handshake
+- Keyboard **macros and key remapping are now documented** (opcodes `0x11`,
+  `0x15`/`0x19`, `0x27` suspect) in
+  [tools/aula_l99_hacky/re_notes/key_remap_macros.md](tools/aula_l99_hacky/re_notes/key_remap_macros.md) —
+  the wire layouts are decoded but not yet driven from this app; the 2.4G
+  dongle's colour/effect/settings path (its handshake
   and RTC-set are confirmed; the rest still awaits a capture of the vendor app
   driving the dongle); touchscreen touch input, brightness and power
 - One unidentified flash slot at `0x04200000`

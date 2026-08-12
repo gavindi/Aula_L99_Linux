@@ -97,15 +97,16 @@ monotonic sequence/generation counter, presumably so the app can confirm a
 specific commit landed rather than an older one still being in flight.
 Corrected in `protocol.py`'s module docstring.
 
-## profile_read_1 -- related but not deciphered
+## profile_read_1 -- superseded: 0x11/0x27 are profile-table *writes*
 
-Same session shape, but the command opcode after `BEGIN` is `0x11` (not
-`0x17`), and a later round in the same capture uses `0x27` instead. Both
-carry `byte[8]=0x09` (9 blocks). This is almost certainly the profile-list
-read path (`profile_read` = enumerating saved profile slots), but the
-9-block payloads weren't decoded here -- next step if this matters is a
-capture that reads back only one or two profile slots in isolation, since
-`profile_read_1` mixes several read cycles together.
+**Superseded -- see `key_remap_macros.md`.** The shim captures of 2026-08-13
+show `0x11`/`0x27` are feature-report writes (`SET_REPORT`, direction OUT),
+not reads: `0x11` is the key-remap profile table (9 blocks, 4-byte entries at
+`key_index * 4`) rewritten whole on every change, and `0x27` has the same
+table shape but was only ever seen at startup with an all-zero table
+(Fn-layer is the working hypothesis). The "9 blocks" here match that table,
+so `profile_read_1.pcapng` is a startup sync, not an enumeration of saved
+profile slots -- the name is a direction misjudgement from the URB view.
 
 ## Not applicable to the touchscreen / system-monitor feature
 

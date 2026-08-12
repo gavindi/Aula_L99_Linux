@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8] - 2026-08-13
+
+**Key remapping and macros are now decoded — the last big unknown on the
+keyboard's HID channel** (documentation only; nothing in the tools drives
+them yet).
+
+Capturing the vendor app under Wine with the existing shim while performing
+isolated UI actions produced the wire formats, verified on hardware:
+
+- **`0x11` key-profile write** — 9 blocks, 4-byte entries at
+  `key_index * 4` (layout XML index), whole table rewritten per change.
+  Entry = `[type, p1, p2, p3]`: `02 00 <usage> 00` remap-to-key (Esc =
+  `0x29`), `03 <consumer> 00 00` multimedia (Volume Up = `0xE9`), `05 03 00 00`
+  disable, `06 00 00 00` macro trigger. Remaps/disables/media bindings
+  survive the driver closing — they live on the keyboard.
+- **`0x15` macro-slot write**, preceded per round by `0x19`, 9-10 blocks of
+  8-byte events `00 00 <usage> <B0|30> <delay> 00 00 50` (down/up flag,
+  delay ms), growing cumulatively per recorded keystroke. Macro playback is
+  on-board (a recorded "go" macro replayed with the app closed).
+- **`0x27`** — same table shape as `0x11`, seen only at startup with an
+  all-zero table; Fn-layer table is the working hypothesis. The old
+  "profile read" reading of `0x11`/`0x27` in `profile_read_1.pcapng` was a
+  direction misjudgement and is corrected in the notes.
+
+Full byte layouts and the complete opcode reference are in
+`tools/aula_l99_hacky/re_notes/key_remap_macros.md`; the opcode table in the
+hacky README now lists `0x11`, `0x15`, `0x19` and `0x27`. The Fn-layer
+encoding, the remaining key types (mouse/shortcut/text/multi-key), the macro
+play parameters and the `0x00` opcode are still open.
+
 ## [0.10.7] - 2026-08-07
 
 **The Settings tab now has the two keyboard-panel dropdowns, backed by the

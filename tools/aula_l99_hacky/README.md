@@ -43,7 +43,13 @@ what a higher value does is unknown. Nor is it known whether the panel reads a
 negative temperature as signed — `--air-temp -5` sends `0xFB` because that is
 what the vendor app would send, not because the result was observed.
 
-Not yet known: macros, and the meaning of byte 8 of the effect payload.
+Key remapping and macros are now documented too: opcodes `0x11` (key-profile
+table), `0x19`/`0x15` (macro slot write) and the suspect `0x27` (Fn-layer
+table) in [re_notes/key_remap_macros.md](re_notes/key_remap_macros.md).
+Remaps, disables, media bindings and the macro sequence are stored on the
+keyboard — they keep working with the driver closed.
+
+Still unknown: the meaning of byte 8 of the effect payload.
 Effects run on the keyboard itself — the vendor app
 polls `0xF5` ~27x/s to mirror the keyboard's current LED state in its preview,
 rather than driving the lighting from the PC. On the dongle, only the handshake
@@ -112,6 +118,9 @@ reply:    04 <opcode> 00 01 ...                                (byte 3 = ack)
 | `0x02` | commit; reply returns 16 bits at offset 4    | 0 |
 | `0xF0` | end session                                  | 0 |
 | `0x13` | select a built-in effect                     | 1 out |
+| `0x11` | write the key-remap ("My Exclusive Config") table — 4-byte entries at `key_index * 4` | 9 out |
+| `0x15` | write the macro slot — 8-byte key events (`00 00 <usage> <B0|30> <delay> 00 00 50`), preceded per round by `0x19` | 9-10 out |
+| `0x27` | same table shape as `0x11`, seen only at startup with an all-zero table; Fn-layer table is the working hypothesis | 9 out |
 
 Data blocks flow *out* from the host for a write (`0x23`) and *back* from the
 device for a query (`0xF5`). The command header looks identical either way, so
