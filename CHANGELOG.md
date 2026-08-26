@@ -5,6 +5,76 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.10] - 2026-08-26
+
+**A manually-triggered GitHub Actions workflow now builds and packages a full
+release in one run.** `workflow_dispatch` takes a bare version number
+(`0.10.10`, matching this project's existing tag style — no leading `v`),
+compiles the GUI once with the existing `package.sh` (Nuitka), and fans that
+single build out into `.deb`, `.rpm`, a classic-confinement snap, a flatpak
+bundle and an AppImage — plus the raw tarball `package.sh` already
+produces — collating all six onto a GitHub Release. Building once and
+sharing the dist across the packaging jobs, rather than recompiling per
+format, guarantees every package wraps identical bytes and avoids repeating
+the Nuitka build four more times.
+
+`tools/aula_l99_gui/pyproject.toml`'s version string is hand-maintained and
+has drifted from the git tags before (`0.10.5` in the file against `0.10.9`
+tagged). Rather than trust it, every job patches that file's version line to
+the workflow's input version right after checkout — ephemeral, never
+committed — before calling any build script. Since `package.sh` and
+`make_deb.sh` already independently derive `VERSION` via `sed` from that same
+line, this makes every existing and new packaging script agree on one
+version with no script changes and no new flags.
+
+Neither `.rpm`, snap, flatpak nor AppImage tooling existed before this;
+`.rpm` is the only one built on top of existing work — `make_rpm.sh` points
+`fpm` at the same `build/deb-root` tree `make_deb.sh` stages, reusing its
+copyright/changelog/postinst placement rather than duplicating it. The snap
+and flatpak both need a hardware-access workaround with no clean fix:
+neither format has an interface/portal for raw `/dev/hidraw` access, so the
+snap uses `confinement: classic` (install with `snap install --classic
+--dangerous`, still needing `packaging/90-aula-l99.rules` installed
+separately) and the flatpak grants `--device=all` in its `finish-args`. Both
+are pragmatic for a GitHub-Release artifact and would be rejected by the
+Snap Store / Flathub outright — this workflow does not publish to either.
+
+This has not yet been run against real CI — the job graph, package
+contents and scripts are believed correct from reading the existing
+`package.sh`/`make_deb.sh` closely, but things like AppImage's FUSE
+availability on GitHub-hosted runners, `snapcraft pack --destructive-mode`
+working unmodified there, and whether `org.freedesktop.Platform` (rather
+than a KDE runtime) is actually sufficient for the Nuitka-bundled Qt binary
+are unverified until a real workflow run is triggered.
+
+### Added
+- `.github/workflows/release.yml`: `prepare` (validates the version input)
+  → `build` (runs `package.sh` once, uploads the dist and tarball as
+  artifacts) → `package-deb-rpm` / `package-snap` / `package-flatpak` /
+  `package-appimage` (each downloads the dist artifact and runs its script)
+  → `release` (downloads every packaging job's output, extracts the latest
+  `CHANGELOG.md` entry via `awk` for the release body, and runs
+  `gh release create` with all six files).
+- `make_rpm.sh`: `fpm -s dir -t rpm` against `make_deb.sh`'s staged
+  `build/deb-root`, mapping the `.deb`'s `Recommends: ffmpeg, alsa-utils` to
+  the RPM equivalent via `--rpm-tag` and reusing its `postinst` verbatim as
+  `--after-install`.
+- `make_snap.sh` / `packaging/snap/snapcraft.yaml`: copies the manifest into
+  `snap/snapcraft.yaml` (where `snapcraft` expects it) with the version
+  patched in, `plugin: dump`s the Nuitka dist as-is so Nuitka's assets/font
+  siblings resolve the same way they do unpacked, and runs
+  `snapcraft pack --destructive-mode`.
+- `make_flatpak.sh` / `packaging/flatpak/io.github.gavindi.AulaL99Gui.yml` +
+  `aula-l99-gui-wrapper.sh`: copies the already-built dist into `/app/lib`
+  rather than recompiling inside `flatpak-builder`'s sandbox, patches the
+  dist's own `@EXEC@` desktop template for the `/app/bin` wrapper path, and
+  produces a single-file `.flatpak` via `flatpak build-bundle` (no hosted
+  repo exists to point users at otherwise).
+- `make_appimage.sh` / `packaging/appimage/AppRun`: stages an `AppDir` from
+  the dist (desktop file and icon moved to the AppDir root per the AppImage
+  spec) and packs it with `appimagetool`, downloaded from its GitHub
+  releases if not already present.
+
 ## [0.10.9] - 2026-08-26
 
 **Clicking a key on the Keyboard tab now assigns it.** A left-click on any key

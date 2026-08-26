@@ -1,0 +1,50 @@
+name: aula-l99-gui
+# Placeholder; make_snap.sh sed-patches this line to the release version
+# before `snapcraft pack` runs, the same ephemeral-patch approach used for
+# tools/aula_l99_gui/pyproject.toml.
+version: '0.0.0'
+summary: PySide6 GUI for the AULA L99 keyboard and touchscreen
+description: |
+  Control the AULA L99 keyboard's lighting, per-key effects and saved
+  profiles, drive its touchscreen panel (images, GIFs, video), and put
+  CPU/GPU/weather readouts on the panel's system-monitor display.
+
+  This snap carries its own CPython and Qt (Nuitka-compiled), so no Python
+  runtime is needed. ffmpeg is needed for video sources on the Touchscreen
+  tab, and arecord (from alsa-utils) for the Music tab's live spectrum
+  capture.
+
+  Classic confinement is required for direct /dev/hidraw access to the
+  keyboard, since there is no store-side interface connection to lean on
+  here. Install with `snap install --classic --dangerous <file>.snap`. The
+  udev rule from the .deb/tarball installs (packaging/90-aula-l99.rules)
+  must still be installed separately: classic confinement skips snapd's own
+  device mediation, but the kernel-level hidraw node permissions still
+  apply.
+
+base: core22
+confinement: classic
+grade: stable
+
+apps:
+  aula-l99-gui:
+    command: aula-l99-gui
+
+parts:
+  gui:
+    plugin: dump
+    # Path is relative to the project root snapcraft is invoked from
+    # (make_snap.sh runs it from the repo root), not to this file.
+    source: build/aula-l99-gui
+    # Dumped as-is, mirroring the tarball layout exactly, so Nuitka finds its
+    # assets/font siblings next to the binary the same way it does unpacked.
+    # The tarball-only install.sh and @EXEC@ desktop template have no role
+    # inside a snap and are dropped, matching make_deb.sh's own cleanup.
+    prime:
+      - -install.sh
+      - -aula-l99-gui.desktop
+  license:
+    plugin: nil
+    override-build: |
+      mkdir -p "$SNAPCRAFT_PART_INSTALL/usr/share/doc/aula-l99-gui"
+      cp "$SNAPCRAFT_PROJECT_DIR/LICENSE" "$SNAPCRAFT_PART_INSTALL/usr/share/doc/aula-l99-gui/copyright"

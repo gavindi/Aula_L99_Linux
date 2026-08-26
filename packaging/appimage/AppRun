@@ -1,0 +1,7 @@
+#!/bin/sh
+# AppImage entry point. Execs the real binary directly, never a symlink:
+# Nuitka resolves its own resource paths from the binary's location, and
+# argv[0] through a symlink would point at the wrong directory -- the same
+# reasoning as the wrapper in make_deb.sh's staged /usr/bin script.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/aula-l99-gui/aula-l99-gui" "$@"

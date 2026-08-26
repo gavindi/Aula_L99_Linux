@@ -1,0 +1,45 @@
+app-id: io.github.gavindi.AulaL99Gui
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: aula-l99-gui
+
+finish-args:
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --share=ipc
+  # No portal exists for raw /dev/hidraw HID access, so this is the only way
+  # this app can reach the keyboard from inside the sandbox. Flathub would
+  # reject --device=all; that's fine here since this is a direct GitHub
+  # Release artifact, not a Flathub submission. --device=all is a static
+  # permission granted at install time, not something the user has to
+  # separately `flatpak override` afterward.
+  - --device=all
+
+modules:
+  - name: aula-l99-gui
+    buildsystem: simple
+    sources:
+      # The already-built Nuitka dist is copied in wholesale rather than
+      # recompiled inside flatpak-builder's sandbox -- the same "ship a
+      # prebuilt binary" choice make_deb.sh makes, and it avoids duplicating
+      # a build that already happened once in the same CI run.
+      - type: dir
+        path: ../../build/aula-l99-gui
+        dest: dist
+      - type: file
+        path: aula-l99-gui-wrapper.sh
+      - type: file
+        path: ../../LICENSE
+    build-commands:
+      - install -Dm755 aula-l99-gui-wrapper.sh /app/bin/aula-l99-gui
+      - mkdir -p /app/lib/aula-l99-gui
+      - cp -a dist/. /app/lib/aula-l99-gui/
+      # The tarball-only install.sh and @EXEC@ desktop template have no role
+      # here; the desktop entry below is installed with a fixed Exec instead.
+      - rm -f /app/lib/aula-l99-gui/install.sh /app/lib/aula-l99-gui/aula-l99-gui.desktop
+      - sed 's|@EXEC@|/app/bin/aula-l99-gui|' dist/aula-l99-gui.desktop > /tmp/aula-l99-gui.desktop
+      - install -Dm644 /tmp/aula-l99-gui.desktop /app/share/applications/io.github.gavindi.AulaL99Gui.desktop
+      - install -Dm644 dist/icon.png /app/share/icons/hicolor/256x256/apps/io.github.gavindi.AulaL99Gui.png
+      - install -Dm644 LICENSE /app/share/licenses/io.github.gavindi.AulaL99Gui/COPYING

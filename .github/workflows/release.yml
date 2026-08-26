@@ -1,0 +1,225 @@
+name: Release
+
+# Manually triggered: builds the GUI once with package.sh, then packages that
+# single build into deb/rpm/snap/flatpak/AppImage plus the raw tarball, and
+# publishes all six as assets on a GitHub Release tagged with the given
+# version. Building once and fanning out to the packaging jobs (rather than
+# rebuilding per format) guarantees every package wraps identical bytes and
+# avoids running the ~80s+ Nuitka compile five times over.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 0.10.9 (no leading v, matching existing git tags)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - id: validate
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: '$VERSION' is not a bare X.Y.Z version (no leading v)" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch package version
+        run: sed -i "s/^version = \".*\"/version = \"$VERSION\"/" tools/aula_l99_gui/pyproject.toml
+
+      # patchelf itself comes from the pip wheel package.sh installs into its
+      # own build venv; these are the system libs Nuitka's dependency walker
+      # needs present to resolve PySide6's Qt xcb platform plugin fully.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1 libegl1 libxkbcommon0
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Build
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          ./package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: build/aula-l99-gui/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: build/*.tar.gz
+
+  package-deb-rpm:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: sed -i "s/^version = \".*\"/version = \"$VERSION\"/" tools/aula_l99_gui/pyproject.toml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: build/aula-l99-gui
+
+      # Artifact round-trips don't reliably preserve exec bits.
+      - run: chmod +x build/aula-l99-gui/aula-l99-gui build/aula-l99-gui/install.sh
+
+      # A generic noreply address rather than a personal one, since this
+      # becomes public package metadata shipped to end users.
+      - env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          git config --global user.name "$OWNER"
+          git config --global user.email "$OWNER@users.noreply.github.com"
+
+      - name: Install fpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems rpm
+          sudo gem install --no-document fpm
+
+      # make_rpm.sh calls make_deb.sh itself, so this produces both files.
+      - run: ./make_rpm.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: build/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: build/*.rpm
+
+  package-snap:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: sed -i "s/^version = \".*\"/version = \"$VERSION\"/" tools/aula_l99_gui/pyproject.toml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: build/aula-l99-gui
+
+      - run: chmod +x build/aula-l99-gui/aula-l99-gui build/aula-l99-gui/install.sh
+
+      - run: sudo snap install snapcraft --classic
+
+      - run: ./make_snap.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snap
+          path: build/*.snap
+
+  package-flatpak:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: sed -i "s/^version = \".*\"/version = \"$VERSION\"/" tools/aula_l99_gui/pyproject.toml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: build/aula-l99-gui
+
+      - run: chmod +x build/aula-l99-gui/aula-l99-gui build/aula-l99-gui/install.sh
+
+      - name: Install flatpak-builder and runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08
+
+      - run: ./make_flatpak.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: build/*.flatpak
+
+  package-appimage:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: sed -i "s/^version = \".*\"/version = \"$VERSION\"/" tools/aula_l99_gui/pyproject.toml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: build/aula-l99-gui
+
+      - run: chmod +x build/aula-l99-gui/aula-l99-gui build/aula-l99-gui/install.sh
+
+      - run: ./make_appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: build/*.AppImage
+
+  release:
+    needs: [prepare, build, package-deb-rpm, package-snap, package-flatpak, package-appimage]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'tarball|deb|rpm|snap|flatpak|appimage'
+          merge-multiple: true
+          path: release-assets
+
+      # Prints only the latest entry's heading and body, stopping before the
+      # second "## [" heading -- CHANGELOG.md's format is Keep a Changelog.
+      - name: Extract release notes
+        run: |
+          awk '/^## \[/{c++} c==1{print} c==2{exit}' CHANGELOG.md > notes.md
+
+      - name: Create release
+        run: |
+          gh release create "$VERSION" release-assets/* \
+            --title "AULA L99 GUI $VERSION" \
+            --notes-file notes.md \
+            --target "${{ github.sha }}"
