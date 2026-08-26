@@ -1,6 +1,11 @@
 """Keyboard tab: a live view of each key's current colour, polled at a
 user-adjustable interval (default 100ms).
 
+Clicking a key opens KeyAssignmentDialog, which writes a key-remap ("Key
+Function") entry to the keyboard's profile table through this tab's usual
+transaction path -- see re_notes/key_remap_macros.md in aula_l99_hacky for
+that table's decoded layout.
+
 The two controls that used to sit under that view -- "Set Clock to Now" and
 the poll interval -- are on the Config tab now, driving this tab through
 `set_clock_now()`/`set_poll_interval()`. The work itself stays here rather
@@ -25,9 +30,11 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
+from . import key_layout
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
+from .key_assignment_dialog import KeyAssignmentDialog
 from .keyboard_overlay import KeyboardOverlay
 from .monitor_stats import MonitorSampler
 from .workers import (
@@ -111,8 +118,29 @@ class KeyboardTab(QWidget):
     def _build_overlay(self) -> KeyboardOverlay:
         overlay = KeyboardOverlay()
         overlay.setVisible(False)
+        overlay.keyClicked.connect(self._on_key_clicked)
         self.overlay = overlay
         return overlay
+
+    # -- key assignment ------------------------------------------------------
+
+    def _on_key_clicked(self, key_id: int) -> None:
+        """A left-click on an overlay key: open its assignment dialog and, on
+        Apply, write the remap through the usual transaction path. -1 means
+        the click deselected the already-selected key instead (the overlay's
+        toggle), which opens nothing."""
+        if key_id < 0 or not self._device_ready or self._busy or self._monitoring:
+            return
+        usage = key_layout.HID_BY_KEY_ID.get(key_id)
+        # The layout XML's names are keycap legends ("!1", ".>", "SCROOL");
+        # prefer the HID name for the dialog title where one exists.
+        key_name = (kb_protocol.HID_USAGE_DISPLAY_NAMES.get(usage)
+                    or key_layout.KEY_RECTS[key_id].name)
+        dialog = KeyAssignmentDialog(key_name, self)
+        if not dialog.exec():
+            return
+        self._run_transactions(
+            kb_protocol.build_key_remap_transfer(key_id, dialog.hid_usage))
 
     # -- device handling --------------------------------------------------
 

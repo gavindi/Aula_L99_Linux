@@ -453,4 +453,13 @@ QPushButton#TitleCloseButton:hover {{
 QPushButton#TitleCloseButton:pressed {{
     border-image: {_slice("main_sysbtn_close", "pressed")} 0 0 0 0 stretch stretch;
 }}
+
+/* Modal assignment dialog (key_assignment_dialog.py): black panel with its
+   own close-only title strip -- the TitleBar/TitleCloseButton rules above
+   style it, the same as the main window's. The border keeps a flat-black
+   dialog legible against the near-black background image behind it. */
+QDialog#KeyAssignmentDialog {{
+    background: #000000;
+    border: 1px solid {PANEL_BORDER};
+}}
 """

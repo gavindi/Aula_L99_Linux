@@ -5,6 +5,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.9] - 2026-08-26
+
+**Clicking a key on the Keyboard tab now assigns it.** A left-click on any key
+in the layout opens an assignment dialog: a "Key Type" dropdown whose single
+entry is the one remap type decoded so far ("Key Function"), a field to its
+right where the key to act as is typed, and Apply / Cancel buttons — with the
+title-bar X closing like Cancel. Apply resolves the typed name and writes the
+remap through the tab's usual transaction path, inheriting its progress bar,
+debug log and write-behind-an-in-flight-read queue; Cancel and X close without
+writing anything.
+
+This is the first code to drive the `0x11` key-profile table that 0.10.8
+decoded. The vendor app rewrites the whole table on every apply and there is
+no read-back, so each assignment sends exactly one non-default entry —
+applying a second remap resets whatever an earlier one did, whether that one
+came from this GUI or from the vendor app. Only "Key Function"
+(`02 00 <usage> 00`) is offered; the panel's other types (multimedia,
+disable, macro) wait until their encodings are driven too.
+
+### Added
+- `tools/aula_l99_gui/key_assignment_dialog.py`: `KeyAssignmentDialog`, modal
+  and titled `Assign Key — <name>`. The Key Type combo carries the wire type
+  (`KEY_ENTRY_KEY`) as its item data for when more entries arrive; Apply is
+  the default button (Enter applies, Esc cancels); an unresolvable name warns
+  and keeps the dialog open rather than half-applying. Like the main window
+  it is frameless with its own title strip — Qt cannot skin native chrome —
+  black with the vendor close button only (no minimise/maximise), reusing the
+  main window's `TitleBar`/`TitleCloseButton` styling, and draggable via
+  `startSystemMove` the same Wayland-safe way.
+- `protocol.py`: `OP_KEY_PROFILE` named at last; the five captured entry-type
+  constants (`KEY_ENTRY_DEFAULT`/`KEY`/`MEDIA`/`DISABLE`/`MACRO`);
+  `build_key_remap_blocks()` / `build_key_remap_transfer(key_id, hid_usage)`
+  building the 9-block table — 4-byte entries at `key_id * 4`, with the AA 55
+  inside the last block's bytes 62..63 rather than in a terminator block of
+  its own, unlike the colour path; `resolve_hid_usage()` and
+  `HID_USAGE_NAMES` (~100 names — letters, digits, F-keys and keypad digits
+  generated from their consecutive ranges, navigation/modifiers named by
+  hand), case-insensitive with aliases ("return" = "enter", "pgup" =
+  "pageup") and raw numbers via `int(x, 0)`; usage `0x00` ("no event")
+  refused like an unknown name; `HID_USAGE_DISPLAY_NAMES` picking the first
+  alias per usage as the user-facing form.
+- `keyboard_tab.py`: `_on_key_clicked()`, wired to the overlay's previously
+  unused `keyClicked` signal. Gated on device-ready and not busy/monitoring;
+  the overlay's toggle-deselect (-1, shared contract with User Lighting)
+  opens nothing. Dialog titles prefer HID names over the layout XML's keycap
+  legends — "capslock", not `.>` or `!1`.
+- Tests: 21 protocol cases anchoring against the re_notes witnesses (Caps
+  Lock entry at offset 220 = `02 00 29 00`, Pause at 460, the empty table
+  reproducing the vendor's all-zero startup table, transfer framing,
+  range/name validation); 10 GUI cases covering apply/cancel/X/warn-and-stay-
+  open and the click → dialog → wire path end to end.
+
 ## [0.10.8] - 2026-08-13
 
 **Key remapping and macros are now decoded — the last big unknown on the

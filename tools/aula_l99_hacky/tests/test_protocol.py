@@ -482,3 +482,99 @@ def test_settings_transfer_framing_and_header():
     assert block == protocol.build_settings_blocks(2, 3)[0]
     assert commit == protocol.build_command(protocol.OP_COMMIT)
     assert end == protocol.build_command(protocol.OP_END)
+
+
+# --- key-remap table (opcode 0x11) -------------------------------------------
+# Anchors from re_notes/key_remap_macros.md: a remap entry is four bytes
+# [type, p1, p2, p3] at key_index * 4, and the capture pinned two of them --
+# Caps Lock (key_index 55) at offset 220 remapped to Esc as `02 00 29 00`,
+# Pause (key_index 115) at offset 460.
+
+def test_caps_to_esc_entry_lands_where_the_capture_put_it():
+    payload = b"".join(protocol.build_key_remap_blocks({55: 0x29}))
+    assert payload[55 * 4:55 * 4 + 4] == bytes([0x02, 0x00, 0x29, 0x00])
+
+
+def test_pause_offset_matches_the_capture():
+    payload = b"".join(protocol.build_key_remap_blocks({115: 0x48}))
+    assert payload[115 * 4:115 * 4 + 4] == bytes(
+        [protocol.KEY_ENTRY_KEY, 0, 0x48, 0])
+
+
+def test_table_shape_matches_the_capture():
+    blocks = protocol.build_key_remap_blocks({55: 0x29})
+    assert len(blocks) == protocol.KEY_PROFILE_BLOCK_COUNT
+    assert all(len(block) == protocol.PACKET_SIZE for block in blocks)
+    payload = b"".join(blocks)
+    # Every slot that is not the one remapped entry stays a default entry...
+    before, after = 55 * 4, 55 * 4 + 4
+    assert payload[:before] == bytes(before)
+    assert payload[after:-2] == bytes(len(payload) - after - 2)
+    # ...and the AA 55 sits in the last block's bytes 62..63, not its own block.
+    assert payload[-2:] == protocol.TRAILER
+
+
+def test_empty_table_is_the_vendors_all_zero_startup_table():
+    """The startup captures show 0x11 sessions carrying an all-zero table with
+    just the trailer -- what a default-everything write has to produce."""
+    payload = b"".join(protocol.build_key_remap_blocks({}))
+    assert payload[:-2] == bytes(len(payload) - 2)
+    assert payload[-2:] == protocol.TRAILER
+
+
+def test_key_remap_transfer_framing():
+    transactions = protocol.build_key_remap_transfer(55, 0x29)
+    assert [tx.name for tx in transactions] == (
+        ["begin", "key-remap"]
+        + [f"key-remap-block{i}" for i in range(protocol.KEY_PROFILE_BLOCK_COUNT)]
+        + ["commit", "end"])
+    cmd = transactions[1].outgoing
+    assert cmd[:2] == bytes([protocol.CMD_PREFIX, protocol.OP_KEY_PROFILE])
+    assert cmd[8] == protocol.KEY_PROFILE_BLOCK_COUNT
+    blocks = [tx.outgoing for tx in transactions[2:2 + protocol.KEY_PROFILE_BLOCK_COUNT]]
+    assert blocks == protocol.build_key_remap_blocks({55: 0x29})
+
+
+@pytest.mark.parametrize("key_id", [-1, 0x7F, 144])
+def test_non_physical_keys_are_rejected(key_id):
+    with pytest.raises(ValueError):
+        protocol.build_key_remap_blocks({key_id: 0x29})
+
+
+@pytest.mark.parametrize("hid_usage", [0, -1, 256])
+def test_out_of_range_usages_are_rejected(hid_usage):
+    with pytest.raises(ValueError):
+        protocol.build_key_remap_blocks({55: hid_usage})
+
+
+def test_every_named_usage_is_in_range():
+    assert all(0 < usage <= 0xFF for usage in protocol.HID_USAGE_NAMES.values())
+
+
+def test_display_names_pick_one_alias_per_usage():
+    """The first alias registered for a usage wins: the long canonical form,
+    not whichever abbreviation happened to be added alongside it."""
+    assert protocol.HID_USAGE_DISPLAY_NAMES[0x39] == "capslock"
+    assert protocol.HID_USAGE_DISPLAY_NAMES[0x28] == "enter"
+    assert len(protocol.HID_USAGE_DISPLAY_NAMES) == len(
+        set(protocol.HID_USAGE_NAMES.values()))
+
+
+def test_resolve_hid_usage_accepts_names_case_insensitively():
+    assert protocol.resolve_hid_usage("Esc") == 0x29
+    assert protocol.resolve_hid_usage("escape") == 0x29
+    assert protocol.resolve_hid_usage("  SPACE ") == 0x2C
+    assert protocol.resolve_hid_usage("F1") == 0x3A
+    assert protocol.resolve_hid_usage("a") == 0x04
+    assert protocol.resolve_hid_usage("CapsLock") == 0x39
+
+
+def test_resolve_hid_usage_accepts_numbers_any_form():
+    assert protocol.resolve_hid_usage("0x29") == 0x29
+    assert protocol.resolve_hid_usage("41") == 41
+
+
+@pytest.mark.parametrize("text", ["", "   ", "nope", "0", "-5", "0x100"])
+def test_resolve_hid_usage_rejects_garbage(text):
+    with pytest.raises(ValueError):
+        protocol.resolve_hid_usage(text)

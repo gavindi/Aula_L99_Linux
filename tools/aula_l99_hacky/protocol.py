@@ -102,6 +102,9 @@ OP_AUDIO = 0x78          # push one frame of audio spectrum levels (1 block
                          # out). The host captures the PC's audio and does the
                          # FFT; the device only receives 23 numbers. See the
                          # audio block below and re_notes/audio_spectrum_block.md.
+OP_KEY_PROFILE = 0x11    # write the key-remap table (9 blocks out); see the
+                         # key-remap section below and
+                         # re_notes/key_remap_macros.md.
 OP_END = 0xF0            # close a session
 
 # --- built-in effects (opcode 0x13) ----------------------------------------
@@ -245,6 +248,84 @@ RESPONSE_TIME_DELAYS_MS = {
     5: ((17, 18), (19, 21), (27, 28)),
 }
 RESPONSE_TIME_LINKS = ("wired", "2.4GHz", "bluetooth")
+
+# --- key-remap profile table (opcode 0x11) -----------------------------------
+# Layout per re_notes/key_remap_macros.md: 9 blocks = one 576-byte array of
+# 4-byte entries indexed by key id (the vendor XML's light_index), entry at
+# key_id * 4, AA 55 at bytes 62..63 of the last block. The whole table is
+# rewritten on every apply; there is no known read-back.
+KEY_PROFILE_BLOCK_COUNT = 9
+
+# The first byte of an entry is a type code; the remaining three are type
+# parameters (p1 p2 p3). Only KEY_ENTRY_KEY is driven by this package so far;
+# the others are recorded from captures of the vendor app.
+KEY_ENTRY_DEFAULT = 0x00  # 0 0 0 -- unchanged / default
+KEY_ENTRY_KEY = 0x02      # 0 <HID keyboard usage> 0 -- act as that key
+KEY_ENTRY_MEDIA = 0x03    # <consumer usage> 0 0 -- multimedia binding
+KEY_ENTRY_DISABLE = 0x05  # 0x03 0 0 -- key disabled
+KEY_ENTRY_MACRO = 0x06    # 0 0 0 -- trigger the macro slot
+
+# Names resolve_hid_usage() accepts for a target keyboard usage, as typed into
+# the GUI's assignment field. Letters a..z sit consecutively from 0x04 and
+# digits 1..9,0 from 0x1E, F1..F12 from 0x3A and keypad digits from 0x59, so
+# those ranges are generated; everything else is named by hand from the USB HID
+# usage tables. Lookup is case-insensitive; raw hex ("0x29") also works.
+HID_USAGE_NAMES: dict[str, int] = {}
+for _index in range(26):
+    HID_USAGE_NAMES[chr(ord("a") + _index)] = 0x04 + _index
+for _index, _digit in enumerate("1234567890"):
+    HID_USAGE_NAMES[_digit] = 0x1E + _index
+for _index in range(12):
+    HID_USAGE_NAMES[f"f{_index + 1}"] = 0x3A + _index
+for _index in range(1, 10):
+    HID_USAGE_NAMES[f"numpad{_index}"] = 0x58 + _index
+HID_USAGE_NAMES.update({
+    "enter": 0x28, "return": 0x28,
+    "esc": 0x29, "escape": 0x29,
+    "backspace": 0x2A,
+    "tab": 0x2B,
+    "space": 0x2C, "spacebar": 0x2C,
+    "minus": 0x2D, "-": 0x2D,
+    "equal": 0x2E, "=": 0x2E,
+    "[": 0x2F, "bracketleft": 0x2F,
+    "]": 0x30, "bracketright": 0x30,
+    "\\": 0x31, "backslash": 0x31,
+    "`": 0x35, "grave": 0x35, "~": 0x35,
+    ";": 0x33, "semicolon": 0x33,
+    "'": 0x34, "quote": 0x34, "apostrophe": 0x34,
+    ",": 0x36, "comma": 0x36,
+    ".": 0x37, "period": 0x37,
+    "/": 0x38, "slash": 0x38,
+    "capslock": 0x39, "caps": 0x39,
+    "printscreen": 0x46, "prtsc": 0x46, "prtscr": 0x46,
+    "scrolllock": 0x47,
+    "pause": 0x48, "break": 0x48,
+    "insert": 0x49, "ins": 0x49,
+    "home": 0x4A,
+    "pageup": 0x4B, "pgup": 0x4B,
+    "delete": 0x4C, "del": 0x4C,
+    "end": 0x4D,
+    "pagedown": 0x4E, "pgdn": 0x4E,
+    "right": 0x4F, "left": 0x50, "down": 0x51, "up": 0x52,
+    "numlock": 0x53,
+    "numpad0": 0x62, "numpaddivide": 0x54, "numpadmultiply": 0x55,
+    "numpadsubtract": 0x56, "numpadadd": 0x57, "numpadenter": 0x58,
+    "numpadpoint": 0x63, "numpaddecimal": 0x63,
+    "leftctrl": 0xE0, "lctrl": 0xE0, "ctrl": 0xE0, "control": 0xE0,
+    "leftshift": 0xE1, "lshift": 0xE1, "shift": 0xE1,
+    "leftalt": 0xE2, "lalt": 0xE2, "alt": 0xE2,
+    "leftgui": 0xE3, "leftwindows": 0xE3, "lwin": 0xE3, "meta": 0xE3,
+    "rightctrl": 0xE4, "rctrl": 0xE4,
+    "rightshift": 0xE5, "rshift": 0xE5,
+    "rightalt": 0xE6, "ralt": 0xE6, "altgr": 0xE6,
+    "rightgui": 0xE7, "rightwindows": 0xE7, "rwin": 0xE7,
+})
+
+# One name per usage for showing to a user -- whichever alias was registered
+# first above ("capslock", not "caps"; "enter", not "return").
+HID_USAGE_DISPLAY_NAMES: dict[int, str] = {}
+for _name, _usage in HID_USAGE_NAMES.items():
+    HID_USAGE_DISPLAY_NAMES.setdefault(_usage, _name)
 
 # Byte 3 of a reply is an ack flag the device sets once it has processed the
 # command.
@@ -982,6 +1063,76 @@ def build_settings_transfer(sleep_time: int, response_time: int) -> list[Transac
     return build_transfer(OP_SETTINGS_WRITE,
                           build_settings_blocks(sleep_time, response_time),
                           "settings", byte2=1)
+
+
+def resolve_hid_usage(text: str) -> int:
+    """Turn what the user typed into a HID keyboard usage id.
+
+    Accepts the names in HID_USAGE_NAMES (case-insensitive) or a number in any
+    form int(x, 0) takes -- "0x29", "41". Raises ValueError for anything else,
+    and for out-of-range numbers; usage 0x00 means "no event" and is refused
+    like an unknown name.
+    """
+    cleaned = text.strip().lower()
+    if not cleaned:
+        raise ValueError("no key given")
+    try:
+        usage = int(cleaned, 0)
+    except ValueError:
+        try:
+            usage = HID_USAGE_NAMES[cleaned]
+        except KeyError:
+            known = ", ".join(sorted(HID_USAGE_NAMES))
+            raise ValueError(
+                f"unknown key {text.strip()!r} -- type a key name (Esc, F1, "
+                f"a, space, ...) or a HID usage as hex (0x29). "
+                f"Known names: {known}") from None
+    if not 1 <= usage <= 0xFF:
+        raise ValueError(f"HID usage out of range: {usage}")
+    return usage
+
+
+def build_key_remap_blocks(remaps: dict[int, int]) -> list[bytes]:
+    """Build the KEY_PROFILE_BLOCK_COUNT data blocks of a key-profile write
+    (opcode 0x11).
+
+    `remaps` maps key id -> HID keyboard usage for "act as that key"
+    (KEY_ENTRY_KEY) entries; every other slot is sent as the default entry,
+    which is what the vendor app's all-zero startup table shows. The whole
+    table goes on every write, so entries left out here are *reset* on the
+    keyboard, not preserved.
+    """
+    payload = bytearray(KEY_PROFILE_BLOCK_COUNT * PACKET_SIZE)
+    for key_id, hid_usage in remaps.items():
+        if key_id not in KEY_IDS:
+            raise ValueError(f"key id 0x{key_id:02X} is not a physical key on the L99")
+        if not 1 <= hid_usage <= 0xFF:
+            raise ValueError(
+                f"bad HID usage for key 0x{key_id:02X}: {hid_usage}")
+        offset = key_id * BYTES_PER_KEY
+        payload[offset] = KEY_ENTRY_KEY
+        payload[offset + 2] = hid_usage
+    # The trailer sits at TRAILER_OFFSET within the last block, i.e. at the
+    # very end of the payload -- unlike the colour blocks, no dedicated
+    # terminator block is added.
+    trailer_at = len(payload) - PACKET_SIZE + TRAILER_OFFSET
+    payload[trailer_at:trailer_at + 2] = TRAILER
+    return [bytes(payload[i:i + PACKET_SIZE])
+            for i in range(0, len(payload), PACKET_SIZE)]
+
+
+def build_key_remap_transfer(key_id: int, hid_usage: int) -> list[Transaction]:
+    """Remap one physical key to act as another ("Key Function"), by writing
+    the key-profile table (opcode 0x11) with that single entry set.
+
+    The vendor app rewrites the whole table on every apply and nothing can
+    read it back, so each call sends exactly one non-default entry: applying a
+    second remap resets whatever an earlier one did. See
+    re_notes/key_remap_macros.md.
+    """
+    return build_transfer(OP_KEY_PROFILE,
+                          build_key_remap_blocks({key_id: hid_usage}),
+                          "key-remap")
 
 
 def build_cable_handshake() -> list[Transaction]:
