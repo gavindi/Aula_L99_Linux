@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.11] - 2026-08-31
+
+**The Music tab's Audio Input list now includes loopback (all audio out) and
+single-application sources, not just microphones.** Device listing was
+ALSA-only (`arecord -l`), which has no concept of "capture whatever is
+currently playing" or "capture only this one app" — those are session-level
+routing that only the desktop audio server exposes. This machine runs plain
+PipeWire (no `pactl`/pipewire-pulse), so the new listing shells out to
+`pw-dump` instead: each `Audio/Sink` node (a speaker/HDMI/interface output)
+becomes a "Loopback: …" entry, and each transient `Stream/Output/Audio` node
+(one per actively-playing app) becomes an "App: …" entry labelled with the
+app name and track/tab title where available. Selecting either kind and
+pressing Start runs `pw-record --target <node serial>` instead of `arecord`
+— PipeWire links the capture stream straight to the sink's monitor ports or
+to the specific app stream, so a per-app capture is isolated from anything
+else making noise, with no null-sink or extra routing needed. The existing
+ALSA mic entries are unchanged and still list first; a separator divides
+them from the new PipeWire group. A system without PipeWire tooling falls
+back to the ALSA-only list exactly as before.
+
+### Added
+- `audio_spectrum.py`: `list_pipewire_devices()` / `parse_pipewire_devices()`
+  parse `pw-dump`'s JSON into loopback/application `CaptureDevice` entries;
+  `pw_record_command()` builds the matching raw-PCM capture argv;
+  `list_all_devices()` combines these with the existing ALSA listing,
+  swallowing a PipeWire-side failure so it degrades to ALSA-only rather than
+  blanking the combo.
+
+### Changed
+- `CaptureDevice` gained a `kind` field (`"alsa"` / `"pipewire"`); its ALSA
+  field was renamed `plughw` → `target` to also hold a PipeWire node's
+  `object.serial`.
+- `music_tab.py`: the combo now stores the whole `CaptureDevice` as each
+  item's data (a separator marks the ALSA/PipeWire boundary), and Start
+  picks `arecord_command()` or `pw_record_command()` from the selected
+  device's `kind`.
+- `workers.py`'s `AudioSpectrumWorker` error messages no longer hardcode
+  "arecord", since the capture subprocess may now be `pw-record`.
+
 ## [0.10.10] - 2026-08-26
 
 **A manually-triggered GitHub Actions workflow now builds and packages a full

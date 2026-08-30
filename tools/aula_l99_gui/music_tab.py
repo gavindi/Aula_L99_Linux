@@ -1,6 +1,7 @@
 """Music tab: drive the touchscreen's spectrum analyser from live audio.
 
-Captures from an ALSA input device (picked from `arecord -l`), computes a
+Captures from an ALSA input device (picked from `arecord -l`) or a PipeWire
+loopback/application source (picked from `pw-dump`), computes a
 17-band spectrum with audio_spectrum's pure-Python Goertzel, and streams each
 frame to the panel via the keyboard's audio feed (aula_l99_hacky's OP_AUDIO,
 0x78). The panel renders bands 0..16 -- exactly the 17 the tab produces -- so
@@ -293,7 +294,7 @@ class MusicTab(QWidget):
         self.device_combo.setEnabled(False)
         self.input_status.setText("Listing audio input devices…")
         self._refresh_active = True
-        self._refresh_worker = CallableResultWorker(audio_spectrum.list_capture_devices)
+        self._refresh_worker = CallableResultWorker(audio_spectrum.list_all_devices)
         self._refresh_worker.finished.connect(self._on_devices_loaded)
         self._refresh_thread = start_worker(self._refresh_worker)
         self._refresh_thread.finished.connect(self._on_refresh_thread_stopped)
@@ -311,8 +312,12 @@ class MusicTab(QWidget):
             return
         self._devices = list(devices)
         self.device_combo.clear()
+        last_kind = None
         for device in self._devices:
-            self.device_combo.addItem(device.label, device.plughw)
+            if last_kind is not None and device.kind != last_kind:
+                self.device_combo.insertSeparator(self.device_combo.count())
+            self.device_combo.addItem(device.label, device)
+            last_kind = device.kind
         if self._devices:
             self.input_status.setText(
                 f"{len(self._devices)} capture device(s); select one and press Start. "
@@ -350,8 +355,8 @@ class MusicTab(QWidget):
         if index < 0:
             QMessageBox.warning(self, "Music", "No audio input device selected.")
             return
-        plughw = self.device_combo.itemData(index)
-        if not plughw:
+        device = self.device_combo.itemData(index)
+        if device is None:
             QMessageBox.warning(self, "Music", "No audio input device selected.")
             return
 
@@ -366,10 +371,13 @@ class MusicTab(QWidget):
         except OSError:
             self._restore_colors = None
 
-        arecord_cmd = audio_spectrum.arecord_command(plughw)
+        capture_cmd = (
+            audio_spectrum.arecord_command(device.target) if device.kind == "alsa"
+            else audio_spectrum.pw_record_command(device.target)
+        )
         level_fn = audio_spectrum.levels_from_pcm
         self._stream_worker = AudioSpectrumWorker(
-            device_path, arecord_cmd, level_fn,
+            device_path, capture_cmd, level_fn,
             **self._music_settings(),
         )
         self._stream_worker.frame.connect(self.preview.set_levels)
@@ -378,7 +386,7 @@ class MusicTab(QWidget):
         self._set_streaming(True)
         self._debug_log.append(
             "Music", f"-- capturing {self.device_combo.currentText()} "
-            f"({plughw}) -> panel spectrum")
+            f"({device.kind}:{device.target}) -> panel spectrum")
         self.stream_status.setText(
             f"Streaming to the panel at ~{1 / kb_protocol.AUDIO_FRAME_SECONDS:.0f} "
             "frames/s. Press Stop to end.")

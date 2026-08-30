@@ -21,6 +21,7 @@ peak-normalised per frame.
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 import struct
@@ -59,10 +60,16 @@ DB_FLOOR = -60.0
 
 @dataclass(frozen=True)
 class CaptureDevice:
-    """One ALSA capture device from `arecord -l`, ready for `-D plughw:N,M`."""
+    """One capture source, ready to build a subprocess argv from.
+
+    `target` is `-D`'s ALSA argument (`plughw:N,M`) for `kind == "alsa"`, or a
+    PipeWire `object.serial` (as a string, for `--target`) for
+    `kind == "pipewire"`.
+    """
 
     label: str
-    plughw: str
+    target: str
+    kind: str = "alsa"
 
 
 # A `arecord -l` device line: `card 1: AG06AG03 [AG06/AG03], device 0: USB
@@ -87,7 +94,7 @@ def parse_arecord_devices(text: str) -> list[CaptureDevice]:
         card, card_name, device, device_name = match.groups()
         label = f"{card_name} {device_name}".strip() or f"card {card}, device {device}"
         devices.append(
-            CaptureDevice(label=label, plughw=f"plughw:{card},{device}")
+            CaptureDevice(label=label, target=f"plughw:{card},{device}")
         )
     return devices
 
@@ -128,6 +135,117 @@ def arecord_command(plughw: str, rate: int = SAMPLE_RATE) -> list[str]:
         "-r", str(rate),
         "-c", "1",
         "-t", "raw",
+    ]
+
+
+def parse_pipewire_devices(nodes: list[dict]) -> list[CaptureDevice]:
+    """Loopback and per-application entries from `pw-dump`'s parsed object list.
+
+    `pw-dump` dumps every PipeWire object (nodes, ports, links, devices,
+    clients, ...); only entries of type "PipeWire:Interface:Node" are
+    considered here.
+
+    `Audio/Sink` nodes are playback devices (speakers, HDMI, USB interfaces);
+    targeting one with `pw-record --target` captures its monitor, i.e.
+    whatever is currently playing out of it -- a loopback source. Nothing in
+    PipeWire calls this a "monitor" node the way PulseAudio does: it's the
+    same sink node PipeWire already lists, captured instead of played.
+
+    `Stream/Output/Audio` nodes are transient, one per actively-playing
+    application; targeting one captures only that app's audio, isolated from
+    anything else on the system. They vanish when the app stops playing, so
+    this list is only as fresh as the last refresh.
+    """
+    devices: list[CaptureDevice] = []
+    for node in nodes:
+        if node.get("type") != "PipeWire:Interface:Node":
+            continue
+        props = (node.get("info") or {}).get("props") or {}
+        media_class = props.get("media.class")
+        serial = props.get("object.serial")
+        if serial is None:
+            continue
+        target = str(serial)
+        if media_class == "Audio/Sink":
+            name = (
+                props.get("node.description")
+                or props.get("node.nick")
+                or props.get("node.name")
+                or target
+            )
+            devices.append(
+                CaptureDevice(label=f"Loopback: {name}", target=target, kind="pipewire")
+            )
+        elif media_class == "Stream/Output/Audio":
+            app_name = props.get("application.name") or props.get("node.name") or target
+            title = props.get("media.title") or props.get("media.name")
+            label = f"App: {app_name}"
+            if title and title not in ("playback", app_name):
+                label += f" – {title}"
+            devices.append(CaptureDevice(label=label, target=target, kind="pipewire"))
+    return devices
+
+
+def list_pipewire_devices() -> list[CaptureDevice]:
+    """Run `pw-dump` and parse it into loopback/application capture entries.
+
+    Raises OSError if pw-dump is missing, will not run, or returns output
+    that doesn't parse as JSON, so the caller can fall back to ALSA-only
+    listing rather than surface this as a fatal error.
+    """
+    try:
+        output = subprocess.run(
+            ["pw-dump"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except FileNotFoundError as exc:
+        raise OSError("pw-dump not found on PATH; cannot list PipeWire sources") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("pw-dump timed out") from exc
+    try:
+        nodes = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise OSError("pw-dump output was not valid JSON") from exc
+    return parse_pipewire_devices(nodes)
+
+
+def list_all_devices() -> list[CaptureDevice]:
+    """ALSA hardware devices plus PipeWire loopback/application sources.
+
+    ALSA listing failures propagate (arecord is required for the tab to be
+    useful at all); PipeWire listing failures are swallowed so a system
+    without PipeWire -- or a transient pw-dump hiccup -- just falls back to
+    the ALSA-only list instead of blanking the whole combo.
+    """
+    devices = list_capture_devices()
+    try:
+        devices += list_pipewire_devices()
+    except OSError:
+        pass
+    return devices
+
+
+def pw_record_command(target: str, rate: int = SAMPLE_RATE) -> list[str]:
+    """argv for a raw mono S16_LE capture from a PipeWire node on stdout.
+
+    `--target` is the node's `object.serial`; PipeWire links the capture
+    stream to it directly -- to a sink's monitor ports for a loopback target,
+    or straight to an application stream's output for a per-app target. `-a`
+    (raw) gives a bare PCM stream with no container header, matching
+    `arecord`'s `-t raw`; `-` writes it to stdout.
+    """
+    return [
+        "pw-record",
+        "--target", target,
+        "--rate", str(rate),
+        "--channels", "1",
+        "--format", "s16",
+        "--media-category", "Capture",
+        "--raw",
+        "-",
     ]
 
 

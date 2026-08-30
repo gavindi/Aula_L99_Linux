@@ -249,13 +249,41 @@ def test_starting_a_stream_snapshots_the_keyboard_lighting(tab, monkeypatch, tmp
         "aula_l99_gui.music_tab.start_worker", _capture_start_worker(captured))
 
     tab._device_ready = True
-    tab._devices = [audio_spectrum.CaptureDevice("dummy", "plughw:1,0")]
+    device = audio_spectrum.CaptureDevice("dummy", "plughw:1,0")
+    tab._devices = [device]
     tab.device_combo.clear()
-    tab.device_combo.addItem("dummy", "plughw:1,0")
+    tab.device_combo.addItem("dummy", device)
     tab._start_stream()
 
     assert tab._restore_colors == colors
     assert isinstance(captured.get("worker"), AudioSpectrumWorker)
+    # The captured worker was never run; clear the references so the
+    # fixture's shutdown() doesn't reach a real thread.
+    tab._stream_worker = None
+    tab._stream_thread = None
+    tab._streaming = False
+
+
+def test_starting_a_stream_on_a_pipewire_device_uses_pw_record(tab, monkeypatch, tmp_path):
+    """A PipeWire-kind device (loopback or application source) must build a
+    pw-record argv, not the ALSA arecord one."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "aula_l99_gui.music_tab.read_colors", lambda *a, **k: {})
+    captured = {}
+    monkeypatch.setattr(
+        "aula_l99_gui.music_tab.start_worker", _capture_start_worker(captured))
+
+    tab._device_ready = True
+    device = audio_spectrum.CaptureDevice("App: Firefox", "573", kind="pipewire")
+    tab._devices = [device]
+    tab.device_combo.clear()
+    tab.device_combo.addItem(device.label, device)
+    tab._start_stream()
+
+    worker = captured.get("worker")
+    assert isinstance(worker, AudioSpectrumWorker)
+    assert worker._arecord_cmd == audio_spectrum.pw_record_command("573")
     # The captured worker was never run; clear the references so the
     # fixture's shutdown() doesn't reach a real thread.
     tab._stream_worker = None

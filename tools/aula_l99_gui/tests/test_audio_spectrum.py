@@ -114,6 +114,79 @@ def test_arecord_command_is_raw_mono_s16():
     assert "-f" in cmd and cmd[cmd.index("-f") + 1] == "S16_LE"
 
 
+# Trimmed real `pw-dump` fixtures (captured live, props unrelated to this
+# parsing dropped): one sink (a loopback source), two application streams
+# (one with a track title, one without), and one non-Node object that a real
+# dump would also contain and which must be ignored.
+_PW_SINK_NODE = {
+    "type": "PipeWire:Interface:Node",
+    "info": {"props": {
+        "object.serial": 71,
+        "node.name": "alsa_output.usb-Yamaha-00.iec958-stereo",
+        "node.description": "AG06/AG03 Digital Stereo (IEC958)",
+        "node.nick": "AG06/AG03",
+        "media.class": "Audio/Sink",
+    }},
+}
+_PW_APP_STREAM_WITH_TITLE = {
+    "type": "PipeWire:Interface:Node",
+    "info": {"props": {
+        "object.serial": 10978,
+        "node.name": "Shortwave",
+        "application.name": "Shortwave",
+        "media.title": "Peter W - Last Ninja",
+        "media.class": "Stream/Output/Audio",
+    }},
+}
+_PW_APP_STREAM_NO_TITLE = {
+    "type": "PipeWire:Interface:Node",
+    "info": {"props": {
+        "object.serial": 5208,
+        "node.name": "speech-dispatcher-dummy",
+        "application.name": "speech-dispatcher-dummy",
+        "media.name": "playback",
+        "media.class": "Stream/Output/Audio",
+    }},
+}
+_PW_NON_NODE_OBJECT = {
+    "type": "PipeWire:Interface:Port",
+    "info": {"props": {"media.class": "Audio/Sink"}},
+}
+
+
+def test_parse_pipewire_devices_reads_a_sink_as_a_loopback_source():
+    devices = audio_spectrum.parse_pipewire_devices([_PW_SINK_NODE])
+    assert devices == [
+        audio_spectrum.CaptureDevice(
+            "Loopback: AG06/AG03 Digital Stereo (IEC958)", "71", kind="pipewire"),
+    ]
+
+
+def test_parse_pipewire_devices_reads_application_streams():
+    devices = audio_spectrum.parse_pipewire_devices(
+        [_PW_APP_STREAM_WITH_TITLE, _PW_APP_STREAM_NO_TITLE])
+    assert devices == [
+        audio_spectrum.CaptureDevice(
+            "App: Shortwave – Peter W - Last Ninja", "10978", kind="pipewire"),
+        audio_spectrum.CaptureDevice(
+            "App: speech-dispatcher-dummy", "5208", kind="pipewire"),
+    ]
+
+
+def test_parse_pipewire_devices_ignores_non_node_objects():
+    assert audio_spectrum.parse_pipewire_devices([_PW_NON_NODE_OBJECT]) == []
+
+
+def test_pw_record_command_is_raw_mono_s16():
+    cmd = audio_spectrum.pw_record_command("71")
+    assert cmd[0] == "pw-record"
+    assert "--target" in cmd and cmd[cmd.index("--target") + 1] == "71"
+    assert "--channels" in cmd and cmd[cmd.index("--channels") + 1] == "1"
+    assert "--format" in cmd and cmd[cmd.index("--format") + 1] == "s16"
+    assert "--raw" in cmd
+    assert cmd[-1] == "-"
+
+
 class _FakePopen:
     """Minimal subprocess.Popen stand-in: yields one PCM chunk then EOF."""
 

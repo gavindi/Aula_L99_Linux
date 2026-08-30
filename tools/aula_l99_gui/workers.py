@@ -307,9 +307,10 @@ class MonitorStreamWorker(QObject):
 class AudioSpectrumWorker(QObject):
     """Streams a live spectrum to the keyboard's audio feed (opcode 0x78).
 
-    Captures raw mono S16_LE PCM from an `arecord` subprocess on *this* thread,
-    computes one frame of band levels per chunk via `level_fn` (a pure
-    callable, no widget access), and sends each frame with
+    Captures raw mono S16_LE PCM from a capture subprocess (`arecord` for an
+    ALSA device, `pw-record` for a PipeWire loopback/application source) on
+    *this* thread, computes one frame of band levels per chunk via `level_fn`
+    (a pure callable, no widget access), and sends each frame with
     kb_protocol.build_audio_frame() until stopped.
 
     Same shape as ColorStreamWorker/MonitorStreamWorker for the same reasons:
@@ -324,7 +325,8 @@ class AudioSpectrumWorker(QObject):
     just to keep from outpacing that budget when the send is unusually fast.
 
     `arecord_cmd` is the argv for a raw capture on stdout (see
-    audio_spectrum.arecord_command). The subprocess is owned and reaped here;
+    audio_spectrum.arecord_command / pw_record_command). The subprocess is
+    owned and reaped here;
     stop() asks it to terminate so the worker thread's blocking read returns
     instead of sitting on a live pipe.
     """
@@ -397,7 +399,7 @@ class AudioSpectrumWorker(QObject):
                 stderr=subprocess.PIPE,
             )
         except OSError as exc:
-            self.finished.emit(False, f"could not start arecord: {exc}")
+            self.finished.emit(False, f"could not start {self._arecord_cmd[0]}: {exc}")
             return
         self._proc = proc
         try:
@@ -471,7 +473,7 @@ class AudioSpectrumWorker(QObject):
             if late:
                 message += f" ({late} over the {self._period * 1000:.0f}ms frame budget)"
             if frames == 0 and stderr:
-                message += f"; arecord: {stderr}"
+                message += f"; {self._arecord_cmd[0]}: {stderr}"
             self.finished.emit(True, message)
         except (FileNotFoundError, PermissionError, TimeoutError, OSError) as exc:
             self.finished.emit(False, str(exc))
