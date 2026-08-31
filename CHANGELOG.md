@@ -5,6 +5,47 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.14] - 2026-09-01
+
+**The Keyboard tab now has a "Saved Keyboard Configs" panel, mirroring User
+Lighting's "Saved Lighting" pane.** Clicking a key to remap it worked, but
+there was no way to save a set of assignments or reload one later — and
+worse, each click silently reset whatever an earlier click had assigned,
+because `build_key_remap_transfer` rewrites the entire profile table with
+only the one key just clicked. That made "Save Current" meaningless on its
+own, so this also adds the client-side tracking the write path was missing:
+`KeyboardTab` now keeps every key assigned since it opened (`key_id -> HID
+usage`, the keyboard itself can't be read back to recover this) and resends
+the whole accumulated set on every click, the same way `UserLightingTab`
+already tracks a full 84-key colour table for the same reason. Saved files
+use the vendor app's own "My Exclusive Config" export schema — decoded here
+for the first time: `key_code` is the source key's HID usage and, for a
+plain remap (`macro_type="2"`), `macro_value` is the destination key's HID
+usage, the same numbering this app already uses everywhere else. Only that
+one macro_type is read or written, since it's the only remap type
+`KeyAssignmentDialog` can produce; anything else in a loaded file (disable,
+modifiers, macros, multi-key chords) is skipped and logged rather than
+failing the load.
+
+### Added
+- `keyboard_tab.py`: a "Saved Keyboard Configs" `QGroupBox` panel (list +
+  "Apply to Keyboard" / "Save Current" / "Refresh"), built the same way as
+  `user_lighting_tab.py`'s file panel. Files live under
+  `QStandardPaths.AppDataLocation/Keyboard_Config/`, default-named
+  `KeyboardConfig{N}.xml`. `_load_keyboard_config_xml`/
+  `_save_keyboard_config_xml` read and write the vendor's
+  `profile`/`profileinfo`/`keyitems`/`item` schema, restricted to
+  `macro_type="2"`, `fn_layer="0"` entries with no modifier.
+- `protocol.py`: `build_key_remap_transfer_all(remaps)` — writes the whole
+  key-profile table from a full `key_id -> HID usage` dict, the same shape
+  `build_color_transfer` already uses for the colour table.
+
+### Changed
+- `keyboard_tab.py`: `_on_key_clicked` now records each assignment into a
+  running `self._remaps` dict and writes the whole thing via the new
+  `_write_remaps()` helper, instead of sending a single-key transfer that
+  reset every earlier remap.
+
 ## [0.10.13] - 2026-08-31
 
 **The Config tab now has a "Start on login" option, with a "Start hidden in

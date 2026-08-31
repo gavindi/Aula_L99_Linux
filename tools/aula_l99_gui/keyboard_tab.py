@@ -18,19 +18,27 @@ DeviceSelector but hosts the color/effect controls under the Lighting tab.
 """
 from __future__ import annotations
 
+import pathlib
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Signal
+import defusedxml.ElementTree as safe_ET
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QGroupBox,
     QHBoxLayout,
+    QInputDialog,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from aula_l99_hacky import protocol as kb_protocol
 
-from . import key_layout, settings
+from . import key_layout, settings, theme
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
@@ -67,6 +75,88 @@ MAX_MONITOR_PERIOD_SECONDS = 60
 DEFAULT_MONITOR_PERIOD_SECONDS = 5
 MONITOR_STOP_WAIT_MS = 1000
 
+FILE_PANEL_WIDTH = theme.SIDE_PANEL_WIDTH
+
+# The vendor export XML's macro_type for a plain "act as this key" remap --
+# see re_notes/key_remap_macros.md's note that the XML's macro_type values are
+# a separate local-DB vocabulary from the wire table's entry types, plus the
+# cross-reference in this tab's docstring. It's the only macro_type
+# KeyAssignmentDialog can produce, so it's the only one read/written here.
+KEY_REMAP_MACRO_TYPE = "2"
+
+
+def _keyboard_config_dir() -> pathlib.Path:
+    base = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppDataLocation
+    )
+    save_dir = pathlib.Path(base) / "Keyboard_Config"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    return save_dir
+
+
+def _next_config_name(save_dir: pathlib.Path) -> str:
+    best = 0
+    for path in save_dir.glob("KeyboardConfig*.xml"):
+        digits = path.stem[len("KeyboardConfig"):]
+        if digits.isdigit():
+            best = max(best, int(digits))
+    return f"KeyboardConfig{best + 1}"
+
+
+def _load_keyboard_config_xml(path: pathlib.Path) -> tuple[dict[int, int], int]:
+    """Parse a vendor `profile` file into {key_id: hid_usage}, plus a count of
+    items skipped because they use a macro_type, fn_layer or modifier this
+    app doesn't support producing yet (see re_notes/key_remap_macros.md) or
+    name a key this keyboard doesn't have.
+    """
+    root = safe_ET.parse(path).getroot()
+    if root.tag != "profile":
+        raise ValueError(f"not a profile file (root is <{root.tag}>)")
+
+    remaps: dict[int, int] = {}
+    skipped = 0
+    keyitems = root.find("keyitems")
+    for item in [] if keyitems is None else keyitems.findall("item"):
+        if (item.get("macro_type") != KEY_REMAP_MACRO_TYPE
+                or item.get("fn_layer", "0") != "0"
+                or item.get("macro_value2", "0") != "0"
+                or item.get("macro_value3", "0") != "0"):
+            skipped += 1
+            continue
+        try:
+            key_code = int(item.get("key_code", "-1"))
+            hid_usage = int(item.get("macro_value", "-1"))
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        key_id = key_layout.KEY_ID_BY_HID.get(key_code)
+        if key_id is None or not 1 <= hid_usage <= 0xFF:
+            skipped += 1
+            continue
+        remaps[key_id] = hid_usage
+    return remaps, skipped
+
+
+def _save_keyboard_config_xml(path: pathlib.Path, remaps: dict[int, int]) -> None:
+    root = ET.Element("profile")
+    ET.SubElement(root, "profileinfo", name=path.stem)
+    keyitems = ET.SubElement(root, "keyitems")
+    for key_id, hid_usage in remaps.items():
+        ET.SubElement(
+            keyitems,
+            "item",
+            fn_layer="0",
+            key_code=str(key_layout.HID_BY_KEY_ID[key_id]),
+            layout_value="0",
+            layout_desc="",
+            macro_type=KEY_REMAP_MACRO_TYPE,
+            macro_value=str(hid_usage),
+            macro_value2="0",
+            macro_value3="0",
+            macro_desc=kb_protocol.HID_USAGE_DISPLAY_NAMES.get(hid_usage, ""),
+        )
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
 
 class KeyboardTab(QWidget):
     busy_changed = Signal(bool)
@@ -99,21 +189,32 @@ class KeyboardTab(QWidget):
         self._monitoring = False
         self._monitor_period = settings.monitor_period_seconds()
         self._shutting_down = False
+        # Every key assigned this session, key_id -> HID usage. The keyboard
+        # itself can't be read back (see build_key_remap_transfer's
+        # docstring), so this is the only record of "what's currently
+        # assigned" -- every write resends the whole dict, and Save Current
+        # saves it. Starts empty on every launch/tab creation.
+        self._remaps: dict[int, int] = {}
+        self._file_remaps: dict[int, int] | None = None
 
         self._build_ui()
         selector.changed.connect(self._on_device_changed)
+        self._refresh_config_list()
 
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
+        layout.addWidget(self._build_file_panel())
 
+        controls = QVBoxLayout()
         overlay_row = QHBoxLayout()
         overlay_row.addStretch(1)
         overlay_row.addWidget(self._build_overlay())
         overlay_row.addStretch(1)
-        layout.addLayout(overlay_row)
-        layout.addStretch(1)
+        controls.addLayout(overlay_row)
+        controls.addStretch(1)
+        layout.addLayout(controls)
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(DEFAULT_POLL_INTERVAL_MS)
@@ -126,6 +227,97 @@ class KeyboardTab(QWidget):
         overlay.keyClicked.connect(self._on_key_clicked)
         self.overlay = overlay
         return overlay
+
+    def _build_file_panel(self) -> QGroupBox:
+        group = QGroupBox("Saved Keyboard Configs")
+        group.setMaximumWidth(FILE_PANEL_WIDTH)
+        layout = QVBoxLayout(group)
+
+        self.config_list = QListWidget()
+        self.config_list.currentItemChanged.connect(self._on_config_selected)
+        layout.addWidget(self.config_list)
+
+        self.apply_config_button = QPushButton("Apply to Keyboard")
+        self.apply_config_button.clicked.connect(self._on_apply_config)
+        self.apply_config_button.setEnabled(False)
+        layout.addWidget(self.apply_config_button)
+
+        save_button = QPushButton("Save Current")
+        save_button.clicked.connect(self._on_save_current_config)
+        layout.addWidget(save_button)
+
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self._refresh_config_list)
+        layout.addWidget(refresh_button)
+
+        return group
+
+    # -- saved keyboard configs ---------------------------------------------
+
+    def _refresh_config_list(self) -> None:
+        self.config_list.clear()
+        for path in sorted(_keyboard_config_dir().glob("*.xml"), key=lambda p: p.name.lower()):
+            item = QListWidgetItem(path.stem)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self.config_list.addItem(item)
+
+    def _on_config_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        # Selecting only loads and arms "Apply to Keyboard" -- nothing is
+        # written until that button is pressed, same rule as Saved Lighting.
+        self._file_remaps = None
+        if current is not None:
+            path = pathlib.Path(current.data(Qt.ItemDataRole.UserRole))
+            try:
+                remaps, skipped = _load_keyboard_config_xml(path)
+            except (OSError, ValueError, ET.ParseError) as exc:
+                self._debug_log.append("Keyboard", f"-- load {path.name} failed: {exc}")
+                QMessageBox.critical(self, "Load Error", f"Could not read {path.name}:\n{exc}")
+            else:
+                self._file_remaps = remaps
+                note = f" ({skipped} unsupported item(s) skipped)" if skipped else ""
+                self._debug_log.append(
+                    "Keyboard", f"-- loaded {path.name}: {len(remaps)} key(s){note}"
+                )
+        self.apply_config_button.setEnabled(self._file_remaps is not None)
+
+    def _on_apply_config(self) -> None:
+        if self._file_remaps is None:
+            return
+        self._remaps = dict(self._file_remaps)
+        self._write_remaps()
+
+    def _on_save_current_config(self) -> None:
+        save_dir = _keyboard_config_dir()
+        name, accepted = QInputDialog.getText(
+            self, "Save Keyboard Config", "Name:", text=_next_config_name(save_dir)
+        )
+        name = name.strip()
+        if not accepted or not name:
+            return
+
+        path = save_dir / f"{name}.xml"
+        if path.exists():
+            confirm = QMessageBox.question(
+                self, "Save Keyboard Config", f"{path.name} already exists. Overwrite it?"
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            _save_keyboard_config_xml(path, self._remaps)
+        except OSError as exc:
+            self._debug_log.append("Keyboard", f"-- save {path.name} failed: {exc}")
+            QMessageBox.critical(self, "Save Error", f"Could not write {path.name}:\n{exc}")
+            return
+
+        self._debug_log.append("Keyboard", f"-- saved {path.name}")
+        self._refresh_config_list()
+        for row in range(self.config_list.count()):
+            if self.config_list.item(row).text() == path.stem:
+                self.config_list.setCurrentRow(row)
+                break
 
     # -- key assignment ------------------------------------------------------
 
@@ -144,8 +336,16 @@ class KeyboardTab(QWidget):
         dialog = KeyAssignmentDialog(key_name, self)
         if not dialog.exec():
             return
+        self._remaps[key_id] = dialog.hid_usage
+        self._write_remaps()
+
+    def _write_remaps(self) -> None:
+        """Send every remap assigned so far as one write -- build_key_remap_
+        blocks rewrites the whole table regardless, so this is what makes an
+        earlier click's remap survive a later one instead of being reset by
+        it."""
         self._run_transactions(
-            kb_protocol.build_key_remap_transfer(key_id, dialog.hid_usage))
+            kb_protocol.build_key_remap_transfer_all(self._remaps))
 
     # -- device handling --------------------------------------------------
 

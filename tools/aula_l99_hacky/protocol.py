@@ -1135,6 +1135,17 @@ def build_key_remap_transfer(key_id: int, hid_usage: int) -> list[Transaction]:
                           "key-remap")
 
 
+def build_key_remap_transfer_all(remaps: dict[int, int]) -> list[Transaction]:
+    """Write the whole key-profile table from a full key_id -> HID usage map,
+    the way build_color_transfer takes a full colour table. Callers that track
+    every remap assigned so far (rather than just the latest one) use this so
+    an earlier remap survives a later one, unlike build_key_remap_transfer.
+    """
+    return build_transfer(OP_KEY_PROFILE,
+                          build_key_remap_blocks(remaps),
+                          "key-remap")
+
+
 def build_cable_handshake() -> list[Transaction]:
     """Open and close a session — enough to prove the channel works.
 
