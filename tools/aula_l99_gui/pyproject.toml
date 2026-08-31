@@ -1,6 +1,6 @@
 [project]
 name = "aula-l99-gui"
-version = "0.10.5"
+version = "0.10.12"
 description = "PySide6 GUI for the AULA L99 keyboard + touchscreen tools"
 requires-python = ">=3.10"
 dependencies = [

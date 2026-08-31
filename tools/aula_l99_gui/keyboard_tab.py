@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
-from . import key_layout
+from . import key_layout, settings
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .device_utils import KEYBOARD_PERMISSION_HINT
@@ -57,10 +57,14 @@ MIN_POLL_INTERVAL_MS = 1
 MAX_POLL_INTERVAL_MS = 5000
 
 # The touchscreen's monitor readout is driven through this tab's RTC write
-# path, streamed at the same ~1 Hz cadence the vendor app uses. Every 5s keeps
-# the readout current without hammering the RTC block; the worker slices its
-# inter-send sleep so stop() stays responsive regardless (see workers.py).
-MONITOR_PERIOD_SECONDS = 5.0
+# path. The Config tab's spin box lets the user retune the cadence between
+# these bounds; 5s is the default (the vendor app itself streams at ~1 Hz,
+# but there's no requirement to match it here) and keeps the readout current
+# without hammering the RTC block. The worker slices its inter-send sleep so
+# stop() stays responsive regardless of period (see workers.py).
+MIN_MONITOR_PERIOD_SECONDS = 1
+MAX_MONITOR_PERIOD_SECONDS = 60
+DEFAULT_MONITOR_PERIOD_SECONDS = 5
 MONITOR_STOP_WAIT_MS = 1000
 
 
@@ -93,6 +97,7 @@ class KeyboardTab(QWidget):
         self._monitor_worker = None
         self._monitor_thread = None
         self._monitoring = False
+        self._monitor_period = settings.monitor_period_seconds()
         self._shutting_down = False
 
         self._build_ui()
@@ -170,6 +175,14 @@ class KeyboardTab(QWidget):
     def set_poll_interval(self, interval_ms: int) -> None:
         """Retune colour polling live, from the Config tab's spin box."""
         self._poll_timer.setInterval(interval_ms)
+
+    def set_monitor_period(self, seconds: int) -> None:
+        """Retune the system-monitor send cadence, from the Config tab's spin
+        box. Applies live to a running stream via the worker's own
+        set_period(); otherwise just takes effect on the next Start."""
+        self._monitor_period = seconds
+        if self._monitoring and self._monitor_worker is not None:
+            self._monitor_worker.set_period(seconds)
 
     def set_settings(self, response_time: int, sleep_time: int) -> None:
         """Write the settings panel (response-time level and sleep-time
@@ -263,13 +276,18 @@ class KeyboardTab(QWidget):
         # /proc/stat deltas as state, so sharing it across the two threads is
         # safe (the worker is the only one calling it).
         self._monitor_worker = MonitorStreamWorker(
-            device_path, MonitorSampler(), period=MONITOR_PERIOD_SECONDS)
+            device_path, MonitorSampler(), period=self._monitor_period)
         self._monitor_worker.finished.connect(self._on_monitor_finished)
         self._monitor_worker.sent.connect(self.monitor_loaded)
+        self._monitor_worker.sent.connect(self._on_monitor_sent)
         self._monitor_thread = start_worker(self._monitor_worker)
         self._set_monitoring(True)
         self._debug_log.append(
-            "Keyboard", f"-- streaming CPU/GPU load every {MONITOR_PERIOD_SECONDS:g}s")
+            "Keyboard", f"-- streaming CPU/GPU load every {self._monitor_period:g}s")
+
+    def _on_monitor_sent(self, cpu_load: int, gpu_load: int) -> None:
+        self._debug_log.append(
+            "Keyboard", f"-- polled: CPU {cpu_load}% · GPU {gpu_load}%")
 
     def _stop_monitor_stream(self) -> None:
         """Stop the stream and wait for its thread, so the device is free

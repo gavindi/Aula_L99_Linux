@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
         self._config_tab.set_clock_requested.connect(self._keyboard_tab.set_clock_now)
         self._config_tab.poll_interval_changed.connect(self._keyboard_tab.set_poll_interval)
         self._config_tab.monitor_toggled.connect(self._keyboard_tab.set_monitoring)
+        self._config_tab.monitor_period_changed.connect(self._keyboard_tab.set_monitor_period)
         self._config_tab.settings_changed.connect(self._keyboard_tab.set_settings)
         self._keyboard_tab.monitoring_changed.connect(self._on_any_busy_changed)
         self._keyboard_tab.monitoring_changed.connect(self._on_monitor_state_changed)

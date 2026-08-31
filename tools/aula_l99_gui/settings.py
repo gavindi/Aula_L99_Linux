@@ -53,6 +53,24 @@ def set_monitor_running(running: bool) -> None:
     tmp.replace(path)
 
 
+def monitor_period_seconds() -> int:
+    """The system-monitor stream's last-set update frequency, in seconds."""
+    return int(_read().get("monitor", {}).get("period", 5))
+
+
+def set_monitor_period_seconds(period: int) -> None:
+    """Persist the system-monitor stream's update frequency."""
+    data = _read()
+    data.setdefault("monitor", {})["period"] = int(period)
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    tmp.replace(path)
+
+
 def music_settings() -> dict:
     """The Music tab's last-used Rhythm / Background Mode / Amplitude /
     Background Brightness values, keyed by control name. Unknown keys default

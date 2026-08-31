@@ -64,6 +64,31 @@ def test_file_is_plain_json_readable_without_qt(monkeypatch, tmp_path):
     assert data == {"monitor": {"running": True}}
 
 
+def test_monitor_period_defaults_to_five_seconds_when_no_file(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    assert settings.monitor_period_seconds() == 5
+
+
+def test_monitor_period_round_trip(monkeypatch, tmp_path):
+    path = _config(monkeypatch, tmp_path)
+    settings.set_monitor_period_seconds(30)
+    assert settings.monitor_period_seconds() == 30
+    assert path.exists()
+
+    settings.set_monitor_period_seconds(1)
+    assert settings.monitor_period_seconds() == 1
+
+
+def test_monitor_period_and_running_share_the_monitor_key(monkeypatch, tmp_path):
+    """Both fields live under the same "monitor" dict, and setting one must
+    not clobber the other."""
+    _config(monkeypatch, tmp_path)
+    settings.set_monitor_running(True)
+    settings.set_monitor_period_seconds(10)
+    assert settings.monitor_running() is True
+    assert settings.monitor_period_seconds() == 10
+
+
 def test_music_settings_default_to_protocol_defaults(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     from aula_l99_hacky import protocol as kb_protocol

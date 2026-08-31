@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.12] - 2026-08-31
+
+**The Config tab's System Monitor now has a 1-60s spinner for the CPU/GPU
+send interval, and logs every poll.** The interval was a hardcoded 5-second
+constant with no UI control, and the debug log only ever got one line when
+the stream started — nothing per-send, so there was no way to confirm from
+the log that it was actually still polling. The new spinner sits next to the
+"Send CPU/GPU Load" checkbox, persists like the checkbox's own run state
+does, and retunes a running stream live via `MonitorStreamWorker.set_period()`
+— the same cross-thread attribute-swap idiom `AudioSpectrumWorker` already
+uses for its own controls — so changing it takes effect on the next send
+rather than requiring a stop/restart.
+
+### Added
+- `settings.py`: `monitor_period_seconds()` / `set_monitor_period_seconds()`,
+  stored under the existing `"monitor"` key alongside the toggle's run state.
+- `workers.py`: `MonitorStreamWorker.set_period()` for a live retune of a
+  running stream's cadence.
+- `config_tab.py`: a "Update every (s):" `QSpinBox` (range 1-60) in the
+  System Monitor group, enabled whenever the toggle itself is (including
+  while streaming); a new `monitor_period_changed` signal carries changes to
+  `keyboard_tab.py`'s `set_monitor_period()`.
+- `keyboard_tab.py`: `_on_monitor_sent()` appends a `-- polled: CPU …% · GPU
+  …%` debug-log line for every send, not just the stream's start.
+
+### Changed
+- `keyboard_tab.py`'s hardcoded `MONITOR_PERIOD_SECONDS = 5.0` constant is
+  now `MIN_/MAX_/DEFAULT_MONITOR_PERIOD_SECONDS` (1/60/5), and the stream's
+  period is seeded from the persisted setting instead.
+
 ## [0.10.11] - 2026-08-31
 
 **The Music tab's Audio Input list now includes loopback (all audio out) and

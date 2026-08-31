@@ -252,6 +252,19 @@ class MonitorStreamWorker(QObject):
         self._timeout = timeout
         self._stop = False
 
+    def set_period(self, period: float) -> None:
+        """Retune the send cadence of a running stream, from the Config tab's
+        spin box.
+
+        Called straight from the GUI thread, like stop(): this worker's
+        thread is inside `run()` for the whole session and never returns to
+        its event loop, so a queued slot would not be delivered until the
+        stream had already ended. A lone float assignment is the same safety
+        class as the `_stop` flag; the loop reads `self._period` fresh each
+        iteration, so the new cadence applies from the next send.
+        """
+        self._period = period
+
     def stop(self) -> None:
         """Ask the loop to finish after the send it is on.
 

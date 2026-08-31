@@ -118,3 +118,16 @@ def test_keyboard_worker_cable_handshake_still_acks():
         bytes([kb_protocol.REPORT_ID]) + kb_protocol.build_command(kb_protocol.OP_BEGIN),
         bytes([kb_protocol.REPORT_ID]) + kb_protocol.build_command(kb_protocol.OP_END),
     ]
+
+
+def test_monitor_stream_worker_set_period_retunes_the_running_loop():
+    """set_period() is called straight from the GUI thread onto a worker
+    whose run() loop is on another thread (see its docstring); the loop reads
+    `self._period` fresh each iteration, so a plain attribute swap is the
+    whole mechanism -- this pins that swap actually happening."""
+    worker = workers.MonitorStreamWorker(
+        "/dev/hidraw0", lambda: kb_protocol.MonitorData(), period=5.0)
+    assert worker._period == 5.0
+
+    worker.set_period(30)
+    assert worker._period == 30

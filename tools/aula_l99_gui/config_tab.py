@@ -31,7 +31,9 @@ from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .keyboard_tab import (
     DEFAULT_POLL_INTERVAL_MS,
+    MAX_MONITOR_PERIOD_SECONDS,
     MAX_POLL_INTERVAL_MS,
+    MIN_MONITOR_PERIOD_SECONDS,
     MIN_POLL_INTERVAL_MS,
 )
 
@@ -41,6 +43,7 @@ class ConfigTab(QWidget):
     set_clock_requested = Signal()
     poll_interval_changed = Signal(int)
     monitor_toggled = Signal(bool)  # checked = stream CPU/GPU load
+    monitor_period_changed = Signal(int)  # seconds between sends
     settings_changed = Signal(int, int)  # (response-time level, sleep-time value)
 
     def __init__(self, selector: DeviceSelector, debug_log: DebugLog) -> None:
@@ -175,10 +178,25 @@ class ConfigTab(QWidget):
         row.addStretch(1)
         column.addLayout(row)
 
+        period_row = QHBoxLayout()
+        period_row.addWidget(QLabel("Update every (s):"))
+        self.monitor_period_spin = QSpinBox()
+        self.monitor_period_spin.setRange(
+            MIN_MONITOR_PERIOD_SECONDS, MAX_MONITOR_PERIOD_SECONDS)
+        self.monitor_period_spin.setValue(settings.monitor_period_seconds())
+        self.monitor_period_spin.valueChanged.connect(self._on_monitor_period_changed)
+        period_row.addWidget(self.monitor_period_spin)
+        period_row.addStretch(1)
+        column.addLayout(period_row)
+
         # Fed by KeyboardTab.monitor_loaded with the load values of the most
         # recent send, so the readout is a live check rather than a promise.
         self._monitor_last = None
         return group
+
+    def _on_monitor_period_changed(self, value: int) -> None:
+        settings.set_monitor_period_seconds(value)
+        self.monitor_period_changed.emit(value)
 
     def _build_poll_group(self) -> QGroupBox:
         group = QGroupBox("Colour Polling")
@@ -224,9 +242,13 @@ class ConfigTab(QWidget):
         self.response_combo.setEnabled(self._device_ready and not self._external_busy)
         self.sleep_combo.setEnabled(self._device_ready and not self._external_busy)
         # The monitor toggle must stay clickable while checked so the user can
-        # stop the stream even though everything else is disabled for it.
+        # stop the stream even though everything else is disabled for it; the
+        # period spinner gets the same treatment so it stays live-adjustable
+        # while the stream is running.
         checked = self.monitor_toggle.isChecked()
         self.monitor_toggle.setEnabled(
+            self._device_ready and (checked or not self._external_busy))
+        self.monitor_period_spin.setEnabled(
             self._device_ready and (checked or not self._external_busy))
         self.poll_interval_spin.setEnabled(self._device_ready and not self._external_busy)
 

@@ -134,3 +134,29 @@ def test_defaults_to_first_dropdown_entries(tab, monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert tab.response_combo.currentData() == kb_protocol.RESPONSE_TIME_MIN
     assert tab.sleep_combo.currentData() == 0
+
+
+def test_monitor_period_spinner_range_is_one_to_sixty_seconds(tab):
+    assert tab.monitor_period_spin.minimum() == 1
+    assert tab.monitor_period_spin.maximum() == 60
+
+
+def test_monitor_period_defaults_to_five_seconds(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert tab.monitor_period_spin.value() == 5
+
+
+def test_changing_monitor_period_persists_and_emits(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    received = []
+    tab.monitor_period_changed.connect(received.append)
+    tab.monitor_period_spin.setValue(20)
+    assert received == [20]
+    assert settings.monitor_period_seconds() == 20
+
+
+def test_monitor_period_spinner_restores_saved_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings.set_monitor_period_seconds(45)
+    fresh = ConfigTab(_StubSelector(), DebugLog())
+    assert fresh.monitor_period_spin.value() == 45
