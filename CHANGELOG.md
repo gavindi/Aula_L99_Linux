@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.16] - 2026-09-01
+
+**`make_deb.sh` and its siblings no longer silently repackage a stale
+compiled build.** Each of `make_deb.sh`/`make_rpm.sh`/`make_appimage.sh`/
+`make_flatpak.sh`/`make_snap.sh` reuses `build/aula-l99-gui` (the Nuitka
+compile `package.sh` produces) rather than recompiling on every run, but the
+reuse check only asked whether that directory existed — not whether it still
+matched the source. A `build/aula-l99-gui` left over from an old checkout got
+packaged as-is: the `.deb`'s own `Version:` field was still correct (it's
+read fresh from `pyproject.toml` at packaging time), but the binary inside it
+was whatever code happened to be compiled last, silently out of date. This is
+exactly the failure mode 0.10.15's version label exists to catch, but only
+after installing and opening the app — the packaging step itself had no way
+to know.
+
+### Fixed
+- `make_deb.sh`, `make_appimage.sh`, `make_flatpak.sh`, `make_snap.sh`: the
+  dist-reuse check now also reads the `pyproject.toml` 0.10.15 bundles
+  inside `build/aula-l99-gui` and compares its version against
+  `tools/aula_l99_gui/pyproject.toml`'s; a mismatch (or a pre-0.10.15 dist
+  with no bundled file at all) triggers a `package.sh` recompile the same
+  way a missing directory or an explicit `--rebuild` already did.
+  `make_rpm.sh` inherits the fix for free, since it always runs
+  `make_deb.sh` first.
+
 ## [0.10.15] - 2026-09-01
 
 **The Device tab now shows the app's version number in its bottom-right

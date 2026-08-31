@@ -13,8 +13,9 @@
 # where snapcraft expects it in the working tree.
 #
 # Usage: ./make_snap.sh [--rebuild]
-#   Runs package.sh first if build/aula-l99-gui is missing, or if --rebuild
-#   is passed.
+#   Runs package.sh first if build/aula-l99-gui is missing, is a different
+#   version than tools/aula_l99_gui/pyproject.toml (a stale dist left over
+#   from an earlier checkout), or if --rebuild is passed.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +23,13 @@ cd "$SCRIPT_DIR"
 
 DIST_DIR="$SCRIPT_DIR/build/aula-l99-gui"
 
-if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ]; then
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
+# package.sh bundles its own pyproject.toml into the dist (see its own
+# comment on that) specifically so a stale reuse can be told apart from a
+# current one, rather than trusting the directory's mere existence.
+DIST_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' \
+    "$DIST_DIR/aula_l99_gui/pyproject.toml" 2>/dev/null || true)"
+if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ] || [ "$DIST_VERSION" != "$VERSION" ]; then
     "$SCRIPT_DIR/package.sh"
 fi
 
@@ -30,8 +37,6 @@ if ! command -v snapcraft >/dev/null 2>&1; then
     echo "error: snapcraft not found; install with 'sudo snap install snapcraft --classic'" >&2
     exit 1
 fi
-
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
 
 rm -rf "$SCRIPT_DIR/snap"
 mkdir -p "$SCRIPT_DIR/snap"

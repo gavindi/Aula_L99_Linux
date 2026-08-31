@@ -4,8 +4,10 @@
 # of its own, so there's no /dev/hidraw caveat here: it just runs.
 #
 # Usage: ./make_appimage.sh [--rebuild]
-#   Runs package.sh first if build/aula-l99-gui is missing, or if --rebuild
-#   is passed. Downloads appimagetool into build/ if not already there.
+#   Runs package.sh first if build/aula-l99-gui is missing, is a different
+#   version than tools/aula_l99_gui/pyproject.toml (a stale dist left over
+#   from an earlier checkout), or if --rebuild is passed. Downloads
+#   appimagetool into build/ if not already there.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,11 +17,16 @@ DIST_DIR="$SCRIPT_DIR/build/aula-l99-gui"
 APP_NAME="aula-l99-gui"
 APPDIR="$SCRIPT_DIR/build/AppDir"
 
-if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ]; then
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
+# package.sh bundles its own pyproject.toml into the dist (see its own
+# comment on that) specifically so a stale reuse can be told apart from a
+# current one, rather than trusting the directory's mere existence.
+DIST_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' \
+    "$DIST_DIR/aula_l99_gui/pyproject.toml" 2>/dev/null || true)"
+if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ] || [ "$DIST_VERSION" != "$VERSION" ]; then
     "$SCRIPT_DIR/package.sh"
 fi
 
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
 ARCH="$(uname -m)"
 
 # --- stage AppDir ------------------------------------------------------------

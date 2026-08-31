@@ -11,8 +11,9 @@
 # front rather than on every invocation.
 #
 # Usage: ./make_flatpak.sh [--rebuild]
-#   Runs package.sh first if build/aula-l99-gui is missing, or if --rebuild
-#   is passed.
+#   Runs package.sh first if build/aula-l99-gui is missing, is a different
+#   version than tools/aula_l99_gui/pyproject.toml (a stale dist left over
+#   from an earlier checkout), or if --rebuild is passed.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +23,13 @@ DIST_DIR="$SCRIPT_DIR/build/aula-l99-gui"
 APP_ID="io.github.gavindi.AulaL99Gui"
 MANIFEST="$SCRIPT_DIR/packaging/flatpak/$APP_ID.yml"
 
-if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ]; then
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
+# package.sh bundles its own pyproject.toml into the dist (see its own
+# comment on that) specifically so a stale reuse can be told apart from a
+# current one, rather than trusting the directory's mere existence.
+DIST_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' \
+    "$DIST_DIR/aula_l99_gui/pyproject.toml" 2>/dev/null || true)"
+if [ "${1:-}" = "--rebuild" ] || [ ! -d "$DIST_DIR" ] || [ "$DIST_VERSION" != "$VERSION" ]; then
     "$SCRIPT_DIR/package.sh"
 fi
 
@@ -30,8 +37,6 @@ if ! command -v flatpak-builder >/dev/null 2>&1; then
     echo "error: flatpak-builder not found; install with 'apt install flatpak flatpak-builder'" >&2
     exit 1
 fi
-
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' tools/aula_l99_gui/pyproject.toml)"
 BUILD_DIR="$SCRIPT_DIR/build/flatpak-build"
 REPO_DIR="$SCRIPT_DIR/build/flatpak-repo"
 BUNDLE="$SCRIPT_DIR/build/aula-l99-gui-$VERSION.flatpak"

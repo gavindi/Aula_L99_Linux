@@ -17,9 +17,10 @@
 # the layout XML are parsed at import time, never written back.
 #
 # Usage: ./make_deb.sh [--rebuild]
-#   Reuses build/aula-l99-gui when it exists; --rebuild runs package.sh first
-#   for a fresh Nuitka compile (~80s, needs a C compiler and internet for the
-#   Nuitka downloads).
+#   Reuses build/aula-l99-gui when it exists and already matches
+#   tools/aula_l99_gui/pyproject.toml's version; --rebuild forces a fresh
+#   Nuitka compile (~80s, needs a C compiler and internet for the Nuitka
+#   downloads) regardless.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,10 +40,21 @@ for arg in "$@"; do
 done
 
 # --- compiled build ----------------------------------------------------------
+# A stale build/aula-l99-gui from an earlier checkout would otherwise get
+# reused silently -- right version number on the .deb's own metadata below,
+# old code actually inside it. package.sh bundles its own pyproject.toml into
+# the dist (see its own comment on that) specifically so this can tell the
+# two apart instead of trusting the directory's mere existence.
+DIST_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' \
+    "$DIST_DIR/aula_l99_gui/pyproject.toml" 2>/dev/null || true)"
 if [ "${REBUILD:-}" = "1" ]; then
     "$SCRIPT_DIR/package.sh"
 elif [ ! -d "$DIST_DIR" ]; then
     echo "note: $DIST_DIR not found; running package.sh to compile it." >&2
+    "$SCRIPT_DIR/package.sh"
+elif [ "$DIST_VERSION" != "$PACKAGE_VERSION" ]; then
+    echo "note: $DIST_DIR is version ${DIST_VERSION:-<unknown>}, not" \
+        "$PACKAGE_VERSION; running package.sh to recompile it." >&2
     "$SCRIPT_DIR/package.sh"
 fi
 
