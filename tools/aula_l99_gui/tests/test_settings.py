@@ -125,6 +125,57 @@ def test_music_settings_are_plain_json(monkeypatch, tmp_path):
     assert data["music"]["amplitude"] == 10
 
 
+def test_start_on_login_defaults_to_false_when_no_file(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    assert settings.start_on_login() is False
+
+
+def test_start_on_login_round_trip(monkeypatch, tmp_path):
+    path = _config(monkeypatch, tmp_path)
+    settings.set_start_on_login(True)
+    assert settings.start_on_login() is True
+    assert path.exists()
+
+    settings.set_start_on_login(False)
+    assert settings.start_on_login() is False
+
+
+def test_start_hidden_defaults_to_true_when_no_file(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    assert settings.start_hidden() is True
+
+
+def test_start_hidden_round_trip(monkeypatch, tmp_path):
+    path = _config(monkeypatch, tmp_path)
+    settings.set_start_hidden(False)
+    assert settings.start_hidden() is False
+    assert path.exists()
+
+    settings.set_start_hidden(True)
+    assert settings.start_hidden() is True
+
+
+def test_start_on_login_and_hidden_share_the_startup_key(monkeypatch, tmp_path):
+    """Both fields live under the same "startup" dict, and setting one must
+    not clobber the other."""
+    _config(monkeypatch, tmp_path)
+    settings.set_start_on_login(True)
+    settings.set_start_hidden(False)
+    assert settings.start_on_login() is True
+    assert settings.start_hidden() is False
+
+
+def test_startup_settings_are_plain_json(monkeypatch, tmp_path):
+    import json
+
+    _config(monkeypatch, tmp_path)
+    settings.set_start_on_login(True)
+    settings.set_start_hidden(False)
+    with open(settings.config_path(), encoding="utf-8") as fh:
+        data = json.load(fh)
+    assert data["startup"] == {"login": True, "hidden": False}
+
+
 def test_music_settings_merge_on_partial_write(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     settings.set_music_settings({"rhythm": 2, "amplitude": 30})

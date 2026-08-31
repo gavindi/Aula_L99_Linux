@@ -146,3 +146,45 @@ def set_keyboard_settings(settings: dict) -> None:
         json.dump(data, fh, indent=2)
         fh.write("\n")
     tmp.replace(path)
+
+
+def start_on_login() -> bool:
+    """Whether the last-saved preference is to autostart this app at login.
+    ~/.config/autostart/aula-l99-gui.desktop (see autostart.py) is the file
+    every desktop environment actually reads; this is only so the Config
+    tab's checkbox can restore its state on the next launch."""
+    return bool(_read().get("startup", {}).get("login", False))
+
+
+def set_start_on_login(enabled: bool) -> None:
+    """Persist the start-on-login toggle state (see start_on_login())."""
+    data = _read()
+    data.setdefault("startup", {})["login"] = bool(enabled)
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    tmp.replace(path)
+
+
+def start_hidden() -> bool:
+    """Whether an autostart-launched instance starts hidden in the tray
+    (--start-hidden) rather than with its window shown. Defaults to True:
+    the natural "start on login" experience is to appear silently in the
+    tray, not pop a window open at login."""
+    return bool(_read().get("startup", {}).get("hidden", True))
+
+
+def set_start_hidden(hidden: bool) -> None:
+    """Persist the start-hidden toggle state (see start_hidden())."""
+    data = _read()
+    data.setdefault("startup", {})["hidden"] = bool(hidden)
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    tmp.replace(path)

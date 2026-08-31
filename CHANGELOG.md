@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.13] - 2026-08-31
+
+**The Config tab now has a "Start on login" option, with a "Start hidden in
+tray" toggle to go with it.** The app's `--tray`/`--start-hidden` flags
+already worked, but nothing installed them anywhere — a user had to launch
+the app by hand every session to get their lighting/monitor config running
+again. The new Startup group writes a standard XDG autostart entry
+(`~/.config/autostart/aula-l99-gui.desktop`) that relaunches with `--tray`
+always, and `--start-hidden` when the (default-on) hidden toggle is checked.
+The one real problem this raised: a running instance has to work out its own
+correct relaunch command, and that differs across all five package forms —
+a flatpak's internal `/app/bin/...` path is meaningless outside the sandbox
+(`flatpak run <app-id>` instead), a snap's `argv[0]` is under a
+revision-numbered path that rotates on every refresh (`/snap/bin/<name>`
+instead), an AppImage's `argv[0]` is a random per-run FUSE mount gone by the
+next login (the `APPIMAGE` env var instead), and a Nuitka-compiled
+deb/rpm/tarball binary or a plain dev checkout each need their own case too.
+If none of those resolve to something real, both checkboxes disable
+themselves with an explanatory tooltip rather than writing a broken entry.
+
+### Added
+- `autostart.py`: new module owning the XDG autostart `.desktop` file —
+  `is_supported()`, `is_installed()`, `install(hidden)`, `uninstall()` — plus
+  the per-package-form relaunch-command resolution described above and a
+  best-effort copy of the app's icon into the user's icon theme for package
+  forms that don't register it anywhere else (tarball without `install.sh`,
+  AppImage).
+- `settings.py`: `start_on_login()` / `set_start_on_login()` and
+  `start_hidden()` / `set_start_hidden()` (default `True`), stored under a
+  new `"startup"` key with the same atomic-write pattern as every other
+  setting here.
+- `config_tab.py`: a "Startup" group with "Start on login" and "Start hidden
+  in tray" checkboxes. The hidden checkbox is only enabled while login is
+  checked; a failed install/uninstall (permissions, disk full) reverts the
+  checkbox and reports through the existing debug log rather than leaving
+  the UI out of sync with the actual file.
+
+### Changed
+- `packaging/flatpak/io.github.gavindi.AulaL99Gui.yml`: added
+  `--filesystem=xdg-config/autostart:create` to `finish-args` — without it
+  the sandbox silently redirects the autostart write to
+  `~/.var/app/<id>/config/autostart`, which no host session manager reads,
+  so the checkbox would appear to work while doing nothing.
+
 ## [0.10.12] - 2026-08-31
 
 **The Config tab's System Monitor now has a 1-60s spinner for the CPU/GPU

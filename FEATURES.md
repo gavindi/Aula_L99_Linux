@@ -34,7 +34,6 @@ second table is the work backlog.
 | Reset Keyboard / Factory Reset | Absent |
 | Driver update / firmware update (keyboard + screen) | Absent |
 | Language selection | Vendor ships 5 languages; app is English-only |
-| Autostart on login | Absent (only tray) |
 | Lighting Direction control | Vendor has it; effect block in `protocol.py` has no direction byte |
 | 2.4G dongle colour/effect/settings | Partial — handshake + RTC-set confirmed; rest open |
 | Weather auto-fetch / "Store" page | App has no online sources (arguably a plus) |

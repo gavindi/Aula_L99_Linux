@@ -9,6 +9,11 @@ finish-args:
   - --socket=wayland
   - --socket=pulseaudio
   - --share=ipc
+  # Without this, a write to ~/.config/autostart (the "start on login"
+  # toggle) is silently redirected by the sandbox to
+  # ~/.var/app/<id>/config/autostart instead, which no host session manager
+  # ever scans -- the checkbox would appear to work while doing nothing.
+  - --filesystem=xdg-config/autostart:create
   # No portal exists for raw /dev/hidraw HID access, so this is the only way
   # this app can reach the keyboard from inside the sandbox. Flathub would
   # reject --device=all; that's fine here since this is a direct GitHub

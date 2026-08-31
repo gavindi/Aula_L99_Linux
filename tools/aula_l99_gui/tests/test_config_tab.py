@@ -160,3 +160,114 @@ def test_monitor_period_spinner_restores_saved_value(monkeypatch, tmp_path):
     settings.set_monitor_period_seconds(45)
     fresh = ConfigTab(_StubSelector(), DebugLog())
     assert fresh.monitor_period_spin.value() == 45
+
+
+def test_startup_checkboxes_default_state(tab):
+    assert tab.start_on_login_check.isChecked() is False
+    assert tab.start_hidden_check.isChecked() is True
+    assert tab.start_hidden_check.isEnabled() is False
+
+
+def test_startup_checkboxes_restore_saved_values(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings.set_start_on_login(True)
+    settings.set_start_hidden(False)
+    fresh = ConfigTab(_StubSelector(), DebugLog())
+    assert fresh.start_on_login_check.isChecked() is True
+    assert fresh.start_hidden_check.isChecked() is False
+    assert fresh.start_hidden_check.isEnabled() is True
+
+
+def test_constructing_tab_does_not_call_autostart_install_or_uninstall(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    settings.set_start_on_login(True)
+
+    calls = []
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install",
+                        lambda hidden: calls.append(("install", hidden)))
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.uninstall",
+                        lambda: calls.append(("uninstall",)))
+    ConfigTab(_StubSelector(), DebugLog())
+
+    assert calls == [], "constructing the tab must not write the autostart file"
+
+
+def test_toggling_start_on_login_on_calls_install_and_persists(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    calls = []
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install",
+                        lambda hidden: calls.append(hidden))
+    tab.start_on_login_check.setChecked(True)
+    assert calls == [True]  # start_hidden defaults to True
+    assert settings.start_on_login() is True
+
+
+def test_toggling_start_on_login_off_calls_uninstall_and_persists(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install", lambda hidden: None)
+    tab.start_on_login_check.setChecked(True)
+
+    calls = []
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.uninstall",
+                        lambda: calls.append(True))
+    tab.start_on_login_check.setChecked(False)
+    assert calls == [True]
+    assert settings.start_on_login() is False
+
+
+def test_toggling_start_hidden_while_login_checked_reinstalls_with_new_flag(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install", lambda hidden: None)
+    tab.start_on_login_check.setChecked(True)
+
+    calls = []
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install",
+                        lambda hidden: calls.append(hidden))
+    tab.start_hidden_check.setChecked(False)
+    assert calls == [False]
+    assert settings.start_hidden() is False
+
+
+def test_toggling_start_hidden_while_login_unchecked_only_persists_no_autostart_call(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    calls = []
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install",
+                        lambda hidden: calls.append(hidden))
+    tab.start_hidden_check.setChecked(False)
+    assert calls == []
+    assert settings.start_hidden() is False
+
+
+def test_start_hidden_checkbox_enablement_follows_login_checkbox(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.install", lambda hidden: None)
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.uninstall", lambda: None)
+
+    tab.start_on_login_check.setChecked(True)
+    assert tab.start_hidden_check.isEnabled() is True
+    tab.start_on_login_check.setChecked(False)
+    assert tab.start_hidden_check.isEnabled() is False
+
+
+def test_checkboxes_disabled_with_tooltip_when_autostart_unsupported(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr("aula_l99_gui.config_tab.autostart.is_supported", lambda: False)
+    fresh = ConfigTab(_StubSelector(), DebugLog())
+    assert fresh.start_on_login_check.isEnabled() is False
+    assert fresh.start_hidden_check.isEnabled() is False
+    assert fresh.start_on_login_check.toolTip() != ""
+
+
+def test_install_failure_reverts_checkbox_and_logs_to_debug_log(tab, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "aula_l99_gui.config_tab.autostart.install",
+        lambda hidden: (_ for _ in ()).throw(OSError("permission denied")))
+
+    messages = []
+    tab._debug_log.message.connect(messages.append)
+    tab.start_on_login_check.setChecked(True)
+
+    assert tab.start_on_login_check.isChecked() is False
+    assert settings.start_on_login() is False
+    assert any("permission denied" in message for message in messages)

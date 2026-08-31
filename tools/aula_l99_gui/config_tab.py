@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from aula_l99_hacky import protocol as kb_protocol
 
-from . import settings
+from . import autostart, settings
 from .debug_log import DebugLog
 from .device_tab import DeviceSelector
 from .keyboard_tab import (
@@ -50,10 +50,12 @@ class ConfigTab(QWidget):
         super().__init__()
         self._device_ready = False
         self._external_busy = False
+        self._debug_log = debug_log
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_keyboard_group())
         layout.addWidget(self._build_settings_group())
+        layout.addWidget(self._build_startup_group())
         layout.addWidget(self._build_monitor_group())
         layout.addWidget(self._build_poll_group())
         layout.addWidget(self._build_log_group(debug_log), stretch=1)
@@ -161,6 +163,56 @@ class ConfigTab(QWidget):
         settings.set_keyboard_settings(
             {"response_time": response, "sleep_time": sleep})
         self.settings_changed.emit(response, sleep)
+
+    def _build_startup_group(self) -> QGroupBox:
+        group = QGroupBox("Startup")
+        column = QVBoxLayout(group)
+
+        self.start_on_login_check = QCheckBox("Start on login")
+        self.start_on_login_check.setChecked(settings.start_on_login())
+        self.start_on_login_check.toggled.connect(self._on_start_on_login_toggled)
+        column.addWidget(self.start_on_login_check)
+
+        self.start_hidden_check = QCheckBox("Start hidden in tray")
+        self.start_hidden_check.setChecked(settings.start_hidden())
+        self.start_hidden_check.toggled.connect(self._on_start_hidden_toggled)
+        column.addWidget(self.start_hidden_check)
+
+        if not autostart.is_supported():
+            for box in (self.start_on_login_check, self.start_hidden_check):
+                box.setEnabled(False)
+                box.setToolTip(
+                    "Couldn't determine how to relaunch this installation, "
+                    "so start-on-login isn't available.")
+        else:
+            self.start_hidden_check.setEnabled(self.start_on_login_check.isChecked())
+
+        return group
+
+    def _on_start_on_login_toggled(self, checked: bool) -> None:
+        self.start_hidden_check.setEnabled(checked)
+        try:
+            if checked:
+                autostart.install(hidden=self.start_hidden_check.isChecked())
+            else:
+                autostart.uninstall()
+        except OSError as exc:
+            self._debug_log.append("Startup", f"couldn't update start-on-login: {exc}")
+            self.start_hidden_check.setEnabled(not checked)
+            self.start_on_login_check.blockSignals(True)
+            self.start_on_login_check.setChecked(not checked)
+            self.start_on_login_check.blockSignals(False)
+            return
+        settings.set_start_on_login(checked)
+
+    def _on_start_hidden_toggled(self, checked: bool) -> None:
+        settings.set_start_hidden(checked)
+        if not self.start_on_login_check.isChecked():
+            return
+        try:
+            autostart.install(hidden=checked)
+        except OSError as exc:
+            self._debug_log.append("Startup", f"couldn't update start-on-login: {exc}")
 
     def _build_monitor_group(self) -> QGroupBox:
         group = QGroupBox("System Monitor")
