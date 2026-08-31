@@ -91,6 +91,7 @@ export PATH="$PWD/$BUILD_VENV/bin:$PATH"
     --include-data-dir=aula_l99_gui/assets/layouts=aula_l99_gui/assets/layouts \
     --include-data-dir=aula_l99_gui/assets/device=aula_l99_gui/assets/device \
     --include-data-dir=aula_l99_gui/font=aula_l99_gui/font \
+    --include-data-files=aula_l99_gui/pyproject.toml=aula_l99_gui/pyproject.toml \
     --include-data-files="$SCRIPT_DIR/packaging/aula-l99-gui.desktop"=aula-l99-gui.desktop \
     --noinclude-qt-translations \
     --output-dir="$OUT_DIR" \

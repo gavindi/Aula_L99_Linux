@@ -33,6 +33,7 @@ from .device_utils import (
     list_keyboard_candidates,
     list_screen_devices,
 )
+from .version import APP_VERSION
 from .workers import KeyboardWorker, start_worker
 
 DONGLE_DETECTED_MESSAGE = (
@@ -187,6 +188,7 @@ class DeviceTab(QWidget):
         layout.addWidget(self.keyboard)
         layout.addWidget(self.screen)
         layout.addWidget(self._build_connection_group())
+        layout.addLayout(self._build_version_row())
 
         self.keyboard.changed.connect(self._on_keyboard_changed)
 
@@ -208,6 +210,15 @@ class DeviceTab(QWidget):
         label.setVisible(False)
         self.keyboard_image = label
         return label
+
+    def _build_version_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addStretch(1)
+        version_label = QLabel(f"v{APP_VERSION}")
+        version_label.setObjectName("VersionLabel")
+        version_label.setEnabled(False)  # themed dim, like the keyboard hint text
+        row.addWidget(version_label)
+        return row
 
     def _build_connection_group(self) -> QGroupBox:
         group = QGroupBox("Connection")

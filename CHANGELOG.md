@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.15] - 2026-09-01
+
+**The Device tab now shows the app's version number in its bottom-right
+corner.** There was no way to tell which build was running short of checking
+the packaging metadata by hand. `version.py` reads the number straight out of
+`pyproject.toml` (already the single source of truth `package.sh`'s tarball
+name and this changelog's own entries key off) rather than adding a fourth
+place it could drift out of sync; `package.sh` now bundles that file into the
+compiled build (it wasn't shipped before) at the same relative path so the
+Nuitka standalone binary — and everything downstream that repackages it,
+deb/rpm/snap/flatpak/AppImage alike — can still find it at runtime.
+
+### Added
+- `version.py`: new module, `APP_VERSION` parsed from `pyproject.toml` at
+  import time via a small regex (not `tomllib`, since this app's own
+  `requires-python` floor is 3.10 and `tomllib` is 3.11+).
+- `device_tab.py`: a dimmed `v{APP_VERSION}` label in the tab's bottom-right
+  corner, styled via the existing disabled-`QWidget` colour rule the same way
+  `key_assignment_dialog.py`'s hint text is.
+
+### Changed
+- `package.sh`: the Nuitka build now bundles `aula_l99_gui/pyproject.toml`
+  into the compiled dist so `version.py` can find it at runtime.
+
 ## [0.10.14] - 2026-09-01
 
 **The Keyboard tab now has a "Saved Keyboard Configs" panel, mirroring User
