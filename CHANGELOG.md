@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.19] - 2026-09-18
+
+**Found genuine, cleartext LT168 firmware content bundled inside the vendor's own
+`L99 ISP V1.23.exe`, answering "can we extract firmware from the device" with a
+qualified yes for one of three readings of that question.** Prompted by asking
+whether the LT7689->LT168B chip correction (`[0.10.17]`) unlocks firmware
+extraction. It doesn't for two of the three ways to read that question --
+running custom code is *harder* now (proprietary 32-bit RISC core, no public
+ARM/Thumb toolchain), and the documented wire protocol has no readback/dump
+command anywhere -- but the third reading, recovering the images that get
+*written* to the panel, turned out to be genuinely promising.
+
+### Found
+- `Windows/AULA L99/firmware/L99 ISP V1.23.exe` (67MB) -- the same file
+  `re_notes/flash_slot_table.md` already used for the six-entry flash
+  base-address table -- has only ~0x19400 bytes of declared PE sections
+  before its `.enigma1`/`.enigma2` markers, leaving a ~63MB span covered by
+  no declared section at all. Starting at file offset `0x36f0c0`, in the
+  clear (no encryption), sits a string table including `COMP0_Rising_Edge`/
+  `COMP0_Falling_Edge`/`COMP0_Test` -- debug strings naming the exact `COMP0`
+  peripheral from the LT168 register map -- alongside `Update Flash`,
+  `Flash Model:`, SD-card upgrade messages, and `UartTFT-II_Flash.bin` path
+  variants matching this repo's own AP-note-derived understanding of the
+  LT168 ISP/bootloader firmware almost exactly. This region also contains
+  the exact six-entry base-address table already confirmed from real wire
+  captures, tying it to real AULA L99 hardware, not a generic unrelated
+  sample. Full writeup, including what's confirmed vs. not, in the new
+  `tools/aula_l99_screen/re_notes/embedded_lt168_firmware.md`.
+- A candidate 712,704-byte region (file offset `0x364000`-`0x412000`) was
+  carved out for further work. Its exact outer boundaries aren't confirmed --
+  no per-product directory/index structure was found to delimit it cleanly,
+  so it likely contains adjacent unrelated bundled data at its edges.
+- A cheap RISC-V disassembly attempt on the carved content (via `capstone`)
+  failed almost immediately, consistent with the LT168 datasheet's own
+  description of a uniformly-fixed-16-bit-instruction RISC core -- unlike
+  RISC-V's mixed 16/32-bit encoding. No disassembler for the actual ISA is
+  available.
+
+### Fixed
+- `re_notes/screen_firmware_updater.md` claimed `Windows/AULA L99/firmware/`
+  was an empty directory in this checkout; it holds `L99 ISP V1.23.exe`
+  (above) and `L99 ENV1.03.exe` (2.2MB, still unexamined).
+
 ## [0.10.18] - 2026-09-18
 
 **Calculated the touchscreen's real GIF/video flash-slot capacity from the new

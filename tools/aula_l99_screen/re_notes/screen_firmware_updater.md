@@ -190,19 +190,24 @@ corruption check only, not an authenticity/signing barrier.
   directly -- much faster and more reliable than (a), matching how the
   keyboard's and touchscreen's *existing* protocols in this repo were both
   originally reverse-engineered (from captures, not static disassembly).
-- The big 194MB Enigma-wrapped exe hasn't been unpacked. It's the most
-  likely place the actual raw `HFD_Code_V2.x.bin`/`UartTFT-II_Flash.bin`
-  firmware images are bundled -- getting past Enigma Protector on it (or
-  finding another already-unpacked source) is the path to the actual
-  LT168-family machine code, separate from and beyond this PC-side tool's
-  own x86 logic. Note this is a proprietary **32-bit RISC** core (per
-  `documentation/LT168_BRFDS_V21_Eng.pdf` S2.5), not ARM Cortex-M4 as
-  earlier text here assumed -- no public ARM/Thumb toolchain applies to
-  whatever ISA this actually is.
-- `Windows/AULA L99/firmware/` (present in the installed app tree) is an
-  empty directory in this checkout -- worth checking whether a real install
-  populates it with exactly these `.bin` files before assuming they only
-  exist inside the big installer.
+- The big 194MB Enigma-wrapped exe still hasn't been unpacked, but this may
+  no longer be necessary: `Windows/AULA L99/firmware/L99 ISP V1.23.exe`
+  (67MB, present in this checkout -- see correction below) turns out to
+  hold real, cleartext LT168 firmware content of its own, found and carved
+  out in **`re_notes/embedded_lt168_firmware.md`** -- read that file for
+  the full finding. Not yet a clean, isolated `MCU_Code.bin`/
+  `UartTFT-II_Flash.bin` extraction, but a genuine, confirmed lead that
+  doesn't require breaking Enigma Protector at all. Note this chip is a
+  proprietary **32-bit RISC** core (per `documentation/LT168_BRFDS_V21_Eng.pdf`
+  S2.5), not ARM Cortex-M4 as earlier text here assumed -- no public
+  ARM/Thumb toolchain applies to whatever ISA this actually is, and a quick
+  RISC-V disassembly attempt on the carved content failed immediately too
+  (see `embedded_lt168_firmware.md`).
+- **Correction**: `Windows/AULA L99/firmware/` is not an empty directory --
+  it holds `L99 ISP V1.23.exe` (67MB, see above) and `L99 ENV1.03.exe`
+  (2.2MB, still unexamined). This was either wrong even when this file was
+  first written, or the checkout has since gained these files; either way,
+  don't assume it's empty.
 - The 2.2MB "keyboard reset firmware" exe is a separate, unexamined tool --
   no string overlap found with this one, so it's presumably a different
   protocol entirely (the keyboard's own MCU, not the screen).
