@@ -229,7 +229,7 @@ hidraw ACL). No root otherwise.
    disassembled where captures weren't enough: `pic_scan.dll` for the image
    pipeline, and the Enigma-Protector-wrapped screen firmware updater
    (unpacked sections in [documentation/Firmware/](documentation/Firmware/))
-   for a possible custom-code path to the panel's LT7689 controller.
+   for a possible custom-code path to the panel's LT168B controller.
    Working notes live in each tool's `re_notes/` directory.
 
 ### What's still open

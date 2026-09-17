@@ -1339,15 +1339,21 @@ MAX_GIF_FRAMES = 200
 # A real methodology shift: identified the underlying display chip and
 # disassembled key functions in the vendor's own encoder DLL, rather than
 # more hardware experiments. pic_scan.dll exports Gif_to_data AND
-# Gif_to_data_LT7689 -- the panel is built on Levetop's LT7689, a
-# Cortex-M4 serial UART TFT graphics controller. Its public datasheet and
-# application notes document only a generic serial playback command
-# (Display GIF, opcode 0x88 -- "start playing file N," not a format
-# spec) and a companion tool, LT_IMAGE_TOOL.exe, whose own output format
-# is confirmed plain, uncompressed 16bpp/24bpp RGB -- no palette, no RLE.
-# So the entire RLE/8-slot-dithering/528-byte-prefix scheme is AULA's own
-# bespoke compression layer, not a documented chip-vendor format -- it
-# exists nowhere except inside this DLL and our own reverse-engineering.
+# Gif_to_data_LT7689, which originally suggested an LT7689. CORRECTED:
+# the touchscreen's actual schematic (documentation/Schematics/SCH_LT168/,
+# silkscreened LT168B) confirms the real chip is Levetop's LT168B, which
+# uses a proprietary 32-bit RISC core (documentation/LT168_BRFDS_V21_Eng.pdf
+# S2.5) -- not ARM Cortex-M4. The _LT7689 export name is a red herring
+# (see re_notes/pic_scan_dll.md). The chip's public datasheet/app notes
+# document only a generic serial playback command (Display GIF, opcode
+# 0x88 -- "start playing file N," not a format spec, framed with start
+# byte 0xAA / CRC-CCITT, structurally unlike our own 5A A5 / CRC-16-ARC
+# protocol) and a companion tool, LT_IMAGE_TOOL.exe, whose own output
+# format is confirmed plain, uncompressed 16bpp/24bpp RGB -- no palette,
+# no RLE. So the entire RLE/8-slot-dithering/528-byte-prefix scheme is
+# AULA's own bespoke compression layer, not a documented chip-vendor
+# format -- it exists nowhere except inside this DLL and our own
+# reverse-engineering.
 #
 # pic_scan.dll isn't fully stripped -- recovered full demangled C++ export
 # names and disassembled the GIF-relevant ones (32-bit x86, RVAs resolved
@@ -1638,14 +1644,41 @@ VENDOR_MAX_GIF_BLOB_BYTES = MAX_GIF_FRAMES * (
 # the hardware, and must never be used as a bound. See SLOT_CAPACITY.
 VENDOR_OBSERVED_MAX_GIF_BLOB_BYTES = 315392
 
-# Enforced, via check_upload_fits(). Not an address difference -- the GIF
-# slot is the last entry in the firmware's partition table and has no next
-# base to be measured against, so this is the vendor's own ceiling standing
-# in for one. raw-bitmap frames encode far larger than the vendor's own ever
-# did, so a long dithered animation still sails past it; that upload is the
-# one worth stopping, since nothing establishes that the flash it would
-# reach is mapped at all.
-SLOT_CAPACITY[GIF_FLASH_BASE] = VENDOR_MAX_GIF_BLOB_BYTES
+# The touchscreen's external flash chip, per the LT168B reference schematic's
+# own BOM (documentation/Schematics/SCH_LT168/, footprint-compatible either/or
+# on the QSPI0 bus): a 16MB NOR (GD25Q128E/XT25F128B) or a 128MB NAND
+# (GD5F1G/W25N01G). GIF_FLASH_BASE (0x04240000, ~66.25MB) already exceeds the
+# 16MB NOR option's entire capacity -- and every other NOR part in the ISP
+# tool's own embedded JEDEC auto-detect table, which tops out at 64MB -- so
+# only the 128MB NAND option can be addressed that high at all, assuming (as
+# the rest of this module already does) that this address field is a flat
+# byte offset into the chip. CHUNK_SIZE (2048, a standard NAND page size) and
+# REGION_SIZE (0x20000 = 64 pages, a standard NAND erase-block size) fit this
+# independently. Full derivation: re_notes/flash_slot_table.md, "The flash
+# chip: BOM options from the new schematic."
+LT168B_NAND_FLASH_CAPACITY_BYTES = 0x08000000  # 128MB, GD5F1G / W25N01G
+
+# GIF is the last entry in the firmware's partition table, with no next base
+# to subtract a size from -- this treats 0x04000000 as approximately the
+# chip's own byte 0 (slot 1 sits just 0x60000 past it, reading as "first slot
+# starts right after a small reserved/config region") to get an upper bound
+# from the chip's total capacity instead. A real, hardware-backed estimate,
+# but still an inference chain (which BOM option is actually populated;
+# whether 0x04000000 truly is close to byte 0) -- weaker than the
+# BKG/PHOTO_FRAME slot sizes above, which are confirmed twice over. See
+# re_notes/flash_slot_table.md for the full reasoning and its limits.
+ESTIMATED_GIF_SLOT_CAPACITY_BYTES = (
+    LT168B_NAND_FLASH_CAPACITY_BYTES - GIF_FLASH_BASE
+)  # 0x03DC0000, ~61.75MB
+
+# Enforced, via check_upload_fits(). Supersedes the older
+# VENDOR_MAX_GIF_BLOB_BYTES stand-in (13.2MB, derived purely from the
+# vendor's own format limits, kept above for reference) now that a
+# hardware-backed estimate exists -- strictly larger, so this only relaxes
+# what was an overly conservative cap: protocol.py already noted a 200-frame
+# raw-bitmap (dithered) animation runs to ~30.8MB, which the old cap wrongly
+# refused despite there being no evidence the flash itself couldn't hold it.
+SLOT_CAPACITY[GIF_FLASH_BASE] = ESTIMATED_GIF_SLOT_CAPACITY_BYTES
 
 # Bytes 0-1 and 6-7 of every frame's sub-header have been byte-identical
 # across every captured frame regardless of content, in every capture in

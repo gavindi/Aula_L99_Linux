@@ -1,7 +1,9 @@
 # Screen/keyboard firmware updater disassembly notes
 
 Working notes for a static-analysis thread investigating whether custom code
-could be flashed to the touchscreen's LT7689 controller, prompted by the user
+could be flashed to the touchscreen's LT168B controller (confirmed by schematic
+-- see the correction note in "Findings" below; earlier text in this session
+assumed LT7689), prompted by the user
 asking "is there enough in the firmware to figure out how to run our own code
 on the touchscreen?" Purpose: this file exists so the next round doesn't have
 to re-derive the address calibration or re-locate the flashing routine from
@@ -150,10 +152,21 @@ strings used in clearly separate code blocks, not just repeated text:
   presumably the keyboard's own controller or a bridge chip, not the display
   controller itself.
 - Phase 2 (~`0x40899d` onward): `"Fail to Connect a 268x device"`, reads
-  `/UartTFT-II_Flash.bin`. "268x" is almost certainly shorthand for the
-  LT768x display-controller family the LT7689 belongs to (see
-  `documentation/LT7689_DS_V13_ENG.pdf`) -- this is the phase that actually
-  targets the touchscreen.
+  `/UartTFT-II_Flash.bin` -- this is the phase that actually targets the
+  touchscreen. **Correction**: the touchscreen's chip is confirmed **LT168B**
+  by direct schematic evidence (`documentation/Schematics/SCH_LT168/`,
+  titled `LT168B_Demo_V1.2`, silkscreened `LT168B` on U3) -- not LT7689, and
+  the earlier guess that "268x" meant "LT768x, the family LT7689 belongs to"
+  doesn't hold up either: `documentation/LT_UartTFT_AP Note_V10_ENG.pdf`'s own
+  supported-chip table lists LT268B/LT268C/LT268D as real, separate chips in
+  Levetop's lineup, distinct from LT168. "268x" is best read as generic
+  vendor/tooling terminology carried over from that older product line, not a
+  reliable identifier of this board's actual chip -- not worth
+  over-interpreting further. (The old `documentation/LT7689_DS_V13_ENG.pdf`
+  this paragraph used to cite has since been removed from the tree.)
+  `UartTFT-II_Flash.bin` itself is corroborating, not contradicting: both
+  new LT168 datasheets describe flashing `UartTFT_Flash-II.bin` to external
+  SPI flash -- the same filename, `-II` suffix and all.
 
 Every integrity check found so far is a **CRC** (`Mcu code, CRC =`, `Flash
 code, FileCRC =`, `FlashCRC =`) -- no signature/RSA/AES-related string
@@ -181,8 +194,11 @@ corruption check only, not an authenticity/signing barrier.
   likely place the actual raw `HFD_Code_V2.x.bin`/`UartTFT-II_Flash.bin`
   firmware images are bundled -- getting past Enigma Protector on it (or
   finding another already-unpacked source) is the path to the actual
-  Cortex-M4 machine code, separate from and beyond this PC-side tool's own
-  x86 logic.
+  LT168-family machine code, separate from and beyond this PC-side tool's
+  own x86 logic. Note this is a proprietary **32-bit RISC** core (per
+  `documentation/LT168_BRFDS_V21_Eng.pdf` S2.5), not ARM Cortex-M4 as
+  earlier text here assumed -- no public ARM/Thumb toolchain applies to
+  whatever ISA this actually is.
 - `Windows/AULA L99/firmware/` (present in the installed app tree) is an
   empty directory in this checkout -- worth checking whether a real install
   populates it with exactly these `.bin` files before assuming they only

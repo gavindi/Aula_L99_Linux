@@ -200,18 +200,93 @@ No capture crosses `0x60000` — but see above for why that establishes nothing 
 hardware. It is recorded here as the per-capture extents, which are useful in themselves,
 not as a bound.
 
+## The flash chip: BOM options from the new schematic, and why NAND is the only one that fits
+
+Resolves the "flash chip's own size" item from "Where to look next" below (kept in place,
+struck through in spirit rather than deleted, since the reasoning that led here is worth
+keeping). Prompted by new material added to `documentation/` after this file was mostly
+written: the touchscreen's own schematic (`documentation/Schematics/SCH_LT168/`) and the
+correct LT168 datasheets — the chip was previously misidentified as an LT7689; see the
+correction in this same file's intro and in `re_notes/pic_scan_dll.md`.
+
+**The schematic's own BOM is a footprint-compatible either/or**, printed on every
+`SCH_LT168B_Demo_V1.x` page that shows the external flash, sitting on the QSPI0 bus:
+
+| Type | Part numbers | Capacity |
+|---|---|---|
+| NOR | GD25Q128E / XT25F128B | 128Mbit = **16 MB** |
+| NAND | GD5F1G / W25N01G | 1Gbit = **128 MB** |
+
+The datasheet's own §4.2 address map (LT168's CPU/AHB bus map: registers at `0x4000_0000`,
+QSPI0/1/2 flash *windows* at `0x6000_0000`/`0x7000_0000`/`0x8000_0000`) does not help decide
+between them directly — none of this file's slot addresses (`0x0406_0000`...`0x0424_0000`)
+fall inside any labeled region of it, confirming (again) that the wire protocol's address
+field is a separate, vendor-invented logical address, not a raw LT168 bus address.
+
+**The arithmetic decides it anyway.** `GIF_FLASH_BASE = 0x04240000` is ≈66.25 MB — already
+bigger than the 16 MB NOR option's entire capacity, and bigger than every NOR part in the
+ISP tool's own embedded JEDEC auto-detect table (found separately in `L99 ISP V1.23.exe`;
+that table's NOR entries top out at 64 MB, its NAND entries run 128 MB-1 GB). If the
+protocol's "address" field is a flat byte offset into the flash chip — the working
+assumption this whole file already rests on, and the only one that makes the `0x60000`
+stride coherent — then the 16 MB NOR option is **physically incapable** of being addressed
+that high at all. Only the 128 MB NAND option (GD5F1G/W25N01G) can reach `0x04240000` with
+room to spare. This isn't a coin flip between two BOM choices; one of them is ruled out by
+an address this project already has real captures writing to.
+
+**Independent structural evidence this is NAND, not NOR.** `protocol.py`'s own
+`CHUNK_SIZE = 2048` matches the standard NAND page size (visible directly in the JEDEC
+table's own entries, e.g. `W25N02GV: page=2048`), and `REGION_SIZE = 0x20000` (128 KiB) is
+exactly 64 pages — a completely ordinary NAND erase-block size. `SLOT_STRIDE = 0x60000` is
+exactly 3 erase blocks per slot. The "commit" packet sent after each filled 128 KiB region
+reads naturally as a NAND block-program/mark-valid step, not an arbitrary chunking choice.
+Nobody lands on these exact numbers by accident designing for NOR, where erase granularity
+is usually 4-64KB sectors with no fixed page-size concept at all; this is what a
+NAND-flash-native protocol looks like.
+
+**The vendor's own assets corroborate needing a large chip.** The stock animations shipped
+in `Windows/AULA L99/gif/` are 9-18 MB as *standard, LZW-compressed* `.gif` files —
+`AULA L99/0.gif` (214 frames) is 15,423,564 bytes, `用户动画(1)/1.gif` (200 frames) is
+18,315,694 bytes. These are the source files, not panel-format blobs, and standard GIF's
+LZW compression is presumably tighter than the panel's own simple RLE/dither format — so
+these are a floor, not an estimate, on the re-encoded size. Already well above the format's
+own `VENDOR_MAX_GIF_BLOB_BYTES` stand-in (13.2 MB) before any re-encoding, and a 16 MB NOR
+chip could not hold even one such asset alongside the five other fixed slots.
+
+**The calculation**, given the 128 MB NAND option, and treating `0x04000000` as
+approximately the chip's own byte 0 (reasonable since slot 1 sits just `0x60000` past it —
+reading naturally as "first slot starts right after a small reserved/config region," not as
+an arbitrary large offset with unaccounted space below it):
+
+```
+chip capacity           = 0x08000000  (128 MB, GD5F1G / W25N01G)
+GIF_FLASH_BASE           = 0x04240000  (~66.25 MB)
+remaining GIF capacity   = 0x08000000 - 0x04240000 = 0x03DC0000  (~61.75 MB)
+```
+
+**This is a real, hardware-backed estimate — but still an inference chain**, weaker than
+the BKG/PHOTO_FRAME slot sizes above (confirmed twice over: base-subtraction *and*
+firmware-table agreement). It rests on two assumptions: the schematic's NAND BOM option is
+the one actually populated (plausible, but not read off a real unit's JEDEC ID), and
+`0x04000000` is close to the chip's true byte 0 (plausible from the partition layout's
+shape, not independently confirmed). Treat `0x03DC0000` as the best current estimate, not a
+hardware-measured fact — the same distinction this file has drawn throughout.
+
 ## What this does and doesn't establish
 
 Establishes: the panel's firmware holds a six-entry list of flash bases on a uniform
 `0x60000` stride; the background and photo-frame slots are `0x60000` each, now confirmed
-twice over (base subtraction and the table agreeing); and the vendor's PC-side software
-contains no flash map at all.
+twice over (base subtraction and the table agreeing); the vendor's PC-side software
+contains no flash map at all; and the flash chip is a 128 MB NAND part (GD5F1G/W25N01G),
+per the schematic's BOM and the arithmetic above ruling out every NOR alternative.
 
-Does not establish: the GIF slot's extent. It is bounded below by roughly 22 MB if the
-vendor's own 214-frame asset is uploadable through this path at real-content rates, and
-above by nothing known. `VENDOR_MAX_GIF_BLOB_BYTES` (13.2 MB) remains the stand-in in
-`protocol.py` — the format's own ceiling, which is at least a figure the vendor's behaviour
-supports.
+Does not establish, with full certainty: the GIF slot's exact extent. It is bounded below
+by roughly 22 MB if the vendor's own 214-frame asset is uploadable through this path at
+real-content rates, and now has a reasoned upper estimate of `0x03DC0000` (~61.75 MB) from
+the NAND capacity calculation above — an inference chain, not a direct measurement.
+`SLOT_CAPACITY[GIF_FLASH_BASE]` in `protocol.py` now enforces this estimate in place of the
+older `VENDOR_MAX_GIF_BLOB_BYTES` (13.2 MB) format-derived stand-in, which remains
+documented for reference as a separate, distinctly-weaker figure.
 
 No seventh table entry was found: `0x042A0000` occurs 74 times across the file and
 `0x04300000` 299 times, both in the noise band for arbitrary 64KB-aligned values, and
@@ -221,18 +296,17 @@ Also unidentified: slots 1-3 (`0x04060000`, `0x040C0000`, `0x04120000`).
 
 ## Where to look next
 
-The open question is now specifically "what is the extent of the region starting at
-`0x04240000`", and the table alone cannot answer it. Better targets:
+The flash-chip-size angle above is now resolved to a reasoned estimate; two ways to firm it
+up further remain open:
 
-- The **flash chip's own size**, from the ISP/updater code — a part number or a
-  capacity constant would bound the whole map at once and is likely present in the
-  updater, which has to erase and program it.
 - The **erase-sector loop** in the same firmware: whatever it erases before writing an
-  animation is the slot, stated directly rather than inferred from a base list.
+  animation is the slot, stated directly rather than inferred from a base list or a BOM
+  capacity figure.
 - A capture of the **vendor uploading one of its own stock GIFs**. There is still no such
   capture — every one in `wireshark_dumps/` is a 2-3 frame hand-made test — and it would
   settle both the real per-frame rate and the true maximum in one shot. This is the cheapest
-  and most decisive of the three.
+  and most decisive of the two, and would also confirm or refute the `0x04000000`≈byte-0
+  assumption the capacity estimate above rests on.
 
 ## Reproducing
 

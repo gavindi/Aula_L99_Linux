@@ -822,15 +822,41 @@ encoder scope.
 **Identified the underlying display chip, and disassembled the vendor's
 own encoder DLL to trace the real dithering pipeline — a methodology
 shift from hardware experiments, banked partway through.** `pic_scan.dll`
-exports both `Gif_to_data` and `Gif_to_data_LT7689`: the panel is built
-on Levetop's **LT7689**, a Cortex-M4 serial UART TFT graphics controller.
-Its public datasheet/app notes document only a generic serial playback
-command (`Display GIF`, opcode `0x88` — "start playing file N," not a
-format spec) and confirm the companion `LT_IMAGE_TOOL.exe`'s own output
-is plain, uncompressed 16bpp/24bpp RGB — no palette, no RLE. So our
-entire RLE/8-slot-dithering/528-byte-prefix scheme is **AULA's own
-bespoke compression layer**, undocumented anywhere except this DLL and
-our own reverse-engineering.
+exports both `Gif_to_data` and `Gif_to_data_LT7689`, which originally led
+here to identifying the chip as an LT7689. **Corrected**: the touchscreen's
+actual schematic (`documentation/Schematics/SCH_LT168/`, titled
+`LT168B_Demo_V1.2`) silkscreens its display controller (U3) as
+**LT168B** — direct hardware evidence, and stronger than a DLL export
+name. Per `documentation/LT168_BRFDS_V21_Eng.pdf` §2.5, LT168B uses a
+proprietary **32-bit RISC core** (200MHz, fixed 16-bit instructions), not
+ARM Cortex-M4 as previously assumed — relevant to "can custom code run on
+it," since no public ARM/Thumb toolchain applies to this ISA. The
+`_LT7689` export name is most likely a red herring: Levetop's own sample
+project data (`documentation/UI_Editor_V3_204F8.zip`,
+`PROJECT/*/BINFILE/LCDInformation.ini`) has a `768Type=7689` field among a
+whole family of numeric type codes shared across its LT768-series project
+format, and separately the LT7689 is a real but different, older sibling
+chip Levetop's own `LT_UartTFT_AP Note_V10_ENG.pdf` uses as its
+illustrative example — either origin plausibly explains the export name
+without it identifying this board's actual chip.
+
+The `Display GIF` opcode `0x88` claim still holds, re-verified against the
+*correct* documentation this time: `documentation/LT_UartTFT_AP Note_V10_ENG.pdf`
+independently documents the same command, framed with start byte `0xAA`,
+CRC-CCITT (poly `0x1021`), and a 4-byte end code — confirmed structurally
+different from our own raw-upload protocol (magic `5A A5`, CRC-16/ARC
+`0xA001` reflected, 32-bit flash address) and still just a "start playing
+file N" playback command, not a format spec. So our entire
+RLE/8-slot-dithering/528-byte-prefix scheme remains **AULA's own bespoke
+compression layer**, undocumented anywhere in Levetop's own material —
+just checked against the right chip's docs now. One more piece of
+independent corroboration turned up along the way: `documentation/UI Editor II/SerialPortCommands.csv`
+frames its own commands with the same `5A A5` magic bytes and the same
+CRC-16/ARC (`0xA001` reflected) this repo's `crc16_packet()`/
+`crc16_modbus()` already implement (for a different, 16-bit widget-address
+command, not our 32-bit flash upload) — good confirmation our CRC
+reverse-engineering was right, from a source we didn't have when we
+derived it.
 
 `pic_scan.dll` isn't fully stripped, so its C++ export names were
 recoverable. Disassembling the GIF-relevant ones traced the real

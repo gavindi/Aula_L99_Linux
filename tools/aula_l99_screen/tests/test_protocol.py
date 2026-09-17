@@ -492,12 +492,13 @@ def test_an_unknown_address_has_no_capacity_to_check_against():
     protocol.check_upload_fits(10_000_000, 0x0DEADBEE)
 
 
-def test_the_gif_slot_is_capped_at_the_vendor_ceiling():
+def test_the_gif_slot_is_capped_at_the_estimated_hardware_ceiling():
     assert (protocol.SLOT_CAPACITY[protocol.GIF_FLASH_BASE]
-            == protocol.VENDOR_MAX_GIF_BLOB_BYTES)
+            == protocol.ESTIMATED_GIF_SLOT_CAPACITY_BYTES)
     with pytest.raises(ValueError):
-        protocol.build_upload(b"\x00" * (protocol.VENDOR_MAX_GIF_BLOB_BYTES + 1),
-                              protocol.GIF_FLASH_BASE)
+        protocol.build_upload(
+            b"\x00" * (protocol.ESTIMATED_GIF_SLOT_CAPACITY_BYTES + 1),
+            protocol.GIF_FLASH_BASE)
 
 
 def test_the_two_measurable_slots_match_the_firmware_table_stride():

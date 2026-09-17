@@ -5,6 +5,101 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.18] - 2026-09-18
+
+**Calculated the touchscreen's real GIF/video flash-slot capacity from the new
+LT168B schematic, and raised the enforced upload cap to match.** The GIF
+slot (`GIF_FLASH_BASE`) is the last entry in the panel's firmware partition
+table, with no next base to subtract a size from, so the enforced ceiling
+had been standing in with `VENDOR_MAX_GIF_BLOB_BYTES` (13.2 MB) -- a figure
+derived purely from the vendor's own format limits (`MAX_GIF_FRAMES=200` x a
+16-bit content-length field), not from anything about the actual flash
+hardware.
+
+### Fixed
+- **GIF/video upload cap raised from ~13.2 MB to ~61.75 MB
+  (`0x03DC0000`)**: the LT168B reference schematic
+  (`documentation/Schematics/SCH_LT168/`) lists the external flash as a
+  footprint-compatible either/or BOM choice -- a 16MB NOR (GD25Q128E/
+  XT25F128B) or a 128MB NAND (GD5F1G/W25N01G). `GIF_FLASH_BASE` (0x04240000,
+  ~66.25MB) already exceeds the entire 16MB NOR option's capacity, and every
+  other NOR part in the ISP tool's own embedded JEDEC auto-detect table
+  (which tops out at 64MB) -- so only the 128MB NAND option can be addressed
+  that high at all, given the working assumption (already load-bearing
+  throughout this module) that the protocol's address field is a flat byte
+  offset into the chip. Independently corroborated: `CHUNK_SIZE` (2048) and
+  `REGION_SIZE` (0x20000 = 64 pages) already matched standard NAND
+  page/erase-block sizes, and the vendor's own stock animations
+  (`Windows/AULA L99/gif/*.gif`, 9-18MB as standard LZW-compressed source
+  files) already exceeded the old 13.2MB cap before any re-encoding. Since
+  the new cap only *relaxes* an overly conservative limit, and
+  `protocol.py`'s own comments already flagged that a 200-frame raw-bitmap
+  (dithered) animation runs to ~30.8MB and was being wrongly refused, this
+  unblocks real uploads rather than changing what the tool protects against.
+  The new estimate is documented as an inference chain (which BOM option is
+  actually populated; whether `0x04000000` is really close to the chip's
+  byte 0), not a hardware measurement -- see
+  `re_notes/flash_slot_table.md`'s new "The flash chip" section for the full
+  derivation and its limits. The older format-derived figure
+  (`VENDOR_MAX_GIF_BLOB_BYTES`) remains in `protocol.py` for reference,
+  just no longer the enforced value.
+
+## [0.10.17] - 2026-09-18
+
+**Corrected the touchscreen's identified display chip: it's a Levetop
+LT168B, not the LT7689 concluded in `[0.7.7]`.** That earlier
+identification rested entirely on one piece of evidence -- `pic_scan.dll`
+exporting a function named `Gif_to_data_LT7689` -- and new datasheets,
+an application note, and the touchscreen's own schematic (all added to
+`documentation/` this round) show that inference was wrong.
+
+### Fixed
+- **Chip identity**: `documentation/Schematics/SCH_LT168/` (titled
+  `LT168B_Demo_V1.2`) silkscreens the touchscreen's actual display
+  controller (U3) as **LT168B** -- direct hardware evidence, stronger
+  than a DLL export-name substring. Per `documentation/LT168_BRFDS_V21_Eng.pdf`
+  S2.5, LT168B uses a proprietary **32-bit RISC core** (200MHz, fixed
+  16-bit instructions), not ARM Cortex-M4 as previously assumed --
+  relevant to "can custom code run on it," since no public ARM/Thumb
+  toolchain applies to this ISA. The `_LT7689` export name is now
+  understood to be a red herring rather than a chip identification:
+  LT7689 is a real but different, older Levetop chip used as the
+  illustrative example in Levetop's own `LT_UartTFT_AP Note_V10_ENG.pdf`,
+  and separately Levetop's shared LT768-series project format has a
+  numeric `768Type` field whose valid values include `7689` among many
+  others (seen in a sample project inside `documentation/UI_Editor_V3_204F8.zip`).
+  Corrected in `README.md`, `tools/aula_l99_screen/README.md`,
+  `tools/aula_l99_screen/protocol.py`, and
+  `tools/aula_l99_screen/re_notes/{screen_firmware_updater,pic_scan_dll}.md`.
+- The `"268x"` string in the firmware updater's error messages
+  (`screen_firmware_updater.md`) was previously glossed as "LT768x, the
+  family LT7689 belongs to," citing the now-deleted
+  `documentation/LT7689_DS_V13_ENG.pdf`. The new AP note's own
+  supported-chip table lists LT268B/LT268C/LT268D as real, separate chips
+  in Levetop's lineup, distinct from LT168 -- "268x" is best read as
+  generic vendor/tooling terminology carried over from that older
+  product line, not a reliable identifier of this board's actual chip.
+
+### Verified
+- The rest of `[0.7.7]`'s conclusion survives, re-checked against the
+  correct chip's documentation instead of the wrong one: the new AP note
+  independently documents the same `Display GIF` command (opcode `0x88`,
+  "start playing file N," framed with start byte `0xAA` and CRC-CCITT --
+  structurally unlike our own `5A A5`/CRC-16-ARC upload protocol), still
+  just a playback command, not a format spec. AULA's RLE/8-slot-
+  dithering/528-byte-prefix scheme remains its own bespoke compression
+  layer, undocumented anywhere in Levetop's own material.
+- `documentation/UI Editor II/SerialPortCommands.csv` (the vendor's real
+  UI-Editor-II project data) frames its own commands with the same `5A A5`
+  magic bytes and the same CRC-16/ARC (`0xA001` reflected) this repo's
+  `crc16_packet()`/`crc16_modbus()` already implement, for a different
+  16-bit widget-address command rather than our 32-bit flash upload --
+  independent corroboration the CRC reverse-engineering was correct.
+- No protocol-level code changed: nothing in `protocol.py`'s addresses,
+  opcodes, or CRC handling was ever derived *from* the LT7689 datasheet --
+  it was only ever cited in prose to argue the wire format is undocumented,
+  and that argument holds against the correct datasheet too.
+
 ## [0.10.16] - 2026-09-01
 
 **`make_deb.sh` and its siblings no longer silently repackage a stale

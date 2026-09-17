@@ -23,3 +23,8 @@ Aula_L99.code-workspace
 tools/aula_l99_hacky/capture/wine_ioctl_shim.so
 tools/aula_l99_hacky/capture/logs/
 
+#Unpacked documentation
+/documentation/UI Editor II
+/documentation/UI Emulator II
+
+

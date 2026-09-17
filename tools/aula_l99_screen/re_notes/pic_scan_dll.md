@@ -10,6 +10,22 @@ detail (commands, addresses, byte patterns) behind it.
 File: `Windows/AULA L99/qt-tool/pic_scan.dll`, PE32, 51712 bytes, image base `0x6a9c0000`,
 not fully stripped (C++ export names recoverable via the export table).
 
+**Correction (added after this file was written):** ordinal 15's `_LT7689` suffix (below)
+originally led `README.md`/`protocol.py` to conclude the touchscreen's chip was an LT7689.
+Direct schematic evidence since confirmed the real chip is a **LT168B**
+(`documentation/Schematics/SCH_LT168/`, titled `LT168B_Demo_V1.2`, silkscreened `LT168B`)
+— a different, later Levetop part with a different core (32-bit RISC, not Cortex-M4; see
+`documentation/LT168_BRFDS_V21_Eng.pdf` S2.5). This file's own findings (the export table,
+the RLE/palette/dithering pipeline trace) are unaffected — none of it depended on which
+chip the exported function names reference. The `_LT7689` name itself is most likely a red
+herring rather than a real identification: LT7689 is a genuine but different, older Levetop
+chip (Levetop's own `LT_UartTFT_AP Note_V10_ENG.pdf` uses it as its illustrative example),
+and separately Levetop's shared LT768-series project format has a numeric `768Type` field
+whose valid values include `7689` among many others (seen in a sample project inside
+`documentation/UI_Editor_V3_204F8.zip`, `PROJECT/*/BINFILE/LCDInformation.ini`) — either
+origin plausibly explains the export name without it naming this board's actual chip. Don't
+re-derive "LT7689" from this export name again.
+
 ## Tooling
 
 ```bash
