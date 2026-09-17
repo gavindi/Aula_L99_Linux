@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.20] - 2026-09-18
+
+**Narrowed `[0.10.19]`'s firmware find to two specific candidate images, each
+carved out to a file.** Searched the whole of `L99 ISP V1.23.exe` for every
+occurrence of the found string table's most distinctive strings
+(`COMP0_Rising_Edge`, `Update Flash`, `Heap and stack collision`) and found
+each exactly twice, ~305KB apart, confirming two separate embedded firmware
+images rather than one -- almost certainly the `HFD_Code_V2.2.bin`/
+`HFD_Code_V2.3.bin` pair the PC-side updater tries in sequence
+(`re_notes/screen_firmware_updater.md`'s phase-1 finding). The second
+image's string table isn't byte-identical to the first (it additionally has
+`DMA Configuration Error` strings), consistent with it being the newer
+version. Each image independently contains its own copy of this project's
+six-entry flash partition table.
+
+### Found
+- `candidate_isp_fw_image_A_0x364000-0x3b9000.bin` (348,160 bytes) and
+  `candidate_isp_fw_image_B_0x3b9000-0x400000.bin` (290,816 bytes), carved
+  to the session scratchpad. High confidence these are two real, distinct
+  LT168 firmware builds; lower confidence on the exact byte boundaries --
+  no clean separator was found between them (a fine zero-run scan of
+  `0x3a0000`-`0x3ba000` found only small 64-875 byte gaps, not one clear
+  cut), so the split point was estimated from each image's string-table
+  offset rather than measured directly.
+- Ruled out several candidate explanations for the container format: no
+  FAT/MBR boot signature and no ZIP/RAR/7z/GZIP/CAB magic bytes anywhere
+  near this region: this isn't a standard recognizable archive. Also
+  disassembled `L99 ISP V1.23.exe`'s own small legitimate `.text` section
+  and found no literal file-offset constants pointing at this data -- the
+  loader logic isn't in this tool's own compiled code, most likely handled
+  opaquely by Enigma Protector's own "Virtual Box" embedded-filesystem
+  feature (a plausible match for the `0:/UartTFT_Flash/...`-style path
+  strings found in `[0.10.19]`), which this session had no tooling to
+  unpack directly.
+- Full writeup, including the exact string-occurrence table and reasoning,
+  added to `tools/aula_l99_screen/re_notes/embedded_lt168_firmware.md`.
+
 ## [0.10.19] - 2026-09-18
 
 **Found genuine, cleartext LT168 firmware content bundled inside the vendor's own
